@@ -1,0 +1,14 @@
+# ide
+.vscode/
+
+# macOS
+.DS_Store
+
+# python
+__pycache__/
+
+# cpp
+/build/
+
+# model
+*.bin

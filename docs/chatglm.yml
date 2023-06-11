@@ -1,0 +1,671 @@
+# The configurations that used for the recording, feel free to edit them
+config:
+
+  # Specify a command to be executed
+  # like `/bin/bash -l`, `ls`, or any other commands
+  # the default is bash for Linux
+  # or powershell.exe for Windows
+  command: zsh
+  
+  # Specify the current working directory path
+  # the default is the current working directory path
+  cwd: /Users/bytedance/chatglm.cpp
+  
+  # Export additional ENV variables
+  env:
+    recording: true
+  
+  # Explicitly set the number of columns
+  # or use `auto` to take the current
+  # number of columns of your shell
+  cols: 90
+  
+  # Explicitly set the number of rows
+  # or use `auto` to take the current
+  # number of rows of your shell
+  rows: 30
+  
+  # Amount of times to repeat GIF
+  # If value is -1, play once
+  # If value is 0, loop indefinitely
+  # If value is a positive number, loop n times
+  repeat: 0
+  
+  # Quality
+  # 1 - 100
+  quality: 100
+  
+  # Delay between frames in ms
+  # If the value is `auto` use the actual recording delays
+  frameDelay: auto
+  
+  # Maximum delay between frames in ms
+  # Ignored if the `frameDelay` isn't set to `auto`
+  # Set to `auto` to prevent limiting the max idle time
+  maxIdleTime: 2000
+  
+  # The surrounding frame box
+  # The `type` can be null, window, floating, or solid`
+  # To hide the title use the value null
+  # Don't forget to add a backgroundColor style with a null as type
+  frameBox:
+    type: floating
+    title: ChatGLM.cpp
+    style:
+      border: 0px black solid
+      # boxShadow: none
+      # margin: 0px
+  
+  # Add a watermark image to the rendered gif
+  # You need to specify an absolute path for
+  # the image on your machine or a URL, and you can also
+  # add your own CSS styles
+  watermark:
+    imagePath: null
+    style:
+      position: absolute
+      right: 15px
+      bottom: 15px
+      width: 100px
+      opacity: 0.9
+  
+  # Cursor style can be one of
+  # `block`, `underline`, or `bar`
+  cursorStyle: block
+  
+  # Font family
+  # You can use any font that is installed on your machine
+  # in CSS-like syntax
+  fontFamily: "Monaco, Lucida Console, Ubuntu Mono, Monospace"
+  
+  # The size of the font
+  fontSize: 12
+  
+  # The height of lines
+  lineHeight: 1
+  
+  # The spacing between letters
+  letterSpacing: 0
+  
+  # Theme
+  theme:
+    background: "transparent"
+    foreground: "#afafaf"
+    cursor: "#c7c7c7"
+    black: "#232628"
+    red: "#fc4384"
+    green: "#b3e33b"
+    yellow: "#ffa727"
+    blue: "#75dff2"
+    magenta: "#ae89fe"
+    cyan: "#708387"
+    white: "#d5d5d0"
+    brightBlack: "#626566"
+    brightRed: "#ff7fac"
+    brightGreen: "#c8ed71"
+    brightYellow: "#ebdf86"
+    brightBlue: "#75dff2"
+    brightMagenta: "#ae89fe"
+    brightCyan: "#b1c6ca"
+    brightWhite: "#f9f9f4"
+  
+# Records, feel free to edit them
+records:
+  # - delay: 10
+  #   content: "\e]7;file://C02D70GGMD6R/Users/bytedance/chatglm.cpp\a"
+  # - delay: 10
+  #   content: "\e[1m\e[7m%\e[27m\e[1m\e[0m                                                                                                                               \r \r\e]7;file://C02D70GGMD6R/Users/bytedance/chatglm.cpp\a\e]2;bytedance@C02D70GGMD6R\a\e]1;~/chatglm.cpp\a"
+  # - delay: 6
+  #   content: "\e]7;file://C02D70GGMD6R/Users/bytedance/chatglm.cpp\a"
+  - delay: 166
+    content: "\r\e[0m\e[27m\e[24m\e[J(base) \e[01;32m➜  \e[36m~/chatglm.cpp\e[00m \e[01;34mgit:(\e[31mmain\e[34m) \e[33m✗\e[00m \e[K\e[?1h\e=\e[?2004h"
+  - delay: 363
+    content: ".\b./build/bin/main -m chatglm-ggml.bin -i\e[39D\e[7m.\e[7m/\e[7mb\e[7mu\e[7mi\e[7ml\e[7md\e[7m/\e[7mb\e[7mi\e[7mn\e[7m/\e[7mm\e[7ma\e[7mi\e[7mn\e[7m \e[7m-\e[7mm\e[7m \e[7mc\e[7mh\e[7ma\e[7mt\e[7mg\e[7ml\e[7mm\e[7m-\e[7mg\e[7mg\e[7mm\e[7ml\e[7m.\e[7mb\e[7mi\e[7mn\e[7m \e[7m-\e[7mi\e[27m"
+  - delay: 408
+    content: "\e[39D\e[27m.\e[27m/\e[27mb\e[27mu\e[27mi\e[27ml\e[27md\e[27m/\e[27mb\e[27mi\e[27mn\e[27m/\e[27mm\e[27ma\e[27mi\e[27mn\e[27m \e[27m-\e[27mm\e[27m \e[27mc\e[27mh\e[27ma\e[27mt\e[27mg\e[27ml\e[27mm\e[27m-\e[27mg\e[27mg\e[27mm\e[27ml\e[27m.\e[27mb\e[27mi\e[27mn\e[27m \e[27m-\e[27mi\e[?1l\e>\e[?2004l\r\r\n\e]2;./build/bin/main -m chatglm-ggml.bin -i\a\e]1;./build/bin/main\a"
+  - delay: 791
+    content: "    ________          __  ________    __  ___                 \r\n   / ____/ /_  ____ _/ /_/ ____/ /   /  |/  /_________  ____  \r\n  / /   / __ \\/ __ `/ __/ / __/ /   / /|_/ // ___/ __ \\/ __ \\ \r\n / /___/ / / / /_/ / /_/ /_/ / /___/ /  / // /__/ /_/ / /_/ / \r\n \\____/_/ /_/\\__,_/\\__/\\____/_____/_/  /_(_)___/ .___/ .___/  \r\n                                              /_/   /_/       \r\nPrompt  > "
+  - delay: 400
+    content: 你好
+  - delay: 89
+    content: "\r\n"
+  - delay: 1073
+    content: ChatGLM > 你好
+  - delay: 739
+    content: "\U0001F44B"
+  - delay: 363
+    content: ！我是
+  - delay: 183
+    content: 人工智能
+  - delay: 178
+    content: 助手
+  - delay: 184
+    content: ' Chat'
+  - delay: 169
+    content: GL
+  - delay: 176
+    content: M
+  - delay: 187
+    content: '-'
+  - delay: 215
+    content: '6'
+  - delay: 199
+    content: B
+  - delay: 372
+    content: ，很高兴
+  - delay: 187
+    content: 见到
+  - delay: 231
+    content: 你
+  - delay: 173
+    content: ，
+  - delay: 184
+    content: 欢迎
+  - delay: 172
+    content: 问我
+  - delay: 181
+    content: 任何问题
+  - delay: 176
+    content: 。
+  - delay: 208
+    content: "\r\n"
+  - delay: 33
+    content: 'Prompt  > '
+  - delay: 400
+    content: 晚上
+  - delay: 400
+    content: 睡不着
+  - delay: 400
+    content: 怎么办
+  - delay: 219
+    content: "\r\n"
+  - delay: 3698
+    content: ChatGLM > 晚上
+  - delay: 192
+    content: 睡不着
+  - delay: 177
+    content: 可能是因为
+  - delay: 190
+    content: 许多
+  - delay: 182
+    content: 原因
+  - delay: 185
+    content: ，
+  - delay: 185
+    content: 包括
+  - delay: 189
+    content: 压力
+  - delay: 181
+    content: 、
+  - delay: 179
+    content: 焦虑
+  - delay: 182
+    content: 、
+  - delay: 187
+    content: 抑郁
+  - delay: 184
+    content: 、
+  - delay: 178
+    content: 缺乏
+  - delay: 178
+    content: 睡眠
+  - delay: 180
+    content: 习惯
+  - delay: 181
+    content: 、
+  - delay: 180
+    content: 身体
+  - delay: 187
+    content: 疾病
+  - delay: 182
+    content: 等
+  - delay: 203
+    content: 。
+  - delay: 195
+    content: 以下
+  - delay: 180
+    content: 是
+  - delay: 210
+    content: 一些
+  - delay: 178
+    content: 可能
+  - delay: 186
+    content: 有用的
+  - delay: 177
+    content: 建议
+  - delay: 183
+    content: ：
+  - delay: 186
+    content: "\r\n"
+  - delay: 199
+    content: "\r\n"
+  - delay: 235
+    content: '1'
+  - delay: 196
+    content: .
+  - delay: 203
+    content: ' '
+  - delay: 213
+    content: 保持
+  - delay: 189
+    content: 规律的
+  - delay: 182
+    content: 睡眠时间
+  - delay: 197
+    content: ：
+  - delay: 207
+    content: 每天
+  - delay: 189
+    content: 保持
+  - delay: 190
+    content: 相同的
+  - delay: 189
+    content: 睡眠时间
+  - delay: 188
+    content: 和
+  - delay: 213
+    content: 起床
+  - delay: 217
+    content: 时间
+  - delay: 204
+    content: ，
+  - delay: 195
+    content: 即使在
+  - delay: 465
+    content: 周末
+  - delay: 203
+    content: 和
+  - delay: 187
+    content: 假期
+  - delay: 186
+    content: 也
+  - delay: 185
+    content: 不要试图
+  - delay: 188
+    content: 改变
+  - delay: 226
+    content: 。
+  - delay: 171
+    content: "\r\n"
+  - delay: 201
+    content: "\r\n"
+  - delay: 185
+    content: '2'
+  - delay: 184
+    content: .
+  - delay: 187
+    content: ' '
+  - delay: 175
+    content: 创建一个
+  - delay: 183
+    content: 放松
+  - delay: 179
+    content: 的环境
+  - delay: 179
+    content: ：
+  - delay: 189
+    content: 保持
+  - delay: 190
+    content: 安静
+  - delay: 184
+    content: 、
+  - delay: 206
+    content: 凉爽
+  - delay: 195
+    content: 和
+  - delay: 177
+    content: 黑暗
+  - delay: 194
+    content: ，
+  - delay: 214
+    content: 并
+  - delay: 175
+    content: 尝试
+  - delay: 174
+    content: 减少
+  - delay: 192
+    content: 噪音
+  - delay: 208
+    content: 和
+  - delay: 207
+    content: 光线
+  - delay: 200
+    content: 的干扰
+  - delay: 206
+    content: 。
+  - delay: 206
+    content: "\r\n"
+  - delay: 232
+    content: "\r\n"
+  - delay: 210
+    content: '3'
+  - delay: 204
+    content: .
+  - delay: 210
+    content: ' '
+  - delay: 202
+    content: 避免
+  - delay: 207
+    content: 使用
+  - delay: 187
+    content: 电子设备
+  - delay: 184
+    content: ：
+  - delay: 202
+    content: 手机
+  - delay: 196
+    content: 、
+  - delay: 173
+    content: 电脑
+  - delay: 191
+    content: 、
+  - delay: 185
+    content: 电视
+  - delay: 188
+    content: 等
+  - delay: 186
+    content: 电子设备
+  - delay: 182
+    content: 会
+  - delay: 181
+    content: 发出
+  - delay: 201
+    content: 蓝光
+  - delay: 198
+    content: ，
+  - delay: 196
+    content: 会
+  - delay: 186
+    content: 干扰
+  - delay: 180
+    content: 身体
+  - delay: 193
+    content: 自然的
+  - delay: 179
+    content: 生物钟
+  - delay: 187
+    content: 。
+  - delay: 189
+    content: 建议
+  - delay: 183
+    content: 选择
+  - delay: 186
+    content: 用
+  - delay: 186
+    content: 耳
+  - delay: 204
+    content: 塞
+  - delay: 196
+    content: 或
+  - delay: 188
+    content: 白
+  - delay: 183
+    content: 噪音
+  - delay: 199
+    content: 机
+  - delay: 189
+    content: 来
+  - delay: 185
+    content: 减少
+  - delay: 186
+    content: 蓝光
+  - delay: 177
+    content: 干扰
+  - delay: 181
+    content: 。
+  - delay: 184
+    content: "\r\n"
+  - delay: 192
+    content: "\r\n"
+  - delay: 185
+    content: '4'
+  - delay: 188
+    content: .
+  - delay: 181
+    content: ' '
+  - delay: 181
+    content: 做
+  - delay: 188
+    content: 深呼吸
+  - delay: 181
+    content: 和
+  - delay: 185
+    content: 冥想
+  - delay: 191
+    content: ：
+  - delay: 181
+    content: 深呼吸
+  - delay: 184
+    content: 和
+  - delay: 187
+    content: 冥想
+  - delay: 201
+    content: 可以帮助你
+  - delay: 183
+    content: 放松
+  - delay: 189
+    content: 身体
+  - delay: 200
+    content: 和
+  - delay: 218
+    content: 思维
+  - delay: 369
+    content: ，
+  - delay: 179
+    content: 有助于
+  - delay: 190
+    content: 入睡
+  - delay: 190
+    content: 。
+  - delay: 191
+    content: "\r\n"
+  - delay: 188
+    content: "\r\n"
+  - delay: 185
+    content: '5'
+  - delay: 177
+    content: .
+  - delay: 184
+    content: ' '
+  - delay: 181
+    content: 锻炼身体
+  - delay: 185
+    content: ：
+  - delay: 184
+    content: 适度的
+  - delay: 176
+    content: 身体
+  - delay: 194
+    content: 活动
+  - delay: 185
+    content: 可以提高
+  - delay: 195
+    content: 睡眠质量
+  - delay: 185
+    content: ，
+  - delay: 178
+    content: 因为
+  - delay: 188
+    content: 身体
+  - delay: 189
+    content: 需要
+  - delay: 188
+    content: 消耗
+  - delay: 179
+    content: 能量
+  - delay: 187
+    content: 来
+  - delay: 193
+    content: 放松
+  - delay: 181
+    content: 和
+  - delay: 181
+    content: 入睡
+  - delay: 183
+    content: 。
+  - delay: 179
+    content: "\r\n"
+  - delay: 190
+    content: "\r\n"
+  - delay: 188
+    content: '6'
+  - delay: 190
+    content: .
+  - delay: 187
+    content: ' '
+  - delay: 187
+    content: 改善
+  - delay: 187
+    content: 饮食
+  - delay: 184
+    content: ：
+  - delay: 181
+    content: 减少
+  - delay: 203
+    content: 摄入
+  - delay: 185
+    content: 咖啡因
+  - delay: 193
+    content: 、
+  - delay: 192
+    content: 糖分
+  - delay: 225
+    content: 和
+  - delay: 176
+    content: 酒精
+  - delay: 182
+    content: 等
+  - delay: 190
+    content: 兴奋剂
+  - delay: 218
+    content: ，
+  - delay: 176
+    content: 同时
+  - delay: 191
+    content: 增加
+  - delay: 177
+    content: 蛋白质
+  - delay: 187
+    content: 、
+  - delay: 175
+    content: 维生素和矿物质
+  - delay: 184
+    content: 的摄入
+  - delay: 181
+    content: 。
+  - delay: 188
+    content: "\r\n"
+  - delay: 190
+    content: "\r\n"
+  - delay: 188
+    content: '7'
+  - delay: 187
+    content: .
+  - delay: 190
+    content: ' '
+  - delay: 215
+    content: 寻求
+  - delay: 180
+    content: 专业
+  - delay: 188
+    content: 帮助
+  - delay: 185
+    content: ：
+  - delay: 192
+    content: 如果
+  - delay: 184
+    content: 上述
+  - delay: 192
+    content: 建议
+  - delay: 185
+    content: 不能
+  - delay: 184
+    content: 帮助
+  - delay: 190
+    content: 改善
+  - delay: 187
+    content: 睡眠
+  - delay: 200
+    content: ，
+  - delay: 186
+    content: 你可能
+  - delay: 196
+    content: 需要
+  - delay: 191
+    content: 寻求
+  - delay: 187
+    content: 医生
+  - delay: 185
+    content: 或
+  - delay: 178
+    content: 心理学家
+  - delay: 188
+    content: 的帮助
+  - delay: 179
+    content: 。
+  - delay: 291
+    content: "\r\n"
+  - delay: 225
+    content: "\r\n"
+  - delay: 186
+    content: 以上
+  - delay: 192
+    content: 建议
+  - delay: 199
+    content: 可能
+  - delay: 187
+    content: 有所帮助
+  - delay: 184
+    content: ，
+  - delay: 188
+    content: 但如果
+  - delay: 182
+    content: 长期
+  - delay: 176
+    content: 存在
+  - delay: 182
+    content: 失眠
+  - delay: 195
+    content: 问题
+  - delay: 190
+    content: ，
+  - delay: 182
+    content: 建议
+  - delay: 187
+    content: 咨询
+  - delay: 192
+    content: 医生
+  - delay: 189
+    content: 或
+  - delay: 190
+    content: 心理学家
+  - delay: 191
+    content: 以
+  - delay: 187
+    content: 获得
+  - delay: 185
+    content: 更
+  - delay: 199
+    content: 具体的
+  - delay: 182
+    content: 建议
+  - delay: 192
+    content: 。
+  - delay: 191
+    content: "\r\n"
+  - delay: 32
+    content: 'Prompt  > '
+  - delay: 1999
+    content: "^D\b\bBye\r\n"
+  - delay: 184
+    content: "\e[1m\e[7m%\e[27m\e[1m\e[0m                                                                                                                               \r \r\e]7;file://C02D70GGMD6R/Users/bytedance/chatglm.cpp\a\e]2;bytedance@C02D70GGMD6R\a\e]1;~/chatglm.cpp\a"
+  # - delay: 6
+  #   content: "\e]7;file://C02D70GGMD6R/Users/bytedance/chatglm.cpp\a"
+  # - delay: 259
+  #   content: "\r\e[0m\e[27m\e[24m\e[J(base) \e[01;32m➜  \e[36m~/chatglm.cpp\e[00m \e[01;34mgit:(\e[31mmain\e[34m) \e[33m✗\e[00m \e[K\e[?1h\e=\e[?2004h"
+  # - delay: 660
+  #   content: "\e[?2004l\r\r\n"
+  # - delay: 24
+  #   content: "\r\nSaving session..."
+  # - delay: 7
+  #   content: "completed.\r\n"
