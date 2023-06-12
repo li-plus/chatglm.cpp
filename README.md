@@ -56,7 +56,7 @@ Measured on a Linux server with Intel(R) Xeon(R) Platinum 8260 CPU @ 2.40GHz usi
 |-----------|-------|-------|------|------|
 | ms/token  | 92    | 130   | 217  | 399  |
 | file size | 3.3GB | 6.2GB | 12GB | 23GB |
-| mem usage | 4.6GB | 7.5GB | 13GB | 24GB |
+| mem usage | 4.2GB | 7.1GB | 13GB | 24GB |
 
 ## For Developers
 

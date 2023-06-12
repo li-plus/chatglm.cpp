@@ -26,10 +26,15 @@ bool has_shape(ggml_tensor *tensor, const std::vector<int> &shape) {
 
 class ChatGLMTest : public ::testing::Test {
   protected:
+    InitContext ictx;
     ForwardContext ctx;
     std::vector<char> scratch_buf;
 
     void SetUp() override {
+        ictx.dtype = GGML_TYPE_F32;
+        ictx.w_ctx = ggml_init({1024 * 1024, nullptr, false});
+        ictx.kv_ctx = ggml_init({1024 * 1024, nullptr, false});
+
         scratch_buf.resize(1024 * 1024);
 
         ctx.gctx = ggml_init({1024 * 1024, nullptr, false});
@@ -38,7 +43,11 @@ class ChatGLMTest : public ::testing::Test {
         ctx.gf.n_threads = 1;
     }
 
-    void TearDown() override { ggml_free(ctx.gctx); }
+    void TearDown() override {
+        ggml_free(ictx.w_ctx);
+        ggml_free(ictx.kv_ctx);
+        ggml_free(ctx.gctx);
+    }
 };
 
 TEST_F(ChatGLMTest, Embedding) {
@@ -61,7 +70,7 @@ print("y", y.flatten())
 
     ggml_tensor *x = ggml_new_tensor_1d(ctx.gctx, GGML_TYPE_I32, 5);
     memcpy(x->data, x_data, sizeof(x_data));
-    Embedding model(ctx.gctx, GGML_TYPE_F32, 4, 3);
+    Embedding model(&ictx, 4, 3);
     memcpy(model.weight->data, weight_data, sizeof(weight_data));
     ggml_tensor *y = model.forward(&ctx, x);
 
@@ -95,7 +104,7 @@ print('y', y.flatten())
 
     ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_F32, 9, 2);
     memcpy(x->data, x_data, sizeof(x_data));
-    LayerNorm model(ctx.gctx, 9);
+    LayerNorm model(&ictx, 9);
     memcpy(model.weight->data, w_data, sizeof(w_data));
     memcpy(model.bias->data, b_data, sizeof(b_data));
     ggml_tensor *y = model.forward(&ctx, x);
@@ -134,7 +143,8 @@ print('y', y.flatten())
 
     // fp32
     {
-        Linear model(ctx.gctx, GGML_TYPE_F32, 3, 8);
+        ictx.dtype = GGML_TYPE_F32;
+        Linear model(&ictx, 3, 8);
         memcpy(model.weight->data, w_data, sizeof(w_data));
         memcpy(model.bias->data, b_data, sizeof(b_data));
 
@@ -147,7 +157,8 @@ print('y', y.flatten())
     }
     // fp16
     {
-        Linear model(ctx.gctx, GGML_TYPE_F16, 3, 8);
+        ictx.dtype = GGML_TYPE_F16;
+        Linear model(&ictx, 3, 8);
         ggml_fp32_to_fp16_row(w_data, (ggml_fp16_t *)model.weight->data, ggml_nelements(model.weight));
         memcpy(model.bias->data, b_data, sizeof(b_data));
 
@@ -194,7 +205,7 @@ print("y", y.flatten())
     ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_F32, 3, 2);
     memcpy(x->data, x_data, sizeof(x_data));
 
-    GLU model(ctx.gctx, GGML_TYPE_F32, 3);
+    GLU model(&ictx, 3);
     memcpy(model.dense_h_to_4h.weight->data, dense_h_to_4h_weight_data, sizeof(dense_h_to_4h_weight_data));
     memcpy(model.dense_h_to_4h.bias->data, dense_h_to_4h_bias_data, sizeof(dense_h_to_4h_bias_data));
     memcpy(model.dense_4h_to_h.weight->data, dense_4h_to_h_weight_data, sizeof(dense_4h_to_h_weight_data));
@@ -400,7 +411,7 @@ print("y3", y3.flatten())
     float dense_bias_data[]{0.1240, -0.1587, 0.2446, -0.2486, -0.2395, -0.0591, 0.2042, 0.0250,
                             0.0960, -0.1833, 0.0912, -0.0279, 0.1002,  0.1766,  0.1087, -0.0213};
 
-    SelfAttention model(ctx.gctx, GGML_TYPE_F32, 16, 2, 16);
+    SelfAttention model(&ictx, 16, 2, 16);
     memcpy(model.query_key_value.weight->data, query_key_value_weight_data, sizeof(query_key_value_weight_data));
     memcpy(model.query_key_value.bias->data, query_key_value_bias_data, sizeof(query_key_value_bias_data));
     memcpy(model.dense.weight->data, dense_weight_data, sizeof(dense_weight_data));
@@ -605,7 +616,7 @@ print("y", y.flatten())
     ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_F32, 8, 4);
     memcpy(x->data, x_data, sizeof(x_data));
 
-    GLMBlock model(ctx.gctx, GGML_TYPE_F32, 8, 2, 28, 16);
+    GLMBlock model(&ictx, 8, 2, 28, 16);
     ggml_set_f32(model.input_layernorm.weight, 1);
     ggml_set_f32(model.input_layernorm.bias, 0);
     memcpy(model.attention.query_key_value.weight->data, query_key_value_weight_data,
@@ -646,7 +657,7 @@ TEST_F(ChatGLMTest, ChatGLMForConditionalGeneration) {
 
     ggml_tensor *x = ggml_new_tensor_1d(ctx.gctx, GGML_TYPE_I32, 4);
     memcpy(x->data, x_data, sizeof(x_data));
-    ChatGLMForConditionalGeneration model(ctx.gctx, config);
+    ChatGLMForConditionalGeneration model(&ictx, config);
     ggml_tensor *y = model.forward(&ctx, x, 0, 4);
 
     ggml_build_forward_expand(&ctx.gf, y);

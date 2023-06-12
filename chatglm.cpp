@@ -122,7 +122,7 @@ void TextStreamer::end() {
 
 // ===== tokenizer =====
 
-ChatGLMTokenizer::ChatGLMTokenizer(const std::string &serialized_model_proto, int _bos_token_id, int _eos_token_id,
+ChatGLMTokenizer::ChatGLMTokenizer(std::string_view serialized_model_proto, int _bos_token_id, int _eos_token_id,
                                    int _mask_token_id, int _gmask_token_id, int _pad_token_id)
     : bos_token_id(_bos_token_id), eos_token_id(_eos_token_id), mask_token_id(_mask_token_id),
       gmask_token_id(_gmask_token_id), pad_token_id(_pad_token_id) {
@@ -241,10 +241,8 @@ ggml_tensor *Embedding::forward(ForwardContext *ctx, ggml_tensor *input) const {
 ggml_tensor *Linear::forward(ForwardContext *ctx, ggml_tensor *input) const {
     // input: [seqlen, in_features]
     ggml_tensor *output = ggml_mul_mat(ctx->gctx, weight, input); // [seqlen, out_features]
-    if (bias) {
-        ggml_tensor *bcast_bias = ggml_view_2d(ctx->gctx, bias, output->ne[0], output->ne[1], 0, 0);
-        output = ggml_add_inplace(ctx->gctx, output, bcast_bias);
-    }
+    ggml_tensor *bcast_bias = ggml_view_2d(ctx->gctx, bias, output->ne[0], output->ne[1], 0, 0);
+    output = ggml_add_inplace(ctx->gctx, output, bcast_bias);
     return output;
 }
 
@@ -338,12 +336,11 @@ ggml_tensor *GLMBlock::forward(ForwardContext *ctx, ggml_tensor *hidden_states, 
     return output;
 }
 
-ChatGLMModel::ChatGLMModel(ggml_context *ctx, const ChatGLMConfig &config)
-    : word_embeddings(ctx, config.dtype, config.vocab_size, config.hidden_size),
-      final_layernorm(ctx, config.hidden_size) {
+ChatGLMModel::ChatGLMModel(InitContext *ctx, const ChatGLMConfig &config)
+    : word_embeddings(ctx, config.vocab_size, config.hidden_size), final_layernorm(ctx, config.hidden_size) {
     layers.reserve(config.num_layers);
     for (int layer_id = 0; layer_id < config.num_layers; layer_id++) {
-        layers.emplace_back(ctx, config.dtype, config.hidden_size, config.num_attention_heads, config.num_layers,
+        layers.emplace_back(ctx, config.hidden_size, config.num_attention_heads, config.num_layers,
                             config.max_sequence_length);
     }
 }
@@ -552,23 +549,23 @@ ChatGLMPipeline::ChatGLMPipeline(const std::string &path) {
 
     // load tokenizer
     int proto_size = read_as<int>(fin);
-    std::string serialized_model_proto(proto_size, '\0');
-    fin.read(&serialized_model_proto[0], proto_size);
-    tokenizer =
-        std::make_unique<ChatGLMTokenizer>(std::move(serialized_model_proto), config.bos_token_id, config.eos_token_id,
-                                           config.mask_token_id, config.gmask_token_id, config.pad_token_id);
+    std::string_view serialized_model_proto((char *)mapped_file->data + fin.tellg(), proto_size);
+    fin.seekg(proto_size, fin.cur);
+    tokenizer = std::make_unique<ChatGLMTokenizer>(serialized_model_proto, config.bos_token_id, config.eos_token_id,
+                                                   config.mask_token_id, config.gmask_token_id, config.pad_token_id);
 
     // load model
-    const size_t num_tensors = 3 + config.num_layers * 14;
-    const size_t ctx_size = num_tensors * (sizeof(ggml_tensor) + GGML_OBJECT_SIZE); // tensor overheads
+    constexpr size_t tensor_ovhd = sizeof(ggml_tensor) + GGML_OBJECT_SIZE;
+    const size_t w_size = (3 + config.num_layers * 12) * tensor_ovhd;
+    const size_t kv_size =
+        config.num_layers * 2 *
+        (config.max_sequence_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16) + tensor_ovhd);
 
-    ggml_init_params params = {
-        .mem_size = ctx_size,
-        .mem_buffer = nullptr,
-        .no_alloc = true,
-    };
-    ctx_w = ggml_init(params);
-    CHATGLM_CHECK(ctx_w) << "failed to init ggml context";
+    ctx.dtype = config.dtype;
+    ctx.w_ctx = ggml_init({.mem_size = w_size, .mem_buffer = nullptr, .no_alloc = true});
+    CHATGLM_CHECK(ctx.w_ctx) << "failed to init weight context";
+    ctx.kv_ctx = ggml_init({.mem_size = kv_size, .mem_buffer = nullptr, .no_alloc = false});
+    CHATGLM_CHECK(ctx.kv_ctx) << "failed to init kvcache context";
 
     auto load_tensor = [this, &fin](const std::string &name, ggml_tensor *tensor) {
         int ndim = read_as<int>(fin);
@@ -594,11 +591,7 @@ ChatGLMPipeline::ChatGLMPipeline(const std::string &path) {
         fin.seekg(data_offset + ggml_nbytes(tensor));
     };
 
-    kvcache_buffer.resize(config.num_layers * 2 * config.max_sequence_length * config.hidden_size *
-                          ggml_type_size(GGML_TYPE_F16));
-    char *kvcache_data = kvcache_buffer.data();
-
-    model = std::make_unique<ChatGLMForConditionalGeneration>(ctx_w, config);
+    model = std::make_unique<ChatGLMForConditionalGeneration>(&ctx, config);
     load_tensor("transformer.word_embeddings.weight", model->transformer.word_embeddings.weight);
     for (int i = 0; i < config.num_layers; i++) {
         std::string layer_prefix = "transformer.layers." + std::to_string(i) + '.';
@@ -610,10 +603,6 @@ ChatGLMPipeline::ChatGLMPipeline(const std::string &path) {
                     model->transformer.layers[i].attention.query_key_value.bias);
         load_tensor(layer_prefix + "attention.dense.weight", model->transformer.layers[i].attention.dense.weight);
         load_tensor(layer_prefix + "attention.dense.bias", model->transformer.layers[i].attention.dense.bias);
-        model->transformer.layers[i].attention.k_cache->data = kvcache_data;
-        kvcache_data += ggml_nbytes(model->transformer.layers[i].attention.k_cache);
-        model->transformer.layers[i].attention.v_cache->data = kvcache_data;
-        kvcache_data += ggml_nbytes(model->transformer.layers[i].attention.v_cache);
         load_tensor(layer_prefix + "post_attention_layernorm.weight",
                     model->transformer.layers[i].post_attention_layernorm.weight);
         load_tensor(layer_prefix + "post_attention_layernorm.bias",
@@ -628,9 +617,13 @@ ChatGLMPipeline::ChatGLMPipeline(const std::string &path) {
 }
 
 ChatGLMPipeline::~ChatGLMPipeline() {
-    if (ctx_w) {
-        ggml_free(ctx_w);
-        ctx_w = nullptr;
+    if (ctx.w_ctx) {
+        ggml_free(ctx.w_ctx);
+        ctx.w_ctx = nullptr;
+    }
+    if (ctx.kv_ctx) {
+        ggml_free(ctx.kv_ctx);
+        ctx.kv_ctx = nullptr;
     }
 }
 

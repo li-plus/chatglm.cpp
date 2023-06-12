@@ -49,8 +49,8 @@ struct ChatGLMTokenizer {
     int gmask_token_id;
     int pad_token_id;
 
-    ChatGLMTokenizer(const std::string &serialized_model_proto, int _bos_token_id, int _eos_token_id,
-                     int _mask_token_id, int _gmask_token_id, int _pad_token_id);
+    ChatGLMTokenizer(std::string_view serialized_model_proto, int _bos_token_id, int _eos_token_id, int _mask_token_id,
+                     int _gmask_token_id, int _pad_token_id);
 
     std::vector<int> encode(const std::string &text) const;
 
@@ -83,6 +83,12 @@ struct TextStreamer : public BaseStreamer {
 
 // ===== model =====
 
+struct InitContext {
+    ggml_type dtype;
+    ggml_context *w_ctx;
+    ggml_context *kv_ctx;
+};
+
 struct ForwardContext {
     ggml_context *gctx;
     ggml_cgraph gf;
@@ -93,8 +99,8 @@ struct Embedding {
     ggml_tensor *weight;
 
     Embedding() : weight(nullptr) {}
-    Embedding(ggml_context *ctx, ggml_type dtype, int num_embeddings, int embedding_dim)
-        : weight(ggml_new_tensor_2d(ctx, dtype, embedding_dim, num_embeddings)) {}
+    Embedding(InitContext *ctx, int num_embeddings, int embedding_dim)
+        : weight(ggml_new_tensor_2d(ctx->w_ctx, ctx->dtype, embedding_dim, num_embeddings)) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input) const;
 };
@@ -104,9 +110,9 @@ struct Linear {
     ggml_tensor *bias;   // [out_features]
 
     Linear() : weight(nullptr), bias(nullptr) {}
-    Linear(ggml_context *ctx, ggml_type dtype, size_t in_features, size_t out_features, bool has_bias = true)
-        : weight(ggml_new_tensor_2d(ctx, dtype, in_features, out_features)),
-          bias(has_bias ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_features) : nullptr) {}
+    Linear(InitContext *ctx, int in_features, int out_features)
+        : weight(ggml_new_tensor_2d(ctx->w_ctx, ctx->dtype, in_features, out_features)),
+          bias(ggml_new_tensor_1d(ctx->w_ctx, GGML_TYPE_F32, out_features)) {}
 
     int in_features() const { return weight->ne[0]; }
     int out_features() const { return weight->ne[1]; }
@@ -119,9 +125,9 @@ struct LayerNorm {
     ggml_tensor *bias;   // [normalized_shape]
 
     LayerNorm() : weight(nullptr), bias(nullptr) {}
-    LayerNorm(ggml_context *ctx, size_t normalized_shape)
-        : weight(ggml_new_tensor_1d(ctx, GGML_TYPE_F32, normalized_shape)),
-          bias(ggml_new_tensor_1d(ctx, GGML_TYPE_F32, normalized_shape)) {}
+    LayerNorm(InitContext *ctx, int normalized_shape)
+        : weight(ggml_new_tensor_1d(ctx->w_ctx, GGML_TYPE_F32, normalized_shape)),
+          bias(ggml_new_tensor_1d(ctx->w_ctx, GGML_TYPE_F32, normalized_shape)) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input) const;
 };
@@ -131,9 +137,8 @@ struct GLU {
     Linear dense_4h_to_h;
 
     GLU() = default;
-    GLU(ggml_context *ctx, ggml_type dtype, size_t hidden_size)
-        : dense_h_to_4h(ctx, dtype, hidden_size, 4 * hidden_size),
-          dense_4h_to_h(ctx, dtype, 4 * hidden_size, hidden_size) {}
+    GLU(InitContext *ctx, int hidden_size)
+        : dense_h_to_4h(ctx, hidden_size, 4 * hidden_size), dense_4h_to_h(ctx, 4 * hidden_size, hidden_size) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states) const;
 };
@@ -147,12 +152,12 @@ struct SelfAttention {
 
     // TODO: kvcache type
     SelfAttention() : num_attention_heads(0) {}
-    SelfAttention(ggml_context *ctx, ggml_type dtype, int hidden_size, int _num_attention_heads, int max_length)
-        : query_key_value(ctx, dtype, hidden_size, 3 * hidden_size), dense(ctx, dtype, hidden_size, hidden_size),
+    SelfAttention(InitContext *ctx, int hidden_size, int _num_attention_heads, int max_length)
+        : query_key_value(ctx, hidden_size, 3 * hidden_size), dense(ctx, hidden_size, hidden_size),
           num_attention_heads(_num_attention_heads),
-          k_cache(ggml_new_tensor_3d(ctx, GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
+          k_cache(ggml_new_tensor_3d(ctx->kv_ctx, GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
                                      num_attention_heads)),
-          v_cache(ggml_new_tensor_3d(ctx, GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
+          v_cache(ggml_new_tensor_3d(ctx->kv_ctx, GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
                                      num_attention_heads)) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
@@ -166,10 +171,9 @@ struct GLMBlock {
     int num_layers;
 
     GLMBlock() : num_layers(0) {}
-    GLMBlock(ggml_context *ctx, ggml_type dtype, int hidden_size, int num_attention_heads, int _num_layers,
-             int max_length)
-        : input_layernorm(ctx, hidden_size), attention(ctx, dtype, hidden_size, num_attention_heads, max_length),
-          post_attention_layernorm(ctx, hidden_size), mlp(ctx, dtype, hidden_size), num_layers(_num_layers) {}
+    GLMBlock(InitContext *ctx, int hidden_size, int num_attention_heads, int _num_layers, int max_length)
+        : input_layernorm(ctx, hidden_size), attention(ctx, hidden_size, num_attention_heads, max_length),
+          post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size), num_layers(_num_layers) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
 };
@@ -180,7 +184,7 @@ struct ChatGLMModel {
     LayerNorm final_layernorm;
 
     ChatGLMModel() = default;
-    ChatGLMModel(ggml_context *ctx, const ChatGLMConfig &config);
+    ChatGLMModel(InitContext *ctx, const ChatGLMConfig &config);
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const;
 };
@@ -200,7 +204,7 @@ struct ChatGLMForConditionalGeneration {
     ChatGLMModel transformer;
 
     ChatGLMForConditionalGeneration() = default;
-    ChatGLMForConditionalGeneration(ggml_context *ctx, const ChatGLMConfig &_config)
+    ChatGLMForConditionalGeneration(InitContext *ctx, const ChatGLMConfig &_config)
         : config(_config), transformer(ctx, config) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const;
@@ -220,9 +224,8 @@ struct MappedFile {
 struct ChatGLMPipeline {
     std::unique_ptr<ChatGLMTokenizer> tokenizer;
     std::unique_ptr<ChatGLMForConditionalGeneration> model;
-    ggml_context *ctx_w;
+    InitContext ctx;
     std::unique_ptr<MappedFile> mapped_file;
-    std::vector<char> kvcache_buffer;
 
     ChatGLMPipeline(const std::string &path);
     ~ChatGLMPipeline();
