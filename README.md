@@ -51,6 +51,14 @@ In interactive mode, your chat history will serve as the context for the next-ro
 
 7. Run `./build/bin/main -h` to explore more options!
 
+## Using CUDA
+
+Use cuBLAS to accelerate matrix multiplication. Note that the current GGML CUDA implementation is really slow. The community is making efforts to optimize it.
+```sh
+cmake -S . -B build -DGGML_CUBLAS=ON
+cmake --build build -j
+```
+
 ## Performance
 
 Measured on a Linux server with Intel(R) Xeon(R) Platinum 8260 CPU @ 2.40GHz using 16 threads.

@@ -16,6 +16,10 @@
 #include <thread>
 #include <unistd.h>
 
+#ifdef GGML_USE_CUBLAS
+#include <ggml-cuda.h>
+#endif
+
 namespace chatglm {
 
 template <typename T>
@@ -558,7 +562,7 @@ ChatGLMPipeline::ChatGLMPipeline(const std::string &path) {
                                                    config.mask_token_id, config.gmask_token_id, config.pad_token_id);
 
     // load model
-    constexpr size_t tensor_ovhd = sizeof(ggml_tensor) + GGML_OBJECT_SIZE;
+    constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
     const size_t num_tensors = 3 + config.num_layers * 14;
     const size_t ctx_size = num_tensors * tensor_ovhd;
     ctx.gctx = ggml_init({.mem_size = ctx_size, .mem_buffer = nullptr, .no_alloc = true});
@@ -623,6 +627,15 @@ ChatGLMPipeline::ChatGLMPipeline(const std::string &path) {
     load_tensor("transformer.final_layernorm.bias", model->transformer.final_layernorm.bias);
     CHATGLM_CHECK(kvcache_ptr == kvcache_buffer.get() + kvcache_size) << "corrupted kv cache";
     CHATGLM_CHECK(ggml_used_mem(ctx.gctx) == ggml_get_mem_size(ctx.gctx)) << "corrupted model weights";
+
+#ifdef GGML_USE_CUBLAS
+    for (int i = 0; i < config.num_layers; i++) {
+        ggml_cuda_transform_tensor(model->transformer.layers[i].attention.query_key_value.weight);
+        ggml_cuda_transform_tensor(model->transformer.layers[i].attention.dense.weight);
+        ggml_cuda_transform_tensor(model->transformer.layers[i].mlp.dense_h_to_4h.weight);
+        ggml_cuda_transform_tensor(model->transformer.layers[i].mlp.dense_4h_to_h.weight);
+    }
+#endif
 }
 
 ChatGLMPipeline::~ChatGLMPipeline() {

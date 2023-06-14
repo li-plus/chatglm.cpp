@@ -1,6 +1,6 @@
 #pragma once
 
-#include <ggml/ggml.h>
+#include <ggml.h>
 #include <sentencepiece_processor.h>
 #include <sstream>
 #include <vector>

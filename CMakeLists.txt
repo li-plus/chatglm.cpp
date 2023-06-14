@@ -15,15 +15,25 @@ endif ()
 
 # third-party libraries
 set(GGML_NO_ACCELERATE ON CACHE BOOL "chatglm: disable Accelerate framework to reduce memory overhead")
-include_directories(third_party/ggml/include)
+include_directories(third_party/ggml/include/ggml third_party/ggml/src)
 add_subdirectory(third_party/ggml)
 
 include_directories(third_party/sentencepiece/src)
 add_subdirectory(third_party/sentencepiece)
 
+if (GGML_CUBLAS)
+    add_compile_definitions(GGML_USE_CUBLAS)
+endif ()
+
+if (GGML_PERF)
+    add_compile_definitions(GGML_PERF)
+endif ()
+
 add_library(chatglm STATIC chatglm.cpp)
+target_link_libraries(chatglm ggml sentencepiece-static)
+
 add_executable(main main.cpp)
-target_link_libraries(main chatglm ggml sentencepiece-static)
+target_link_libraries(main chatglm)
 
 # GoogleTest
 option(CHATGLM_ENABLE_TESTING "chatglm: enable testing" OFF)
@@ -43,7 +53,7 @@ if (CHATGLM_ENABLE_TESTING)
 
     # Now simply link against gtest or gtest_main as needed. Eg
     add_executable(chatglm_test chatglm_test.cpp)
-    target_link_libraries(chatglm_test chatglm gtest_main ggml sentencepiece-static)
+    target_link_libraries(chatglm_test chatglm gtest_main)
     add_test(NAME chatglm_test COMMAND chatglm_test)
 endif ()
 
