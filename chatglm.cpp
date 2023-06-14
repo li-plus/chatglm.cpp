@@ -413,8 +413,11 @@ std::vector<int> ChatGLMForConditionalGeneration::generate(const std::vector<int
         streamer->put(input_ids);
     }
 
-    std::vector<char> mem_buffer(272ull * 1024 * 1024);
-    std::vector<char> scratch_buffer(144ull * 1024 * 1024);
+    // use new operator to avoid value initialization
+    size_t mem_size = 272ull * 1024 * 1024;
+    std::unique_ptr<char[]> mem_buffer(new char[mem_size]);
+    size_t scratch_size = 144ull * 1024 * 1024;
+    std::unique_ptr<char[]> scratch_buffer(new char[scratch_size]);
 
     int n_past = 0;
     const int n_ctx = input_ids.size();
@@ -423,12 +426,12 @@ std::vector<int> ChatGLMForConditionalGeneration::generate(const std::vector<int
 
     while ((int)output_ids.size() < gen_config.max_length) {
         ForwardContext ctx;
-        ctx.gctx = ggml_init({.mem_size = mem_buffer.size(), .mem_buffer = mem_buffer.data(), .no_alloc = false});
+        ctx.gctx = ggml_init({.mem_size = mem_size, .mem_buffer = mem_buffer.get(), .no_alloc = false});
         CHATGLM_CHECK(ctx.gctx) << "failed to init ggml context";
         ctx.gf = {};
         ctx.gf.n_threads =
             curr_input_ids.size() >= 32 && ggml_cpu_has_blas() && !ggml_cpu_has_gpublas() ? 1 : n_threads;
-        ctx.scratch = {.offs = 0, .size = scratch_buffer.size(), .data = scratch_buffer.data()};
+        ctx.scratch = {.offs = 0, .size = scratch_size, .data = scratch_buffer.get()};
 
         ggml_tensor *curr_input_ids_tensor = ggml_new_tensor_1d(ctx.gctx, GGML_TYPE_I32, curr_input_ids.size());
         memcpy(curr_input_ids_tensor->data, curr_input_ids.data(), ggml_nbytes(curr_input_ids_tensor));
@@ -556,16 +559,16 @@ ChatGLMPipeline::ChatGLMPipeline(const std::string &path) {
 
     // load model
     constexpr size_t tensor_ovhd = sizeof(ggml_tensor) + GGML_OBJECT_SIZE;
-    const size_t w_size = (3 + config.num_layers * 12) * tensor_ovhd;
-    const size_t kv_size =
-        config.num_layers * 2 *
-        (config.max_sequence_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16) + tensor_ovhd);
-
+    const size_t num_tensors = 3 + config.num_layers * 14;
+    const size_t ctx_size = num_tensors * tensor_ovhd;
+    ctx.gctx = ggml_init({.mem_size = ctx_size, .mem_buffer = nullptr, .no_alloc = true});
+    CHATGLM_CHECK(ctx.gctx) << "failed to init weight context";
     ctx.dtype = config.dtype;
-    ctx.w_ctx = ggml_init({.mem_size = w_size, .mem_buffer = nullptr, .no_alloc = true});
-    CHATGLM_CHECK(ctx.w_ctx) << "failed to init weight context";
-    ctx.kv_ctx = ggml_init({.mem_size = kv_size, .mem_buffer = nullptr, .no_alloc = false});
-    CHATGLM_CHECK(ctx.kv_ctx) << "failed to init kvcache context";
+
+    const size_t kvcache_size =
+        config.num_layers * 2 * config.max_sequence_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16);
+    kvcache_buffer.reset(new char[kvcache_size]);
+    char *kvcache_ptr = kvcache_buffer.get();
 
     auto load_tensor = [this, &fin](const std::string &name, ggml_tensor *tensor) {
         int ndim = read_as<int>(fin);
@@ -603,6 +606,10 @@ ChatGLMPipeline::ChatGLMPipeline(const std::string &path) {
                     model->transformer.layers[i].attention.query_key_value.bias);
         load_tensor(layer_prefix + "attention.dense.weight", model->transformer.layers[i].attention.dense.weight);
         load_tensor(layer_prefix + "attention.dense.bias", model->transformer.layers[i].attention.dense.bias);
+        model->transformer.layers[i].attention.k_cache->data = kvcache_ptr;
+        kvcache_ptr += ggml_nbytes(model->transformer.layers[i].attention.k_cache);
+        model->transformer.layers[i].attention.v_cache->data = kvcache_ptr;
+        kvcache_ptr += ggml_nbytes(model->transformer.layers[i].attention.v_cache);
         load_tensor(layer_prefix + "post_attention_layernorm.weight",
                     model->transformer.layers[i].post_attention_layernorm.weight);
         load_tensor(layer_prefix + "post_attention_layernorm.bias",
@@ -614,16 +621,14 @@ ChatGLMPipeline::ChatGLMPipeline(const std::string &path) {
     }
     load_tensor("transformer.final_layernorm.weight", model->transformer.final_layernorm.weight);
     load_tensor("transformer.final_layernorm.bias", model->transformer.final_layernorm.bias);
+    CHATGLM_CHECK(kvcache_ptr == kvcache_buffer.get() + kvcache_size) << "corrupted kv cache";
+    CHATGLM_CHECK(ggml_used_mem(ctx.gctx) == ggml_get_mem_size(ctx.gctx)) << "corrupted model weights";
 }
 
 ChatGLMPipeline::~ChatGLMPipeline() {
-    if (ctx.w_ctx) {
-        ggml_free(ctx.w_ctx);
-        ctx.w_ctx = nullptr;
-    }
-    if (ctx.kv_ctx) {
-        ggml_free(ctx.kv_ctx);
-        ctx.kv_ctx = nullptr;
+    if (ctx.gctx) {
+        ggml_free(ctx.gctx);
+        ctx.gctx = nullptr;
     }
 }
 

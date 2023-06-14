@@ -32,8 +32,7 @@ class ChatGLMTest : public ::testing::Test {
 
     void SetUp() override {
         ictx.dtype = GGML_TYPE_F32;
-        ictx.w_ctx = ggml_init({1024 * 1024, nullptr, false});
-        ictx.kv_ctx = ggml_init({1024 * 1024, nullptr, false});
+        ictx.gctx = ggml_init({1024 * 1024, nullptr, false});
 
         scratch_buf.resize(1024 * 1024);
 
@@ -44,8 +43,7 @@ class ChatGLMTest : public ::testing::Test {
     }
 
     void TearDown() override {
-        ggml_free(ictx.w_ctx);
-        ggml_free(ictx.kv_ctx);
+        ggml_free(ictx.gctx);
         ggml_free(ctx.gctx);
     }
 };

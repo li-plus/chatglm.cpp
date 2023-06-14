@@ -1,5 +1,8 @@
 # ChatGLM.cpp
 
+[![CMake](https://github.com/li-plus/chatglm.cpp/actions/workflows/cmake.yml/badge.svg)](https://github.com/li-plus/chatglm.cpp/actions/workflows/cmake.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 A C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B). Run int4 model inference on your macBook in a minute.
 
 ![demo](docs/demo.gif)

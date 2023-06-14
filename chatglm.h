@@ -84,9 +84,8 @@ struct TextStreamer : public BaseStreamer {
 // ===== model =====
 
 struct InitContext {
+    ggml_context *gctx;
     ggml_type dtype;
-    ggml_context *w_ctx;
-    ggml_context *kv_ctx;
 };
 
 struct ForwardContext {
@@ -100,7 +99,7 @@ struct Embedding {
 
     Embedding() : weight(nullptr) {}
     Embedding(InitContext *ctx, int num_embeddings, int embedding_dim)
-        : weight(ggml_new_tensor_2d(ctx->w_ctx, ctx->dtype, embedding_dim, num_embeddings)) {}
+        : weight(ggml_new_tensor_2d(ctx->gctx, ctx->dtype, embedding_dim, num_embeddings)) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input) const;
 };
@@ -111,8 +110,8 @@ struct Linear {
 
     Linear() : weight(nullptr), bias(nullptr) {}
     Linear(InitContext *ctx, int in_features, int out_features)
-        : weight(ggml_new_tensor_2d(ctx->w_ctx, ctx->dtype, in_features, out_features)),
-          bias(ggml_new_tensor_1d(ctx->w_ctx, GGML_TYPE_F32, out_features)) {}
+        : weight(ggml_new_tensor_2d(ctx->gctx, ctx->dtype, in_features, out_features)),
+          bias(ggml_new_tensor_1d(ctx->gctx, GGML_TYPE_F32, out_features)) {}
 
     int in_features() const { return weight->ne[0]; }
     int out_features() const { return weight->ne[1]; }
@@ -126,8 +125,8 @@ struct LayerNorm {
 
     LayerNorm() : weight(nullptr), bias(nullptr) {}
     LayerNorm(InitContext *ctx, int normalized_shape)
-        : weight(ggml_new_tensor_1d(ctx->w_ctx, GGML_TYPE_F32, normalized_shape)),
-          bias(ggml_new_tensor_1d(ctx->w_ctx, GGML_TYPE_F32, normalized_shape)) {}
+        : weight(ggml_new_tensor_1d(ctx->gctx, GGML_TYPE_F32, normalized_shape)),
+          bias(ggml_new_tensor_1d(ctx->gctx, GGML_TYPE_F32, normalized_shape)) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input) const;
 };
@@ -155,9 +154,9 @@ struct SelfAttention {
     SelfAttention(InitContext *ctx, int hidden_size, int _num_attention_heads, int max_length)
         : query_key_value(ctx, hidden_size, 3 * hidden_size), dense(ctx, hidden_size, hidden_size),
           num_attention_heads(_num_attention_heads),
-          k_cache(ggml_new_tensor_3d(ctx->kv_ctx, GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
+          k_cache(ggml_new_tensor_3d(ctx->gctx, GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
                                      num_attention_heads)),
-          v_cache(ggml_new_tensor_3d(ctx->kv_ctx, GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
+          v_cache(ggml_new_tensor_3d(ctx->gctx, GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
                                      num_attention_heads)) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
@@ -225,6 +224,7 @@ struct ChatGLMPipeline {
     std::unique_ptr<ChatGLMTokenizer> tokenizer;
     std::unique_ptr<ChatGLMForConditionalGeneration> model;
     InitContext ctx;
+    std::unique_ptr<char[]> kvcache_buffer;
     std::unique_ptr<MappedFile> mapped_file;
 
     ChatGLMPipeline(const std::string &path);
