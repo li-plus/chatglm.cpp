@@ -12,7 +12,7 @@ A C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B). Run i
 * [x] Pure C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp).
 * [x] Accelerated memory-efficient CPU inference with int4/int8 quantization, optimized KV cache and parallel computing.
 * [x] Streaming generation with typewriter effect.
-* [ ] TODO: GPU support, python binding, and web demo.
+* [ ] TODO: LoRA support, python binding, and web demo.
 
 ## Getting Started
 
@@ -33,7 +33,7 @@ python3 convert.py -i THUDM/chatglm-6b -t q4_0 -o chatglm-ggml.bin
 
 4. Compile the project using CMake:
 ```sh
-cmake -S . -B build
+cmake -B build
 cmake --build build -j
 ```
 
@@ -51,13 +51,31 @@ In interactive mode, your chat history will serve as the context for the next-ro
 
 7. Run `./build/bin/main -h` to explore more options!
 
-## Using CUDA
+## Using BLAS
 
-Use cuBLAS to accelerate matrix multiplication. Note that the current GGML CUDA implementation is really slow. The community is making efforts to optimize it.
+BLAS library can be integrated to further accelerate matrix multiplication. However, in some cases, using BLAS may cause performance degradation. Whether to turn on BLAS should depend on the benchmarking result.
+
+**Accelerate Framework**
+
+Accelerate Framework is automatically enabled on macOS. To disable it, add the CMake flag `-DGGML_NO_ACCELERATE=ON`.
+
+**OpenBLAS**
+
+OpenBLAS provides acceleration on CPU. Add the CMake flag `-DGGML_OPENBLAS=ON` to enable it.
 ```sh
-cmake -S . -B build -DGGML_CUBLAS=ON
+cmake -B build -DGGML_OPENBLAS=ON
 cmake --build build -j
 ```
+
+**cuBLAS**
+
+cuBLAS uses NVIDIA GPU to accelerate BLAS. Add the CMake flag `-DGGML_CUBLAS=ON` to enable it.
+```sh
+cmake -B build -DGGML_CUBLAS=ON
+cmake --build build -j
+```
+
+Note that the current GGML CUDA implementation is really slow. The community is making efforts to optimize it.
 
 ## Performance
 
@@ -67,7 +85,7 @@ Measured on a Linux server with Intel(R) Xeon(R) Platinum 8260 CPU @ 2.40GHz usi
 |-----------|-------|-------|------|------|
 | ms/token  | 92    | 130   | 217  | 399  |
 | file size | 3.3GB | 6.2GB | 12GB | 23GB |
-| mem usage | 4.2GB | 7.1GB | 13GB | 24GB |
+| mem usage | 4.0GB | 6.9GB | 13GB | 24GB |
 
 ## For Developers
 

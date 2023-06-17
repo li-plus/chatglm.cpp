@@ -332,11 +332,13 @@ ggml_tensor *GLMBlock::forward(ForwardContext *ctx, ggml_tensor *hidden_states, 
 
     ggml_tensor *attn_input = input_layernorm.forward(ctx, hidden_states);
     ggml_tensor *attn_output = attention.forward(ctx, attn_input, n_past, n_ctx);
-    hidden_states = ggml_add_inplace(ctx->gctx, ggml_scale(ctx->gctx, attn_input, alpha), attn_output);
+    ggml_build_forward_expand(&ctx->gf, attn_output);
+    hidden_states = ggml_add_inplace(ctx->gctx, ggml_scale_inplace(ctx->gctx, attn_input, alpha), attn_output);
 
     ggml_tensor *mlp_input = post_attention_layernorm.forward(ctx, hidden_states);
     ggml_tensor *mlp_output = mlp.forward(ctx, mlp_input);
-    ggml_tensor *output = ggml_add_inplace(ctx->gctx, ggml_scale(ctx->gctx, mlp_input, alpha), mlp_output);
+    ggml_build_forward_expand(&ctx->gf, mlp_output);
+    ggml_tensor *output = ggml_add_inplace(ctx->gctx, ggml_scale_inplace(ctx->gctx, mlp_input, alpha), mlp_output);
     return output;
 }
 
@@ -418,9 +420,9 @@ std::vector<int> ChatGLMForConditionalGeneration::generate(const std::vector<int
     }
 
     // use new operator to avoid value initialization
-    size_t mem_size = 272ull * 1024 * 1024;
+    size_t mem_size = 272ull * 1024 * 1024; // BLAS buffer
     std::unique_ptr<char[]> mem_buffer(new char[mem_size]);
-    size_t scratch_size = 144ull * 1024 * 1024;
+    size_t scratch_size = 128ull * 1024 * 1024;
     std::unique_ptr<char[]> scratch_buffer(new char[scratch_size]);
 
     int n_past = 0;

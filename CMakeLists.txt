@@ -14,7 +14,6 @@ if (NOT CMAKE_BUILD_TYPE)
 endif ()
 
 # third-party libraries
-set(GGML_NO_ACCELERATE ON CACHE BOOL "chatglm: disable Accelerate framework to reduce memory overhead")
 include_directories(third_party/ggml/include/ggml third_party/ggml/src)
 add_subdirectory(third_party/ggml)
 

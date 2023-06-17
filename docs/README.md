@@ -2,7 +2,7 @@
 
 Use [terminalizer](https://github.com/faressoft/terminalizer) to record terminal events into animated GIF.
 ```sh
-terminalizer record chatglm
+terminalizer record chatglm -d zsh -k
 ```
 
 Then render it. This will take a long time. Here I use step size 2 to reduce file size.
