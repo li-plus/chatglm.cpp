@@ -179,6 +179,7 @@ def dump_model(f, model, ggml_type):
 def main():
     parser = argparse.ArgumentParser("chatglm-convert")
     parser.add_argument("-i", "--model_name_or_path", type=str, default="THUDM/chatglm-6b")
+    parser.add_argument("-l", "--lora_model_name_or_path", type=str, default=None)
     parser.add_argument("-o", "--save_path", type=Path, default="chatglm-ggml.bin")
     parser.add_argument("-t", "--type", type=str, default="q4_0", choices=["f32", "f16", "q8_0", "q4_0"])
     args = parser.parse_args()
@@ -186,6 +187,11 @@ def main():
     ggml_type = GgmlType[args.type.upper()]
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
     model = AutoModel.from_pretrained(args.model_name_or_path, trust_remote_code=True)
+    if args.lora_model_name_or_path is not None:
+        from peft import PeftModel
+
+        model = PeftModel.from_pretrained(model, args.lora_model_name_or_path)
+        model = model.merge_and_unload()
 
     # check config
     assert model.config.position_encoding_2d, "unimplemented: position_encoding_2d should be True"
