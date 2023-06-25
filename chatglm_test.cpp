@@ -818,8 +818,8 @@ TEST(ChatGLM, chat) {
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         std::vector<std::string> history{"你好"};
-        pipeline.chat(history, gen_config);
-        EXPECT_EQ(history.back(), "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。");
+        std::string output = pipeline.chat(history, gen_config);
+        EXPECT_EQ(output, "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。");
     }
 }
 

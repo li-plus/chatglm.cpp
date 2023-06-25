@@ -49,13 +49,14 @@ struct ChatGLMTokenizer {
     int gmask_token_id;
     int pad_token_id;
 
-    ChatGLMTokenizer(std::string_view serialized_model_proto, int _bos_token_id, int _eos_token_id, int _mask_token_id,
-                     int _gmask_token_id, int _pad_token_id);
+    ChatGLMTokenizer(std::string_view serialized_model_proto, int bos_token_id, int eos_token_id, int mask_token_id,
+                     int gmask_token_id, int pad_token_id);
 
     std::vector<int> encode(const std::string &text) const;
 
     std::string decode(const std::vector<int> &ids) const;
 
+  private:
     static std::string preprocess(const std::string &text);
 
     static std::string postprocess(const std::string &text);
@@ -151,9 +152,9 @@ struct SelfAttention {
 
     // TODO: kvcache type
     SelfAttention() : num_attention_heads(0) {}
-    SelfAttention(InitContext *ctx, int hidden_size, int _num_attention_heads, int max_length)
+    SelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int max_length)
         : query_key_value(ctx, hidden_size, 3 * hidden_size), dense(ctx, hidden_size, hidden_size),
-          num_attention_heads(_num_attention_heads),
+          num_attention_heads(num_attention_heads),
           k_cache(ggml_new_tensor_3d(ctx->gctx, GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
                                      num_attention_heads)),
           v_cache(ggml_new_tensor_3d(ctx->gctx, GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
@@ -170,9 +171,9 @@ struct GLMBlock {
     int num_layers;
 
     GLMBlock() : num_layers(0) {}
-    GLMBlock(InitContext *ctx, int hidden_size, int num_attention_heads, int _num_layers, int max_length)
+    GLMBlock(InitContext *ctx, int hidden_size, int num_attention_heads, int num_layers, int max_length)
         : input_layernorm(ctx, hidden_size), attention(ctx, hidden_size, num_attention_heads, max_length),
-          post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size), num_layers(_num_layers) {}
+          post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size), num_layers(num_layers) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
 };
@@ -189,27 +190,41 @@ struct ChatGLMModel {
 };
 
 struct GenerationConfig {
-    int max_length = 2048;
-    int max_context_length = 512;
-    bool do_sample = true;
-    int top_k = 0;
-    float top_p = 0.7;
-    float temperature = 0.95;
-    int num_threads = 0;
+    int max_length;
+    int max_context_length;
+    bool do_sample;
+    int top_k;
+    float top_p;
+    float temperature;
+    int num_threads;
+
+    GenerationConfig(int max_length = 2048, int max_context_length = 512, bool do_sample = true, int top_k = 0,
+                     float top_p = 0.7, float temperature = 0.95, int num_threads = 0)
+        : max_length(max_length), max_context_length(max_context_length), do_sample(do_sample), top_k(top_k),
+          top_p(top_p), temperature(temperature), num_threads(num_threads) {}
 };
 
 struct ChatGLMForConditionalGeneration {
     ChatGLMConfig config;
     ChatGLMModel transformer;
 
+    static constexpr size_t MEM_SIZE = 272ull * 1024 * 1024;
+    std::unique_ptr<char[]> mem_buffer; // BLAS buffer
+    static constexpr size_t SCRATCH_SIZE = 128ull * 1024 * 1024;
+    std::unique_ptr<char[]> scratch_buffer; // intermediate tensor buffer
+
     ChatGLMForConditionalGeneration() = default;
-    ChatGLMForConditionalGeneration(InitContext *ctx, const ChatGLMConfig &_config)
-        : config(_config), transformer(ctx, config) {}
+    ChatGLMForConditionalGeneration(InitContext *ctx, const ChatGLMConfig &config)
+        : config(config), transformer(ctx, config), mem_buffer(new char[MEM_SIZE]),
+          scratch_buffer(new char[SCRATCH_SIZE]) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const;
 
     std::vector<int> generate(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
                               BaseStreamer *streamer = nullptr) const;
+
+    int generate_next_token(const std::vector<int> &input_ids, const GenerationConfig &gen_config, int n_past,
+                            int n_ctx) const;
 };
 
 struct MappedFile {
@@ -230,8 +245,8 @@ struct ChatGLMPipeline {
     ChatGLMPipeline(const std::string &path);
     ~ChatGLMPipeline();
 
-    void chat(std::vector<std::string> &history, const GenerationConfig &gen_config,
-              BaseStreamer *streamer = nullptr) const;
+    std::string chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
+                     BaseStreamer *streamer = nullptr) const;
 
     static std::string build_prompt(const std::vector<std::string> &history);
 };

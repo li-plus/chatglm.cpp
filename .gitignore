@@ -6,9 +6,12 @@
 
 # python
 __pycache__/
+*.egg-info/
+dist/
+*.so
 
 # cpp
-/build/
+build/
 
 # model
 *.bin

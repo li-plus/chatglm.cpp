@@ -105,15 +105,8 @@ void chat(const Args &args) {
     chatglm::ChatGLMPipeline pipeline(args.model_path);
 
     chatglm::TextStreamer streamer(pipeline.tokenizer.get());
-    chatglm::GenerationConfig gen_config = {
-        .max_length = args.max_length,
-        .max_context_length = args.max_context_length,
-        .do_sample = args.temp > 0,
-        .top_k = args.top_k,
-        .top_p = args.top_p,
-        .temperature = args.temp,
-        .num_threads = args.num_threads,
-    };
+    chatglm::GenerationConfig gen_config(args.max_length, args.max_context_length, args.temp > 0, args.top_k,
+                                         args.top_p, args.temp, args.num_threads);
 
     if (args.interactive) {
         std::cout << R"(    ________          __  ________    __  ___                 )" << '\n'
@@ -135,12 +128,12 @@ void chat(const Args &args) {
             }
             history.emplace_back(std::move(prompt));
             std::cout << "ChatGLM > ";
-            pipeline.chat(history, gen_config, &streamer);
+            std::string output = pipeline.chat(history, gen_config, &streamer);
+            history.emplace_back(std::move(output));
         }
         std::cout << "Bye\n";
     } else {
-        std::vector<std::string> history{args.prompt};
-        pipeline.chat(history, gen_config, &streamer);
+        pipeline.chat({args.prompt}, gen_config, &streamer);
     }
 }
 

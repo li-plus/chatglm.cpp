@@ -17,6 +17,7 @@ endif ()
 include_directories(third_party/ggml/include/ggml third_party/ggml/src)
 add_subdirectory(third_party/ggml)
 
+set(SPM_ENABLE_SHARED OFF CACHE BOOL "chatglm: disable sentencepiece shared libraries by default")
 include_directories(third_party/sentencepiece/src)
 add_subdirectory(third_party/sentencepiece)
 
@@ -29,10 +30,10 @@ if (GGML_PERF)
 endif ()
 
 add_library(chatglm STATIC chatglm.cpp)
-target_link_libraries(chatglm ggml sentencepiece-static)
+target_link_libraries(chatglm PRIVATE ggml sentencepiece-static)
 
 add_executable(main main.cpp)
-target_link_libraries(main chatglm)
+target_link_libraries(main PRIVATE chatglm)
 
 # GoogleTest
 option(CHATGLM_ENABLE_TESTING "chatglm: enable testing" OFF)
@@ -52,17 +53,32 @@ if (CHATGLM_ENABLE_TESTING)
 
     # Now simply link against gtest or gtest_main as needed. Eg
     add_executable(chatglm_test chatglm_test.cpp)
-    target_link_libraries(chatglm_test chatglm gtest_main)
+    target_link_libraries(chatglm_test PRIVATE chatglm gtest_main)
     add_test(NAME chatglm_test COMMAND chatglm_test)
+endif ()
+
+option(CHATGLM_ENABLE_PYBIND, "chatglm: enable python binding" OFF)
+if (CHATGLM_ENABLE_PYBIND)
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+    set_target_properties(chatglm ggml sentencepiece-static PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
+    add_subdirectory(third_party/pybind11)
+    pybind11_add_module(_C chatglm_pybind.cpp)
+    target_link_libraries(_C PRIVATE chatglm)
 endif ()
 
 # lint
 set(CPP_SOURCES
     ${PROJECT_SOURCE_DIR}/chatglm.h
     ${PROJECT_SOURCE_DIR}/chatglm.cpp
-    ${PROJECT_SOURCE_DIR}/chatglm_test.cpp)
+    ${PROJECT_SOURCE_DIR}/chatglm_test.cpp
+    ${PROJECT_SOURCE_DIR}/chatglm_pybind.cpp)
 set(PY_SOURCES
-    ${PROJECT_SOURCE_DIR}/convert.py)
+    ${PROJECT_SOURCE_DIR}/chatglm_cpp/__init__.py
+    ${PROJECT_SOURCE_DIR}/convert.py
+    ${PROJECT_SOURCE_DIR}/setup.py
+    ${PROJECT_SOURCE_DIR}/cli_chat.py
+    ${PROJECT_SOURCE_DIR}/web_demo.py
+    ${PROJECT_SOURCE_DIR}/test_chatglm_cpp.py)
 add_custom_target(lint
     COMMAND clang-format -i ${CPP_SOURCES}
     COMMAND isort ${PY_SOURCES}

@@ -12,7 +12,7 @@ A C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B). Run i
 * [x] Pure C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp).
 * [x] Accelerated memory-efficient CPU inference with int4/int8 quantization, optimized KV cache and parallel computing.
 * [x] Streaming generation with typewriter effect.
-* [ ] Python binding & web demo.
+* [x] Python binding, web demo, and more possibilities.
 
 ## Getting Started
 
@@ -84,6 +84,28 @@ cmake --build build -j
 ```
 
 Note that the current GGML CUDA implementation is really slow. The community is making efforts to optimize it.
+
+## Python Binding
+
+To install the Python binding from source, run:
+```sh
+# install from the latest source hosted on GitHub
+pip install git+https://github.com/li-plus/chatglm.cpp.git@main
+# or install from your local source
+pip install .
+```
+
+Run the Python example to chat with the quantized ChatGLM model:
+```sh
+python3 cli_chat.py -m chatglm-ggml.bin -i
+```
+
+You may also launch a web demo to chat in your browser:
+```sh
+python3 web_demo.py -m chatglm-ggml.bin
+```
+
+![web_demo](docs/web_demo.jpg)
 
 ## Performance
 

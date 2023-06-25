@@ -126,10 +126,10 @@ void TextStreamer::end() {
 
 // ===== tokenizer =====
 
-ChatGLMTokenizer::ChatGLMTokenizer(std::string_view serialized_model_proto, int _bos_token_id, int _eos_token_id,
-                                   int _mask_token_id, int _gmask_token_id, int _pad_token_id)
-    : bos_token_id(_bos_token_id), eos_token_id(_eos_token_id), mask_token_id(_mask_token_id),
-      gmask_token_id(_gmask_token_id), pad_token_id(_pad_token_id) {
+ChatGLMTokenizer::ChatGLMTokenizer(std::string_view serialized_model_proto, int bos_token_id, int eos_token_id,
+                                   int mask_token_id, int gmask_token_id, int pad_token_id)
+    : bos_token_id(bos_token_id), eos_token_id(eos_token_id), mask_token_id(mask_token_id),
+      gmask_token_id(gmask_token_id), pad_token_id(pad_token_id) {
     sp = std::make_unique<sentencepiece::SentencePieceProcessor>();
     const auto status = sp->LoadFromSerializedProto(serialized_model_proto);
     CHATGLM_CHECK(status.ok()) << status.ToString();
@@ -404,6 +404,86 @@ static inline int get_num_physical_cores() {
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
 }
 
+int ChatGLMForConditionalGeneration::generate_next_token(const std::vector<int> &input_ids,
+                                                         const GenerationConfig &gen_config, int n_past,
+                                                         int n_ctx) const {
+    ForwardContext ctx;
+    ctx.gctx = ggml_init({.mem_size = MEM_SIZE, .mem_buffer = mem_buffer.get(), .no_alloc = false});
+    CHATGLM_CHECK(ctx.gctx) << "failed to init ggml context";
+    int n_threads = gen_config.num_threads > 0 ? gen_config.num_threads : get_num_physical_cores();
+    ctx.gf = {};
+    ctx.gf.n_threads = input_ids.size() >= 32 && ggml_cpu_has_blas() && !ggml_cpu_has_gpublas() ? 1 : n_threads;
+    ctx.scratch = {.offs = 0, .size = SCRATCH_SIZE, .data = scratch_buffer.get()};
+
+    ggml_tensor *input_ids_tensor = ggml_new_tensor_1d(ctx.gctx, GGML_TYPE_I32, input_ids.size());
+    memcpy(input_ids_tensor->data, input_ids.data(), ggml_nbytes(input_ids_tensor));
+
+    ggml_tensor *lm_logits = forward(&ctx, input_ids_tensor, n_past, n_ctx);
+
+    ggml_build_forward_expand(&ctx.gf, lm_logits);
+    ggml_graph_compute(ctx.gctx, &ctx.gf);
+
+#ifdef GGML_PERF
+    ggml_graph_print(&ctx.gf);
+#endif
+
+    float *next_token_logits = (float *)lm_logits->data;
+
+    int next_token_id;
+    if (gen_config.do_sample) {
+        // temperature sampling
+        float inv_temp = 1.f / gen_config.temperature;
+        for (int i = 0; i < config.vocab_size; i++) {
+            next_token_logits[i] *= inv_temp;
+        }
+
+        std::vector<TokenIdScore> token_scores(config.vocab_size);
+        for (int i = 0; i < config.vocab_size; i++) {
+            token_scores[i] = {.id = i, .score = next_token_logits[i]};
+        }
+
+        // top_k sampling
+        if (0 < gen_config.top_k && gen_config.top_k < (int)token_scores.size()) {
+            std::nth_element(token_scores.begin(), token_scores.begin() + gen_config.top_k, token_scores.end(),
+                             std::greater<TokenIdScore>());
+            token_scores.resize(gen_config.top_k);
+        }
+
+        // top_p sampling
+        if (0.f < gen_config.top_p && gen_config.top_p < 1.f) {
+            std::sort(token_scores.begin(), token_scores.end(), std::greater<TokenIdScore>()); // hot code!
+            sampling_softmax_inplace(token_scores.data(), token_scores.data() + token_scores.size());
+
+            float cumsum = 0.f;
+            for (size_t i = 0; i < token_scores.size(); i++) {
+                cumsum += token_scores[i].score;
+                if (cumsum >= gen_config.top_p) {
+                    token_scores.resize(i + 1);
+                    break;
+                }
+            }
+        }
+
+        // sample next token
+        sampling_softmax_inplace(token_scores.data(), token_scores.data() + token_scores.size());
+        for (size_t i = 0; i < token_scores.size(); i++) {
+            next_token_logits[i] = token_scores[i].score;
+        }
+
+        thread_local std::random_device rd;
+        thread_local std::mt19937 gen(rd());
+
+        std::discrete_distribution<> dist(next_token_logits, next_token_logits + token_scores.size());
+        next_token_id = token_scores[dist(gen)].id;
+    } else {
+        // greedy search
+        next_token_id = std::max_element(next_token_logits, next_token_logits + config.vocab_size) - next_token_logits;
+    }
+    ggml_free(ctx.gctx);
+
+    return next_token_id;
+}
+
 std::vector<int> ChatGLMForConditionalGeneration::generate(const std::vector<int> &input_ids,
                                                            const GenerationConfig &gen_config,
                                                            BaseStreamer *streamer) const {
@@ -419,92 +499,11 @@ std::vector<int> ChatGLMForConditionalGeneration::generate(const std::vector<int
         streamer->put(input_ids);
     }
 
-    // use new operator to avoid value initialization
-    size_t mem_size = 272ull * 1024 * 1024; // BLAS buffer
-    std::unique_ptr<char[]> mem_buffer(new char[mem_size]);
-    size_t scratch_size = 128ull * 1024 * 1024;
-    std::unique_ptr<char[]> scratch_buffer(new char[scratch_size]);
-
     int n_past = 0;
     const int n_ctx = input_ids.size();
 
-    int n_threads = gen_config.num_threads > 0 ? gen_config.num_threads : get_num_physical_cores();
-
     while ((int)output_ids.size() < gen_config.max_length) {
-        ForwardContext ctx;
-        ctx.gctx = ggml_init({.mem_size = mem_size, .mem_buffer = mem_buffer.get(), .no_alloc = false});
-        CHATGLM_CHECK(ctx.gctx) << "failed to init ggml context";
-        ctx.gf = {};
-        ctx.gf.n_threads =
-            curr_input_ids.size() >= 32 && ggml_cpu_has_blas() && !ggml_cpu_has_gpublas() ? 1 : n_threads;
-        ctx.scratch = {.offs = 0, .size = scratch_size, .data = scratch_buffer.get()};
-
-        ggml_tensor *curr_input_ids_tensor = ggml_new_tensor_1d(ctx.gctx, GGML_TYPE_I32, curr_input_ids.size());
-        memcpy(curr_input_ids_tensor->data, curr_input_ids.data(), ggml_nbytes(curr_input_ids_tensor));
-
-        ggml_tensor *lm_logits = forward(&ctx, curr_input_ids_tensor, n_past, n_ctx);
-
-        ggml_build_forward_expand(&ctx.gf, lm_logits);
-        ggml_graph_compute(ctx.gctx, &ctx.gf);
-
-#ifdef GGML_PERF
-        ggml_graph_print(&ctx.gf);
-#endif
-
-        float *next_token_logits = (float *)lm_logits->data;
-
-        int next_token_id;
-        if (gen_config.do_sample) {
-            // temperature sampling
-            float inv_temp = 1.f / gen_config.temperature;
-            for (int i = 0; i < config.vocab_size; i++) {
-                next_token_logits[i] *= inv_temp;
-            }
-
-            std::vector<TokenIdScore> token_scores(config.vocab_size);
-            for (int i = 0; i < config.vocab_size; i++) {
-                token_scores[i] = {.id = i, .score = next_token_logits[i]};
-            }
-
-            // top_k sampling
-            if (0 < gen_config.top_k && gen_config.top_k < (int)token_scores.size()) {
-                std::nth_element(token_scores.begin(), token_scores.begin() + gen_config.top_k, token_scores.end(),
-                                 std::greater<TokenIdScore>());
-                token_scores.resize(gen_config.top_k);
-            }
-
-            // top_p sampling
-            if (0.f < gen_config.top_p && gen_config.top_p < 1.f) {
-                std::sort(token_scores.begin(), token_scores.end(), std::greater<TokenIdScore>()); // hot code!
-                sampling_softmax_inplace(token_scores.data(), token_scores.data() + token_scores.size());
-
-                float cumsum = 0.f;
-                for (size_t i = 0; i < token_scores.size(); i++) {
-                    cumsum += token_scores[i].score;
-                    if (cumsum >= gen_config.top_p) {
-                        token_scores.resize(i + 1);
-                        break;
-                    }
-                }
-            }
-
-            // sample next token
-            sampling_softmax_inplace(token_scores.data(), token_scores.data() + token_scores.size());
-            for (size_t i = 0; i < token_scores.size(); i++) {
-                next_token_logits[i] = token_scores[i].score;
-            }
-
-            thread_local std::random_device rd;
-            thread_local std::mt19937 gen(rd());
-
-            std::discrete_distribution<> dist(next_token_logits, next_token_logits + token_scores.size());
-            next_token_id = token_scores[dist(gen)].id;
-        } else {
-            // greedy search
-            next_token_id =
-                std::max_element(next_token_logits, next_token_logits + config.vocab_size) - next_token_logits;
-        }
-        ggml_free(ctx.gctx);
+        int next_token_id = generate_next_token(curr_input_ids, gen_config, n_past, n_ctx);
 
         n_past += curr_input_ids.size();
         curr_input_ids = {next_token_id};
@@ -647,8 +646,8 @@ ChatGLMPipeline::~ChatGLMPipeline() {
     }
 }
 
-void ChatGLMPipeline::chat(std::vector<std::string> &history, const GenerationConfig &gen_config,
-                           BaseStreamer *streamer) const {
+std::string ChatGLMPipeline::chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
+                                  BaseStreamer *streamer) const {
     std::string prompt = build_prompt(history);
     std::vector<int> input_ids = tokenizer->encode(prompt);
     if ((int)input_ids.size() > gen_config.max_context_length) {
@@ -660,8 +659,7 @@ void ChatGLMPipeline::chat(std::vector<std::string> &history, const GenerationCo
     std::vector<int> new_output_ids(output_ids.begin() + input_ids.size(), output_ids.end());
 
     std::string output = tokenizer->decode(new_output_ids);
-
-    history.emplace_back(std::move(output));
+    return output;
 }
 
 std::string ChatGLMPipeline::build_prompt(const std::vector<std::string> &history) {
