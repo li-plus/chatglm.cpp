@@ -56,8 +56,11 @@ std::string to_string(ggml_tensor *tensor, bool with_data) {
     if (with_data) {
         oss << "[";
         for (int i3 = 0; i3 < tensor->ne[3]; i3++) {
+            oss << '[';
             for (int i2 = 0; i2 < tensor->ne[2]; i2++) {
+                oss << '[';
                 for (int i1 = 0; i1 < tensor->ne[1]; i1++) {
+                    oss << '[';
                     for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
                         auto ptr = (char *)tensor->data + i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] +
                                    i0 * tensor->nb[0];
@@ -69,10 +72,13 @@ std::string to_string(ggml_tensor *tensor, bool with_data) {
                         } else {
                             CHATGLM_THROW << "unimplemented";
                         }
-                        oss << (i3 + i2 + i1 + i0 > 0 ? ", " : "") << std::fixed << std::setprecision(4) << val;
+                        oss << (i0 > 0 ? ", " : "") << std::setw(7) << std::fixed << std::setprecision(4) << val;
                     }
+                    oss << "],\n";
                 }
+                oss << "],\n";
             }
+            oss << "],\n";
         }
         oss << "], ";
     }
@@ -245,20 +251,29 @@ ggml_tensor *Embedding::forward(ForwardContext *ctx, ggml_tensor *input) const {
 ggml_tensor *Linear::forward(ForwardContext *ctx, ggml_tensor *input) const {
     // input: [seqlen, in_features]
     ggml_tensor *output = ggml_mul_mat(ctx->gctx, weight, input); // [seqlen, out_features]
-    ggml_tensor *bcast_bias = ggml_view_2d(ctx->gctx, bias, output->ne[0], output->ne[1], 0, 0);
-    output = ggml_add_inplace(ctx->gctx, output, bcast_bias);
+    if (bias) {
+        ggml_tensor *bcast_bias = ggml_view_2d(ctx->gctx, bias, output->ne[0], output->ne[1], 0, 0);
+        output = ggml_add_inplace(ctx->gctx, output, bcast_bias);
+    }
     return output;
 }
 
 ggml_tensor *LayerNorm::forward(ForwardContext *ctx, ggml_tensor *input) const {
     // input: [seqlen, normalized_shape]
     ggml_tensor *output = ggml_norm_inplace(ctx->gctx, input);
-    ggml_tensor *bcast_weight = ggml_view_2d(ctx->gctx, weight, output->ne[0], output->ne[1], 0, 0);
-    output = ggml_mul_inplace(ctx->gctx, output, bcast_weight);
+    output = ggml_mul_inplace(ctx->gctx, output, weight);
     ggml_tensor *bcast_bias = ggml_view_2d(ctx->gctx, bias, output->ne[0], output->ne[1], 0, 0);
     output = ggml_add_inplace(ctx->gctx, output, bcast_bias);
     return output;
 }
+
+ggml_tensor *RMSNorm::forward(ForwardContext *ctx, ggml_tensor *input) const {
+    ggml_tensor *output = ggml_rms_norm_inplace(ctx->gctx, input);
+    output = ggml_mul_inplace(ctx->gctx, output, weight);
+    return output;
+}
+
+// ===== ChatGLM-6B =====
 
 ggml_tensor *GLU::forward(ForwardContext *ctx, ggml_tensor *hidden_states) const {
     ggml_tensor *output = dense_h_to_4h.forward(ctx, hidden_states);
@@ -541,6 +556,11 @@ MappedFile::MappedFile(const std::string &path) {
 
 MappedFile::~MappedFile() { CHATGLM_CHECK(munmap(data, size) == 0) << strerror(errno); }
 
+enum ModelArch {
+    CHATGLM = 1,
+    CHATGLM2 = 2,
+};
+
 ChatGLMPipeline::ChatGLMPipeline(const std::string &path) {
     mapped_file = std::make_unique<MappedFile>(path);
 
@@ -551,6 +571,10 @@ ChatGLMPipeline::ChatGLMPipeline(const std::string &path) {
     std::string magic(4, '\0');
     fin.read(&magic[0], magic.size());
     CHATGLM_CHECK(magic == "ggml") << "model file is broken (bad magic)";
+
+    // load model arch
+    ModelArch arch = (ModelArch)read_as<int>(fin);
+    CHATGLM_CHECK(arch == ModelArch::CHATGLM) << "invalid model arch " << arch;
 
     // load config
     ChatGLMConfig config = read_as<ChatGLMConfig>(fin);
@@ -677,6 +701,116 @@ std::string ChatGLMPipeline::build_prompt(const std::vector<std::string> &histor
         }
     }
     return oss_prompt.str();
+}
+
+// ===== ChatGLM2-6B modules =====
+
+ggml_tensor *GLM2SelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
+    const int hidden_size = hidden_states->ne[0];
+    const int qlen = hidden_states->ne[1];
+    const int head_size = hidden_size / num_attention_heads;
+    const int rope_dim = head_size / 2;
+    const int mqa_scale = num_attention_heads / multi_query_group_num;
+
+    ggml_tensor *qkv = query_key_value.forward(ctx, hidden_states); // [qlen, hidden + 2 * mqa_hidden]
+
+    ggml_tensor *query_layer =
+        ggml_view_3d(ctx->gctx, qkv, head_size, num_attention_heads, qlen, head_size * ggml_element_size(qkv),
+                     qkv->nb[1], 0); // [qlen, n_head, head_size]
+    query_layer = ggml_rope_inplace(ctx->gctx, query_layer, n_past, rope_dim, 0, n_ctx);
+    query_layer = ggml_view_4d(ctx->gctx, query_layer, head_size, mqa_scale, multi_query_group_num, qlen,
+                               query_layer->nb[1], query_layer->nb[1] * mqa_scale, query_layer->nb[2],
+                               0);                                  // [qlen, mqa_n_head, mqa_scale, head_size]
+    query_layer = ggml_permute(ctx->gctx, query_layer, 0, 2, 3, 1); // [mqa_n_head, mqa_scale, qlen, head_size]
+
+    // TODO: zero copy!!!
+    // query_layer = ggml_permute(ctx->gctx, query_layer, 0, 2, 1, 3);
+    // query_layer = ggml_reshape_4d(ctx->gctx, ggml_cont(ctx->gctx, query_layer), head_size, qlen,
+    //                               mqa_scale,
+    //                               multi_query_group_num); // [mqa_n_head, mqa_scale, qlen, head_size]
+
+    ggml_tensor *key_layer =
+        ggml_view_3d(ctx->gctx, qkv, head_size, multi_query_group_num, qlen, head_size * ggml_element_size(qkv),
+                     qkv->nb[1], hidden_size * ggml_element_size(qkv)); // [qlen, mqa_n_head, head_size]
+    key_layer = ggml_rope_inplace(ctx->gctx, key_layer, n_past, rope_dim, 0, n_ctx);
+    key_layer = ggml_permute(ctx->gctx, key_layer, 0, 2, 1, 3); // [mqa_n_head, qlen, head_size]
+
+    ggml_tensor *value_layer = ggml_view_3d(
+        ctx->gctx, qkv, head_size, multi_query_group_num, qlen, head_size * ggml_element_size(qkv), qkv->nb[1],
+        (hidden_size + head_size * multi_query_group_num) * ggml_element_size(qkv)); // [qlen, mqa_n_head, head_size]
+    value_layer = ggml_permute(ctx->gctx, value_layer, 1, 2, 0, 3);                  // [mqa_n_head, head_size, qlen]
+
+    // store key & value to cache
+    ggml_tensor *k_cache_view =
+        ggml_view_3d(ctx->gctx, k_cache, head_size, qlen, multi_query_group_num, k_cache->nb[1], k_cache->nb[2],
+                     n_past * head_size * ggml_element_size(k_cache)); // [mqa_n_head, qlen, head_size]
+    ggml_build_forward_expand(&ctx->gf, ggml_cpy(ctx->gctx, key_layer, k_cache_view));
+    ggml_tensor *v_cache_view =
+        ggml_view_3d(ctx->gctx, v_cache, qlen, head_size, multi_query_group_num, v_cache->nb[1], v_cache->nb[2],
+                     n_past * ggml_element_size(v_cache)); // [mqa_n_head, head_size, qlen]
+    ggml_build_forward_expand(&ctx->gf, ggml_cpy(ctx->gctx, value_layer, v_cache_view));
+
+    // concat key & value with past kv
+    key_layer = ggml_view_4d(ctx->gctx, k_cache, head_size, n_past + qlen, mqa_scale, multi_query_group_num,
+                             k_cache->nb[1], 0, k_cache->nb[2],
+                             0); // [mqa_n_head, mqa_scale, klen, head_size]
+    value_layer = ggml_view_4d(ctx->gctx, v_cache, n_past + qlen, head_size, mqa_scale, multi_query_group_num,
+                               v_cache->nb[1], 0, v_cache->nb[2],
+                               0); // [mqa_n_head, mqa_scale, head_size, klen]
+
+    // TODO: masked = (npast == 0)?
+    ggml_tensor *context_layer = ggml_flash_attn(ctx->gctx, query_layer, key_layer, value_layer,
+                                                 true); // [mqa_scale, mqa_n_head, qlen, head_size]
+    context_layer = ggml_reshape_2d(ctx->gctx, ggml_cont(ctx->gctx, ggml_permute(ctx->gctx, context_layer, 0, 3, 1, 2)),
+                                    hidden_size, qlen); // [qlen, hidden]
+
+    ggml_tensor *attn_output = dense.forward(ctx, context_layer);
+    return attn_output;
+    // ggml_tensor *attn_scores = ggml_mul_mat(ctx->gctx, key_layer, query_layer); // [n_head, qlen, klen]
+    // if (n_past == 0) {
+    //     // build attention mask for context input
+    //     ggml_tensor *inf = ggml_new_tensor_3d(ctx->gctx, attn_scores->type, 1, qlen - 1, num_attention_heads);
+    //     ggml_set_f32(inf, -INFINITY);
+    //     ggml_tensor *masked_attn_scores = ggml_view_3d(
+    //         ctx->gctx, attn_scores, 1, qlen - 1, num_attention_heads, qlen * ggml_element_size(attn_scores),
+    //         qlen * qlen * ggml_element_size(attn_scores), (qlen - 1) * ggml_element_size(attn_scores));
+    //     ggml_build_forward_expand(&ctx->gf, ggml_cpy(ctx->gctx, inf, masked_attn_scores));
+    // }
+    // attn_scores = ggml_scale_inplace(ctx->gctx, attn_scores, ggml_new_f32(ctx->gctx, 1.f / std::sqrt(head_size)));
+    // ggml_tensor *attn_probs = ggml_soft_max_inplace(ctx->gctx, attn_scores); // [n_head, qlen, klen]
+
+    // ggml_tensor *context_layer = ggml_mul_mat(ctx->gctx, value_layer, attn_probs); // [n_head, qlen, head_size]
+}
+
+ggml_tensor *GLM2MLP::forward(ForwardContext *ctx, ggml_tensor *hidden_states) const {
+    ggml_tensor *output = dense_h_to_4h.forward(ctx, hidden_states);
+
+    // swiglu activation
+    ggml_tensor *x0 = ggml_view_2d(ctx->gctx, output, output->ne[0] / 2, output->ne[1], output->nb[1], 0);
+    ggml_tensor *x1 = ggml_view_2d(ctx->gctx, output, output->ne[0] / 2, output->ne[1], output->nb[1],
+                                   output->ne[0] / 2 * ggml_element_size(output));
+    output = ggml_mul_inplace(ctx->gctx, ggml_silu_inplace(ctx->gctx, ggml_cont(ctx->gctx, x0)), x1);
+
+    output = dense_4h_to_h.forward(ctx, output);
+    return output;
+}
+
+ggml_tensor *GLM2Block::forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
+    ggml_tensor *residual = ggml_dup(ctx->gctx, hidden_states);
+    ggml_build_forward_expand(&ctx->gf, residual);
+
+    hidden_states = input_layernorm.forward(ctx, hidden_states);
+    hidden_states = attention.forward(ctx, hidden_states, n_past, n_ctx);
+    hidden_states = ggml_add_inplace(ctx->gctx, hidden_states, residual);
+
+    residual = ggml_dup(ctx->gctx, hidden_states);
+    ggml_build_forward_expand(&ctx->gf, residual);
+
+    hidden_states = post_attention_layernorm.forward(ctx, hidden_states);
+    hidden_states = mlp.forward(ctx, hidden_states);
+    hidden_states = ggml_add_inplace(ctx->gctx, hidden_states, residual);
+
+    return hidden_states;
 }
 
 } // namespace chatglm
