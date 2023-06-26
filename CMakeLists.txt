@@ -78,6 +78,7 @@ set(PY_SOURCES
     ${PROJECT_SOURCE_DIR}/setup.py
     ${PROJECT_SOURCE_DIR}/cli_chat.py
     ${PROJECT_SOURCE_DIR}/web_demo.py
+    ${PROJECT_SOURCE_DIR}/test_convert.py
     ${PROJECT_SOURCE_DIR}/test_chatglm_cpp.py)
 add_custom_target(lint
     COMMAND clang-format -i ${CPP_SOURCES}

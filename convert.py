@@ -37,27 +37,9 @@ TORCH_TO_GGML_DTYPE = {
 }
 
 
-def dump_config(f, config, ggml_type):
-    config_values = [
-        config.vocab_size,
-        config.hidden_size,
-        config.num_attention_heads,
-        config.num_layers,
-        config.max_sequence_length,
-        config.bos_token_id,
-        config.eos_token_id,
-        config.gmask_token_id,
-        config.mask_token_id,
-        config.pad_token_id,
-        ggml_type.value,
-    ]
-    f.write(struct.pack("i" * len(config_values), *config_values))
-
-
-def dump_tokenizer(f, tokenizer):
-    serialized_model_proto = tokenizer.sp_tokenizer.text_tokenizer.sp.serialized_model_proto()
-    f.write(struct.pack("i", len(serialized_model_proto)))
-    f.write(serialized_model_proto)
+class ModelArch(Enum):
+    CHATGLM = 1
+    CHATGLM2 = 2
 
 
 def quantize_q8_0(tensor: torch.Tensor) -> torch.CharTensor:
@@ -119,30 +101,8 @@ def dump_tensor(f, name: str, tensor: torch.Tensor, ggml_type: GgmlType):
     tensor.numpy().tofile(f)
 
 
-def dump_model(f, model, ggml_type):
-    weight_names = ["transformer.word_embeddings.weight"]
-    for i in range(model.config.num_layers):
-        weight_names += [
-            f"transformer.layers.{i}.input_layernorm.weight",
-            f"transformer.layers.{i}.input_layernorm.bias",
-            f"transformer.layers.{i}.attention.query_key_value.weight",
-            f"transformer.layers.{i}.attention.query_key_value.bias",
-            f"transformer.layers.{i}.attention.dense.weight",
-            f"transformer.layers.{i}.attention.dense.bias",
-            f"transformer.layers.{i}.post_attention_layernorm.weight",
-            f"transformer.layers.{i}.post_attention_layernorm.bias",
-            f"transformer.layers.{i}.mlp.dense_h_to_4h.weight",
-            f"transformer.layers.{i}.mlp.dense_h_to_4h.bias",
-            f"transformer.layers.{i}.mlp.dense_4h_to_h.weight",
-            f"transformer.layers.{i}.mlp.dense_4h_to_h.bias",
-        ]
-    weight_names += [
-        "transformer.final_layernorm.weight",
-        "transformer.final_layernorm.bias",
-    ]
-
+def dump_state_dict(f, weight_names, state_dict, quantization_bit, ggml_type):
     tensor_info = []
-    state_dict = model.state_dict()
     for name in tqdm(weight_names, desc="Dumping model state"):
         tensor = state_dict[name]
         if tensor.ndim == 2:
@@ -150,10 +110,10 @@ def dump_model(f, model, ggml_type):
 
             # step 1: de-quantize it back to float32
             if tensor.dtype == torch.int8:
-                assert model.config.quantization_bit in [4, 8]
+                assert quantization_bit in [4, 8]
                 scale = state_dict[f"{name}_scale"].float()  # channel-wise scale
 
-                if model.config.quantization_bit == 4:
+                if quantization_bit == 4:
                     # convert int4 weight to int8
                     low_bits = ((tensor << 4) & 0xF0) >> 4
                     high_bits = (tensor & 0xF0) >> 4
@@ -176,6 +136,137 @@ def dump_model(f, model, ggml_type):
     print(tabulate(tensor_info, headers=["name", "shape", "dtype"], tablefmt="psql"))
 
 
+class BaseConverter:
+    @classmethod
+    def convert(cls, model, tokenizer, ggml_type, save_path):
+        # convert all weights to fp16
+        with open(save_path, "wb") as f:
+            f.write(b"ggml")  # magic
+            f.write(struct.pack("i", cls.MODEL_ARCH.value))
+            cls.dump_config(f, model.config, ggml_type)
+            cls.dump_tokenizer(f, tokenizer)
+            cls.dump_model(f, model, ggml_type)
+
+        print(f"{cls.MODEL_ARCH.name} GGML model saved to {save_path}")
+
+
+class ChatGLMConverter(BaseConverter):
+    MODEL_ARCH = ModelArch.CHATGLM
+
+    @staticmethod
+    def dump_config(f, config, ggml_type):
+        assert config.position_encoding_2d, "unimplemented: position_encoding_2d should be True"
+        assert (
+            config.inner_hidden_size == 4 * config.hidden_size
+        ), "unimplemented: inner_hidden_size should be 4 times hidden_size"
+        config_values = [
+            config.vocab_size,
+            config.hidden_size,
+            config.num_attention_heads,
+            config.num_layers,
+            config.max_sequence_length,
+            config.bos_token_id,
+            config.eos_token_id,
+            config.gmask_token_id,
+            config.mask_token_id,
+            config.pad_token_id,
+            ggml_type.value,
+        ]
+        f.write(struct.pack("i" * len(config_values), *config_values))
+
+    @staticmethod
+    def dump_tokenizer(f, tokenizer):
+        serialized_model_proto = tokenizer.sp_tokenizer.text_tokenizer.sp.serialized_model_proto()
+        f.write(struct.pack("i", len(serialized_model_proto)))
+        f.write(serialized_model_proto)
+
+    @staticmethod
+    def dump_model(f, model, ggml_type):
+        assert torch.allclose(
+            model.state_dict()["transformer.word_embeddings.weight"], model.state_dict()["lm_head.weight"]
+        ), "unimplemented: lm_head weight must be tied to input embedding"
+
+        weight_names = ["transformer.word_embeddings.weight"]
+        for i in range(model.config.num_layers):
+            weight_names += [
+                f"transformer.layers.{i}.input_layernorm.weight",
+                f"transformer.layers.{i}.input_layernorm.bias",
+                f"transformer.layers.{i}.attention.query_key_value.weight",
+                f"transformer.layers.{i}.attention.query_key_value.bias",
+                f"transformer.layers.{i}.attention.dense.weight",
+                f"transformer.layers.{i}.attention.dense.bias",
+                f"transformer.layers.{i}.post_attention_layernorm.weight",
+                f"transformer.layers.{i}.post_attention_layernorm.bias",
+                f"transformer.layers.{i}.mlp.dense_h_to_4h.weight",
+                f"transformer.layers.{i}.mlp.dense_h_to_4h.bias",
+                f"transformer.layers.{i}.mlp.dense_4h_to_h.weight",
+                f"transformer.layers.{i}.mlp.dense_4h_to_h.bias",
+            ]
+        weight_names += [
+            "transformer.final_layernorm.weight",
+            "transformer.final_layernorm.bias",
+        ]
+        dump_state_dict(f, weight_names, model.state_dict(), model.config.quantization_bit, ggml_type)
+
+
+class ChatGLM2Converter(BaseConverter):
+    MODEL_ARCH = ModelArch.CHATGLM2
+
+    @staticmethod
+    def dump_config(f, config, ggml_type):
+        assert config.add_bias_linear is False, "unimplemented: add_bias_linear must be false"
+        assert config.add_qkv_bias is True, "unimplemented: add_qkv_bias must be true"
+        assert (
+            config.apply_residual_connection_post_layernorm is False
+        ), "unimplemented: apply_residual_connection_post_layernorm must be false"
+        assert (
+            config.kv_channels * config.num_attention_heads == config.hidden_size
+        ), "unimplemented: invalid kv_channels"
+        assert config.multi_query_attention is True, "unimplemented: multi_query_attention must be true"
+        assert config.original_rope is True, "unimplemented: original_rope must be true"
+        assert config.post_layer_norm is True, "unimplemented: post_layer_norm must be true"
+        assert config.rmsnorm is True, "unimplemented: rmsnorm must be true"
+
+        config_values = [
+            config.padded_vocab_size,
+            config.hidden_size,
+            config.num_attention_heads,
+            config.multi_query_group_num,
+            config.ffn_hidden_size,
+            config.num_layers,
+            config.seq_length,
+            config.eos_token_id,
+            ggml_type.value,
+        ]
+
+        f.write(struct.pack("i" * len(config_values), *config_values))
+
+    @staticmethod
+    def dump_tokenizer(f, tokenizer):
+        serialized_model_proto = tokenizer.tokenizer.sp_model.serialized_model_proto()
+        f.write(struct.pack("i", len(serialized_model_proto)))
+        f.write(serialized_model_proto)
+
+    @staticmethod
+    def dump_model(f, model, ggml_type):
+        weight_names = ["transformer.embedding.word_embeddings.weight"]
+        for i in range(model.config.num_layers):
+            weight_names += [
+                f"transformer.encoder.layers.{i}.input_layernorm.weight",
+                f"transformer.encoder.layers.{i}.self_attention.query_key_value.weight",
+                f"transformer.encoder.layers.{i}.self_attention.query_key_value.bias",
+                f"transformer.encoder.layers.{i}.self_attention.dense.weight",
+                f"transformer.encoder.layers.{i}.post_attention_layernorm.weight",
+                f"transformer.encoder.layers.{i}.mlp.dense_h_to_4h.weight",
+                f"transformer.encoder.layers.{i}.mlp.dense_4h_to_h.weight",
+            ]
+        weight_names += [
+            "transformer.encoder.final_layernorm.weight",
+            "transformer.output_layer.weight",
+        ]
+        dump_state_dict(f, weight_names, model.state_dict(), model.config.quantization_bit, ggml_type)
+
+
 def main():
     parser = argparse.ArgumentParser("chatglm-convert")
     parser.add_argument("-i", "--model_name_or_path", type=str, default="THUDM/chatglm-6b")
@@ -193,22 +284,10 @@ def main():
         model = PeftModel.from_pretrained(model, args.lora_model_name_or_path)
         model = model.merge_and_unload()
 
-    # check config
-    assert model.config.position_encoding_2d, "unimplemented: position_encoding_2d should be True"
-    assert (
-        model.config.inner_hidden_size == 4 * model.config.hidden_size
-    ), "unimplemented: inner_hidden_size should be 4 times hidden_size"
-    assert torch.allclose(
-        model.state_dict()["transformer.word_embeddings.weight"], model.state_dict()["lm_head.weight"]
-    ), "unimplemented: lm_head weight must be tied to input embedding"
-
-    # convert all weights to fp16
-    with open(args.save_path, "wb") as f:
-        f.write(b"ggml")  # magic
-        dump_config(f, model.config, ggml_type)
-        dump_tokenizer(f, tokenizer)
-        dump_model(f, model, ggml_type)
-    print(f"GGML model saved to {args.save_path}")
+    if hasattr(model.config, "multi_query_attention"):
+        ChatGLM2Converter.convert(model, tokenizer, ggml_type, args.save_path)
+    else:
+        ChatGLMConverter.convert(model, tokenizer, ggml_type, args.save_path)
 
 
 if __name__ == "__main__":

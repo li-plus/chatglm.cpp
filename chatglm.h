@@ -110,9 +110,9 @@ struct Linear {
     ggml_tensor *bias;   // [out_features]
 
     Linear() : weight(nullptr), bias(nullptr) {}
-    Linear(InitContext *ctx, int in_features, int out_features)
+    Linear(InitContext *ctx, int in_features, int out_features, bool use_bias = true)
         : weight(ggml_new_tensor_2d(ctx->gctx, ctx->dtype, in_features, out_features)),
-          bias(ggml_new_tensor_1d(ctx->gctx, GGML_TYPE_F32, out_features)) {}
+          bias(use_bias ? ggml_new_tensor_1d(ctx->gctx, GGML_TYPE_F32, out_features) : nullptr) {}
 
     int in_features() const { return weight->ne[0]; }
     int out_features() const { return weight->ne[1]; }
@@ -131,6 +131,18 @@ struct LayerNorm {
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input) const;
 };
+
+struct RMSNorm {
+    ggml_tensor *weight;
+
+    RMSNorm() : weight(nullptr) {}
+    RMSNorm(InitContext *ctx, int normalized_shape)
+        : weight(ggml_new_tensor_1d(ctx->gctx, GGML_TYPE_F32, normalized_shape)) {}
+
+    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input) const;
+};
+
+// ===== ChatGLM-6B =====
 
 struct GLU {
     Linear dense_h_to_4h;
@@ -249,6 +261,63 @@ struct ChatGLMPipeline {
                      BaseStreamer *streamer = nullptr) const;
 
     static std::string build_prompt(const std::vector<std::string> &history);
+};
+
+// ===== ChatGLM2-6B =====
+
+struct GLM2SelfAttention {
+    int num_attention_heads;
+    int multi_query_group_num;
+    Linear query_key_value;
+    Linear dense;
+    ggml_tensor *k_cache; // [mqa_n_head, maxlen, head_size]
+    ggml_tensor *v_cache; // [mqa_n_head, head_size, maxlen]
+
+    GLM2SelfAttention() : num_attention_heads(0), multi_query_group_num(0) {}
+    GLM2SelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int multi_query_group_num,
+                      int max_length)
+        : num_attention_heads(num_attention_heads), multi_query_group_num(multi_query_group_num),
+          query_key_value(ctx, hidden_size,
+                          hidden_size + 2 * (hidden_size / num_attention_heads) * multi_query_group_num),
+          dense(ctx, hidden_size, hidden_size, false),
+          k_cache(ggml_new_tensor_3d(ctx->gctx, GGML_TYPE_F32, hidden_size / num_attention_heads, max_length,
+                                     multi_query_group_num)),
+          v_cache(ggml_new_tensor_3d(ctx->gctx, GGML_TYPE_F32, max_length, hidden_size / num_attention_heads,
+                                     multi_query_group_num)) {}
+
+    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
+};
+
+struct GLM2MLP {
+    Linear dense_h_to_4h;
+    Linear dense_4h_to_h;
+
+    GLM2MLP(InitContext *ctx, int hidden_size, int ffn_hidden_size)
+        : dense_h_to_4h(ctx, hidden_size, ffn_hidden_size * 2, false),
+          dense_4h_to_h(ctx, ffn_hidden_size, hidden_size, false) {}
+
+    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states) const;
+};
+
+struct GLM2Block {
+    RMSNorm input_layernorm;
+    GLM2SelfAttention attention;
+    RMSNorm post_attention_layernorm;
+    GLM2MLP mlp;
+    // int num_layers;
+
+    GLM2Block() = default;
+    // GLMBlock(InitContext *ctx, int hidden_size, int num_attention_heads, int num_layers, int max_length)
+    //     : input_layernorm(ctx, hidden_size), attention(ctx, hidden_size, num_attention_heads, max_length),
+    //       post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size), num_layers(num_layers) {}
+    GLM2Block(InitContext *ctx, int hidden_size, int num_attention_heads, int multi_query_group_num,
+              int ffn_hidden_size, int max_length)
+        : input_layernorm(ctx, hidden_size),
+          attention(ctx, hidden_size, num_attention_heads, multi_query_group_num, max_length),
+          post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size, ffn_hidden_size) {}
+
+    // TODO: simplify args
+    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
 };
 
 } // namespace chatglm
