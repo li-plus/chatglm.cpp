@@ -130,13 +130,45 @@ void TextStreamer::end() {
     print_len_ = 0;
 }
 
-// ===== tokenizer =====
+// ===== modules =====
+
+ggml_tensor *Embedding::forward(ForwardContext *ctx, ggml_tensor *input) const {
+    ggml_tensor *output = ggml_get_rows(ctx->gctx, weight, input);
+    return output;
+}
+
+ggml_tensor *Linear::forward(ForwardContext *ctx, ggml_tensor *input) const {
+    // input: [seqlen, in_features]
+    ggml_tensor *output = ggml_mul_mat(ctx->gctx, weight, input); // [seqlen, out_features]
+    if (bias) {
+        ggml_tensor *bcast_bias = ggml_view_2d(ctx->gctx, bias, output->ne[0], output->ne[1], 0, 0);
+        output = ggml_add_inplace(ctx->gctx, output, bcast_bias);
+    }
+    return output;
+}
+
+ggml_tensor *LayerNorm::forward(ForwardContext *ctx, ggml_tensor *input) const {
+    // input: [seqlen, normalized_shape]
+    ggml_tensor *output = ggml_norm_inplace(ctx->gctx, input);
+    output = ggml_mul_inplace(ctx->gctx, output, weight);
+    ggml_tensor *bcast_bias = ggml_view_2d(ctx->gctx, bias, output->ne[0], output->ne[1], 0, 0);
+    output = ggml_add_inplace(ctx->gctx, output, bcast_bias);
+    return output;
+}
+
+ggml_tensor *RMSNorm::forward(ForwardContext *ctx, ggml_tensor *input) const {
+    ggml_tensor *output = ggml_rms_norm_inplace(ctx->gctx, input);
+    output = ggml_mul_inplace(ctx->gctx, output, weight);
+    return output;
+}
+
+// ===== ChatGLM-6B =====
 
 ChatGLMTokenizer::ChatGLMTokenizer(std::string_view serialized_model_proto, int bos_token_id, int eos_token_id,
                                    int mask_token_id, int gmask_token_id, int pad_token_id)
-    : bos_token_id(bos_token_id), eos_token_id(eos_token_id), mask_token_id(mask_token_id),
-      gmask_token_id(gmask_token_id), pad_token_id(pad_token_id) {
-    sp = std::make_unique<sentencepiece::SentencePieceProcessor>();
+    : sp(std::make_unique<sentencepiece::SentencePieceProcessor>()), bos_token_id(bos_token_id),
+      eos_token_id(eos_token_id), mask_token_id(mask_token_id), gmask_token_id(gmask_token_id),
+      pad_token_id(pad_token_id) {
     const auto status = sp->LoadFromSerializedProto(serialized_model_proto);
     CHATGLM_CHECK(status.ok()) << status.ToString();
 }
@@ -241,39 +273,147 @@ std::string ChatGLMTokenizer::postprocess(const std::string &text) {
     return output;
 }
 
-// ===== model =====
-
-ggml_tensor *Embedding::forward(ForwardContext *ctx, ggml_tensor *input) const {
-    ggml_tensor *output = ggml_get_rows(ctx->gctx, weight, input);
-    return output;
+// Adapted from https://github.com/ggerganov/llama.cpp/blob/master/examples/common.cpp
+static inline int get_num_physical_cores() {
+    unsigned int n_threads = std::thread::hardware_concurrency();
+    return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
 }
 
-ggml_tensor *Linear::forward(ForwardContext *ctx, ggml_tensor *input) const {
-    // input: [seqlen, in_features]
-    ggml_tensor *output = ggml_mul_mat(ctx->gctx, weight, input); // [seqlen, out_features]
-    if (bias) {
-        ggml_tensor *bcast_bias = ggml_view_2d(ctx->gctx, bias, output->ne[0], output->ne[1], 0, 0);
-        output = ggml_add_inplace(ctx->gctx, output, bcast_bias);
+int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int> &input_ids,
+                                                           const GenerationConfig &gen_config, int n_past,
+                                                           int n_ctx) const {
+    ForwardContext ctx;
+    ctx.gctx = ggml_init({.mem_size = mem_size_, .mem_buffer = mem_buffer_.get(), .no_alloc = false});
+    CHATGLM_CHECK(ctx.gctx) << "failed to init ggml context";
+    int n_threads = gen_config.num_threads > 0 ? gen_config.num_threads : get_num_physical_cores();
+    ctx.gf = {};
+    ctx.gf.n_threads = input_ids.size() >= 32 && ggml_cpu_has_blas() && !ggml_cpu_has_gpublas() ? 1 : n_threads;
+    ctx.scratch = {.offs = 0, .size = scratch_size_, .data = scratch_buffer_.get()};
+
+    ggml_tensor *input_ids_tensor = ggml_new_tensor_1d(ctx.gctx, GGML_TYPE_I32, input_ids.size());
+    memcpy(input_ids_tensor->data, input_ids.data(), ggml_nbytes(input_ids_tensor));
+
+    ggml_tensor *lm_logits = forward(&ctx, input_ids_tensor, n_past, n_ctx);
+
+    ggml_build_forward_expand(&ctx.gf, lm_logits);
+    ggml_graph_compute(ctx.gctx, &ctx.gf);
+
+#ifdef GGML_PERF
+    ggml_graph_print(&ctx.gf);
+#endif
+
+    int vocab_size = lm_logits->ne[0];
+    float *next_token_logits = (float *)lm_logits->data;
+
+    int next_token_id;
+    if (gen_config.do_sample) {
+        // temperature sampling
+        float inv_temp = 1.f / gen_config.temperature;
+        for (int i = 0; i < vocab_size; i++) {
+            next_token_logits[i] *= inv_temp;
+        }
+
+        std::vector<TokenIdScore> token_scores(vocab_size);
+        for (int i = 0; i < vocab_size; i++) {
+            token_scores[i] = {.id = i, .score = next_token_logits[i]};
+        }
+
+        // top_k sampling
+        if (0 < gen_config.top_k && gen_config.top_k < (int)token_scores.size()) {
+            std::nth_element(token_scores.begin(), token_scores.begin() + gen_config.top_k, token_scores.end(),
+                             std::greater<TokenIdScore>());
+            token_scores.resize(gen_config.top_k);
+        }
+
+        // top_p sampling
+        if (0.f < gen_config.top_p && gen_config.top_p < 1.f) {
+            std::sort(token_scores.begin(), token_scores.end(), std::greater<TokenIdScore>()); // hot code!
+            sampling_softmax_inplace(token_scores.data(), token_scores.data() + token_scores.size());
+
+            float cumsum = 0.f;
+            for (size_t i = 0; i < token_scores.size(); i++) {
+                cumsum += token_scores[i].score;
+                if (cumsum >= gen_config.top_p) {
+                    token_scores.resize(i + 1);
+                    break;
+                }
+            }
+        }
+
+        // sample next token
+        sampling_softmax_inplace(token_scores.data(), token_scores.data() + token_scores.size());
+        for (size_t i = 0; i < token_scores.size(); i++) {
+            next_token_logits[i] = token_scores[i].score;
+        }
+
+        thread_local std::random_device rd;
+        thread_local std::mt19937 gen(rd());
+
+        std::discrete_distribution<> dist(next_token_logits, next_token_logits + token_scores.size());
+        next_token_id = token_scores[dist(gen)].id;
+    } else {
+        // greedy search
+        next_token_id = std::max_element(next_token_logits, next_token_logits + vocab_size) - next_token_logits;
     }
-    return output;
+    ggml_free(ctx.gctx);
+
+    return next_token_id;
 }
 
-ggml_tensor *LayerNorm::forward(ForwardContext *ctx, ggml_tensor *input) const {
-    // input: [seqlen, normalized_shape]
-    ggml_tensor *output = ggml_norm_inplace(ctx->gctx, input);
-    output = ggml_mul_inplace(ctx->gctx, output, weight);
-    ggml_tensor *bcast_bias = ggml_view_2d(ctx->gctx, bias, output->ne[0], output->ne[1], 0, 0);
-    output = ggml_add_inplace(ctx->gctx, output, bcast_bias);
-    return output;
+void BaseModelForConditionalGeneration::sampling_softmax_inplace(TokenIdScore *first, TokenIdScore *last) {
+    float max_score = std::max_element(first, last)->score;
+    float sum = 0.f;
+    for (TokenIdScore *p = first; p != last; p++) {
+        float s = std::exp(p->score - max_score);
+        p->score = s;
+        sum += s;
+    }
+    float inv_sum = 1.f / sum;
+    for (TokenIdScore *p = first; p != last; p++) {
+        p->score *= inv_sum;
+    }
 }
 
-ggml_tensor *RMSNorm::forward(ForwardContext *ctx, ggml_tensor *input) const {
-    ggml_tensor *output = ggml_rms_norm_inplace(ctx->gctx, input);
-    output = ggml_mul_inplace(ctx->gctx, output, weight);
-    return output;
-}
+std::vector<int> BaseModelForConditionalGeneration::generate(const std::vector<int> &input_ids,
+                                                             const GenerationConfig &gen_config,
+                                                             BaseStreamer *streamer) const {
+    // CHATGLM_CHECK(gen_config.max_length <= config.max_sequence_length)
+    //     << "max_length (" << gen_config.max_length << ") is larger than model max_sequence_length ("
+    //     << config.max_sequence_length << ")";
+    std::vector<int> curr_input_ids(input_ids);
 
-// ===== ChatGLM-6B =====
+    std::vector<int> output_ids;
+    output_ids.reserve(gen_config.max_length);
+    output_ids = input_ids;
+    if (streamer) {
+        streamer->put(input_ids);
+    }
+
+    int n_past = 0;
+    const int n_ctx = input_ids.size();
+
+    while ((int)output_ids.size() < gen_config.max_length) {
+        int next_token_id = generate_next_token(curr_input_ids, gen_config, n_past, n_ctx);
+
+        n_past += curr_input_ids.size();
+        curr_input_ids = {next_token_id};
+        output_ids.emplace_back(next_token_id);
+
+        if (streamer) {
+            streamer->put({next_token_id});
+        }
+
+        if (next_token_id == eos_token_id_) {
+            break;
+        }
+    }
+
+    if (streamer) {
+        streamer->end();
+    }
+
+    return output_ids;
+}
 
 ggml_tensor *GLU::forward(ForwardContext *ctx, ggml_tensor *hidden_states) const {
     ggml_tensor *output = dense_h_to_4h.forward(ctx, hidden_states);
@@ -389,155 +529,6 @@ ggml_tensor *ChatGLMForConditionalGeneration::forward(ForwardContext *ctx, ggml_
     ggml_tensor *lm_head_weight = transformer.word_embeddings.weight; // tied weight
     ggml_tensor *lm_logits = ggml_mul_mat(ctx->gctx, lm_head_weight, transformer_outputs);
     return lm_logits;
-}
-
-struct TokenIdScore {
-    int id;
-    float score;
-
-    friend bool operator<(const TokenIdScore &a, const TokenIdScore &b) { return a.score < b.score; }
-    friend bool operator>(const TokenIdScore &a, const TokenIdScore &b) { return a.score > b.score; }
-};
-
-static void sampling_softmax_inplace(TokenIdScore *first, TokenIdScore *last) {
-    float max_score = std::max_element(first, last)->score;
-    float sum = 0.f;
-    for (TokenIdScore *p = first; p != last; p++) {
-        float s = std::exp(p->score - max_score);
-        p->score = s;
-        sum += s;
-    }
-    float inv_sum = 1.f / sum;
-    for (TokenIdScore *p = first; p != last; p++) {
-        p->score *= inv_sum;
-    }
-}
-
-// Adapted from https://github.com/ggerganov/llama.cpp/blob/master/examples/common.cpp
-static inline int get_num_physical_cores() {
-    unsigned int n_threads = std::thread::hardware_concurrency();
-    return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
-}
-
-int ChatGLMForConditionalGeneration::generate_next_token(const std::vector<int> &input_ids,
-                                                         const GenerationConfig &gen_config, int n_past,
-                                                         int n_ctx) const {
-    ForwardContext ctx;
-    ctx.gctx = ggml_init({.mem_size = MEM_SIZE, .mem_buffer = mem_buffer.get(), .no_alloc = false});
-    CHATGLM_CHECK(ctx.gctx) << "failed to init ggml context";
-    int n_threads = gen_config.num_threads > 0 ? gen_config.num_threads : get_num_physical_cores();
-    ctx.gf = {};
-    ctx.gf.n_threads = input_ids.size() >= 32 && ggml_cpu_has_blas() && !ggml_cpu_has_gpublas() ? 1 : n_threads;
-    ctx.scratch = {.offs = 0, .size = SCRATCH_SIZE, .data = scratch_buffer.get()};
-
-    ggml_tensor *input_ids_tensor = ggml_new_tensor_1d(ctx.gctx, GGML_TYPE_I32, input_ids.size());
-    memcpy(input_ids_tensor->data, input_ids.data(), ggml_nbytes(input_ids_tensor));
-
-    ggml_tensor *lm_logits = forward(&ctx, input_ids_tensor, n_past, n_ctx);
-
-    ggml_build_forward_expand(&ctx.gf, lm_logits);
-    ggml_graph_compute(ctx.gctx, &ctx.gf);
-
-#ifdef GGML_PERF
-    ggml_graph_print(&ctx.gf);
-#endif
-
-    float *next_token_logits = (float *)lm_logits->data;
-
-    int next_token_id;
-    if (gen_config.do_sample) {
-        // temperature sampling
-        float inv_temp = 1.f / gen_config.temperature;
-        for (int i = 0; i < config.vocab_size; i++) {
-            next_token_logits[i] *= inv_temp;
-        }
-
-        std::vector<TokenIdScore> token_scores(config.vocab_size);
-        for (int i = 0; i < config.vocab_size; i++) {
-            token_scores[i] = {.id = i, .score = next_token_logits[i]};
-        }
-
-        // top_k sampling
-        if (0 < gen_config.top_k && gen_config.top_k < (int)token_scores.size()) {
-            std::nth_element(token_scores.begin(), token_scores.begin() + gen_config.top_k, token_scores.end(),
-                             std::greater<TokenIdScore>());
-            token_scores.resize(gen_config.top_k);
-        }
-
-        // top_p sampling
-        if (0.f < gen_config.top_p && gen_config.top_p < 1.f) {
-            std::sort(token_scores.begin(), token_scores.end(), std::greater<TokenIdScore>()); // hot code!
-            sampling_softmax_inplace(token_scores.data(), token_scores.data() + token_scores.size());
-
-            float cumsum = 0.f;
-            for (size_t i = 0; i < token_scores.size(); i++) {
-                cumsum += token_scores[i].score;
-                if (cumsum >= gen_config.top_p) {
-                    token_scores.resize(i + 1);
-                    break;
-                }
-            }
-        }
-
-        // sample next token
-        sampling_softmax_inplace(token_scores.data(), token_scores.data() + token_scores.size());
-        for (size_t i = 0; i < token_scores.size(); i++) {
-            next_token_logits[i] = token_scores[i].score;
-        }
-
-        thread_local std::random_device rd;
-        thread_local std::mt19937 gen(rd());
-
-        std::discrete_distribution<> dist(next_token_logits, next_token_logits + token_scores.size());
-        next_token_id = token_scores[dist(gen)].id;
-    } else {
-        // greedy search
-        next_token_id = std::max_element(next_token_logits, next_token_logits + config.vocab_size) - next_token_logits;
-    }
-    ggml_free(ctx.gctx);
-
-    return next_token_id;
-}
-
-std::vector<int> ChatGLMForConditionalGeneration::generate(const std::vector<int> &input_ids,
-                                                           const GenerationConfig &gen_config,
-                                                           BaseStreamer *streamer) const {
-    CHATGLM_CHECK(gen_config.max_length <= config.max_sequence_length)
-        << "max_length (" << gen_config.max_length << ") is larger than model max_sequence_length ("
-        << config.max_sequence_length << ")";
-    std::vector<int> curr_input_ids(input_ids);
-
-    std::vector<int> output_ids;
-    output_ids.reserve(gen_config.max_length);
-    output_ids = input_ids;
-    if (streamer) {
-        streamer->put(input_ids);
-    }
-
-    int n_past = 0;
-    const int n_ctx = input_ids.size();
-
-    while ((int)output_ids.size() < gen_config.max_length) {
-        int next_token_id = generate_next_token(curr_input_ids, gen_config, n_past, n_ctx);
-
-        n_past += curr_input_ids.size();
-        curr_input_ids = {next_token_id};
-        output_ids.emplace_back(next_token_id);
-
-        if (streamer) {
-            streamer->put({next_token_id});
-        }
-
-        if (next_token_id == config.eos_token_id) {
-            break;
-        }
-    }
-
-    if (streamer) {
-        streamer->end();
-    }
-
-    return output_ids;
 }
 
 MappedFile::MappedFile(const std::string &path) {
@@ -703,9 +694,58 @@ std::string ChatGLMPipeline::build_prompt(const std::vector<std::string> &histor
     return oss_prompt.str();
 }
 
-// ===== ChatGLM2-6B modules =====
+// ===== ChatGLM2-6B =====
 
-ggml_tensor *GLM2SelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
+ChatGLM2Tokenizer::ChatGLM2Tokenizer(std::string_view serialized_model_proto)
+    : sp(std::make_unique<sentencepiece::SentencePieceProcessor>()) {
+    const auto status = sp->LoadFromSerializedProto(serialized_model_proto);
+    CHATGLM_CHECK(status.ok()) << status.ToString();
+
+    int special_id = sp->GetPieceSize();
+    mask_token_id = special_id++;
+    gmask_token_id = special_id++;
+    smask_token_id = special_id++;
+    sop_token_id = special_id++;
+    eop_token_id = special_id++;
+}
+
+std::vector<int> ChatGLM2Tokenizer::encode(const std::string &text) const {
+    std::vector<int> ids;
+    sp->Encode(text, &ids);
+    ids.insert(ids.begin(), {gmask_token_id, sop_token_id}); // special prefix
+    return ids;
+}
+
+std::string ChatGLM2Tokenizer::decode(const std::vector<int> &ids) const {
+    // filter out special tokens
+    std::vector<int> normal_ids(ids);
+    normal_ids.erase(std::remove_if(normal_ids.begin(), normal_ids.end(), [this](int id) { return is_special_id(id); }),
+                     normal_ids.end());
+
+    std::string text;
+    sp->Decode(normal_ids, &text);
+    return text;
+}
+
+bool ChatGLM2Tokenizer::is_special_id(int id) const {
+    return id == mask_token_id || id == gmask_token_id || id == smask_token_id || id == sop_token_id ||
+           id == eop_token_id;
+}
+
+std::string ChatGLM2Pipeline::build_prompt(const std::vector<std::string> &history) {
+    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
+
+    std::ostringstream oss_prompt;
+    for (size_t i = 0; i < history.size(); i += 2) {
+        oss_prompt << "[Round " << i / 2 + 1 << "]\n\n问：" << history[i] << "\n\n答：";
+        if (i < history.size() - 1) {
+            oss_prompt << history[i + 1] << "\n\n";
+        }
+    }
+    return oss_prompt.str();
+}
+
+ggml_tensor *GLM2SelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const {
     const int hidden_size = hidden_states->ne[0];
     const int qlen = hidden_states->ne[1];
     const int head_size = hidden_size / num_attention_heads;
@@ -717,7 +757,7 @@ ggml_tensor *GLM2SelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden
     ggml_tensor *query_layer =
         ggml_view_3d(ctx->gctx, qkv, head_size, num_attention_heads, qlen, head_size * ggml_element_size(qkv),
                      qkv->nb[1], 0); // [qlen, n_head, head_size]
-    query_layer = ggml_rope_inplace(ctx->gctx, query_layer, n_past, rope_dim, 0, n_ctx);
+    query_layer = ggml_rope_inplace(ctx->gctx, query_layer, n_past, rope_dim, 0, 0);
     query_layer = ggml_view_4d(ctx->gctx, query_layer, head_size, mqa_scale, multi_query_group_num, qlen,
                                query_layer->nb[1], query_layer->nb[1] * mqa_scale, query_layer->nb[2],
                                0);                                  // [qlen, mqa_n_head, mqa_scale, head_size]
@@ -732,7 +772,7 @@ ggml_tensor *GLM2SelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden
     ggml_tensor *key_layer =
         ggml_view_3d(ctx->gctx, qkv, head_size, multi_query_group_num, qlen, head_size * ggml_element_size(qkv),
                      qkv->nb[1], hidden_size * ggml_element_size(qkv)); // [qlen, mqa_n_head, head_size]
-    key_layer = ggml_rope_inplace(ctx->gctx, key_layer, n_past, rope_dim, 0, n_ctx);
+    key_layer = ggml_rope_inplace(ctx->gctx, key_layer, n_past, rope_dim, 0, 0);
     key_layer = ggml_permute(ctx->gctx, key_layer, 0, 2, 1, 3); // [mqa_n_head, qlen, head_size]
 
     ggml_tensor *value_layer = ggml_view_3d(
@@ -795,12 +835,12 @@ ggml_tensor *GLM2MLP::forward(ForwardContext *ctx, ggml_tensor *hidden_states) c
     return output;
 }
 
-ggml_tensor *GLM2Block::forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
+ggml_tensor *GLM2Block::forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const {
     ggml_tensor *residual = ggml_dup(ctx->gctx, hidden_states);
     ggml_build_forward_expand(&ctx->gf, residual);
 
     hidden_states = input_layernorm.forward(ctx, hidden_states);
-    hidden_states = attention.forward(ctx, hidden_states, n_past, n_ctx);
+    hidden_states = attention.forward(ctx, hidden_states, n_past);
     hidden_states = ggml_add_inplace(ctx->gctx, hidden_states, residual);
 
     residual = ggml_dup(ctx->gctx, hidden_states);
@@ -811,6 +851,141 @@ ggml_tensor *GLM2Block::forward(ForwardContext *ctx, ggml_tensor *hidden_states,
     hidden_states = ggml_add_inplace(ctx->gctx, hidden_states, residual);
 
     return hidden_states;
+}
+
+ChatGLM2Model::ChatGLM2Model(InitContext *ctx, const ChatGLM2Config &config)
+    : word_embeddings(ctx, config.vocab_size, config.hidden_size), final_layernorm(ctx, config.hidden_size) {
+    // TODO: reduce max length? 32k might be too large for cpu inference
+    layers.reserve(config.num_layers);
+    for (int layer_id = 0; layer_id < config.num_layers; layer_id++) {
+        layers.emplace_back(ctx, config.hidden_size, config.num_attention_heads, config.multi_query_group_num,
+                            config.ffn_hidden_size, config.seq_length);
+    }
+}
+
+ggml_tensor *ChatGLM2Model::forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past) const {
+    ggml_tensor *hidden_states = word_embeddings.forward(ctx, input_ids);
+    for (const auto &layer : layers) {
+        ggml_set_scratch(ctx->gctx, ctx->scratch);
+        hidden_states = layer.forward(ctx, hidden_states, n_past);
+    }
+    ggml_set_scratch(ctx->gctx, {.offs = 0, .size = 0, .data = nullptr});
+    hidden_states = final_layernorm.forward(ctx, hidden_states);
+    return hidden_states;
+}
+
+ggml_tensor *ChatGLM2ForConditionalGeneration::forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past,
+                                                       int n_ctx) const {
+    ggml_tensor *transformer_outputs = transformer.forward(ctx, input_ids, n_past);
+    // NOTE: only compute next_token_logits for the last token
+    if (input_ids->ne[0] > 1) {
+        transformer_outputs =
+            ggml_view_1d(ctx->gctx, transformer_outputs, config.hidden_size,
+                         (input_ids->ne[0] - 1) * config.hidden_size * ggml_element_size(transformer_outputs));
+    }
+    ggml_tensor *lm_logits = lm_head.forward(ctx, transformer_outputs);
+    return lm_logits;
+}
+
+ChatGLM2Pipeline::ChatGLM2Pipeline(const std::string &path) : mapped_file(std::make_unique<MappedFile>(path)) {
+    std::ifstream fin(path, std::ios::binary);
+    CHATGLM_CHECK(fin) << "failed to open model file " << path;
+
+    // load magic
+    std::string magic(4, '\0');
+    fin.read(&magic[0], magic.size());
+    CHATGLM_CHECK(magic == "ggml") << "model file is broken (bad magic)";
+
+    // load model arch
+    ModelArch arch = (ModelArch)read_as<int>(fin);
+    CHATGLM_CHECK(arch == ModelArch::CHATGLM2) << "invalid model arch " << arch;
+
+    // load config
+    ChatGLM2Config config = read_as<ChatGLM2Config>(fin);
+
+    // load tokenizer
+    int proto_size = read_as<int>(fin);
+    std::string_view serialized_model_proto((char *)mapped_file->data + fin.tellg(), proto_size);
+    fin.seekg(proto_size, fin.cur);
+    tokenizer = std::make_unique<ChatGLM2Tokenizer>(serialized_model_proto);
+
+    // load model
+    constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
+    const size_t num_tensors = 3 + config.num_layers * 9;
+    const size_t ctx_size = num_tensors * tensor_ovhd;
+    ctx.gctx = ggml_init({.mem_size = ctx_size, .mem_buffer = nullptr, .no_alloc = true});
+    CHATGLM_CHECK(ctx.gctx) << "failed to init weight context";
+    ctx.dtype = config.dtype;
+
+    const size_t kvcache_size = config.num_layers * 2ull * config.seq_length * config.hidden_size /
+                                config.num_attention_heads * config.multi_query_group_num *
+                                ggml_type_size(GGML_TYPE_F32);
+    kvcache_buffer.reset(new char[kvcache_size]);
+    char *kvcache_ptr = kvcache_buffer.get();
+
+    auto load_tensor = [this, &fin](const std::string &name, ggml_tensor *tensor) {
+        int ndim = read_as<int>(fin);
+        CHATGLM_CHECK(ndim == tensor->n_dims)
+            << "tensor " << name << " ndim mismatch: expect " << tensor->n_dims << " but got " << ndim;
+        int name_size = read_as<int>(fin);
+        ggml_type dtype = (ggml_type)read_as<int>(fin);
+        CHATGLM_CHECK(dtype == tensor->type)
+            << "tensor " << name << " dtype mismatch: expect " << tensor->type << " but got " << dtype;
+        for (int i = 0; i < ndim; i++) {
+            int dim = read_as<int>(fin);
+            CHATGLM_CHECK(dim == tensor->ne[ndim - 1 - i]) << "tensor " << name << " dim " << i << " mismatch: expect "
+                                                           << tensor->ne[ndim - 1 - i] << " but got " << dim;
+        }
+        std::string tensor_name(name_size, 0);
+        fin.read(&tensor_name[0], name_size);
+        CHATGLM_CHECK(tensor_name == name)
+            << "tensor " << name << " name mismatch: expect " << name << ", got " << tensor_name;
+
+        constexpr int64_t MEM_ALIGNED = 16;
+        const int64_t data_offset = (fin.tellg() + (MEM_ALIGNED - 1)) & ~(MEM_ALIGNED - 1);
+        tensor->data = (char *)mapped_file->data + data_offset;
+        fin.seekg(data_offset + ggml_nbytes(tensor));
+    };
+
+    model = std::make_unique<ChatGLM2ForConditionalGeneration>(&ctx, config);
+    load_tensor("transformer.embedding.word_embeddings.weight", model->transformer.word_embeddings.weight);
+    for (int i = 0; i < config.num_layers; i++) {
+        std::string layer_prefix = "transformer.encoder.layers." + std::to_string(i) + '.';
+        load_tensor(layer_prefix + "input_layernorm.weight", model->transformer.layers[i].input_layernorm.weight);
+        load_tensor(layer_prefix + "self_attention.query_key_value.weight",
+                    model->transformer.layers[i].attention.query_key_value.weight);
+        load_tensor(layer_prefix + "self_attention.query_key_value.bias",
+                    model->transformer.layers[i].attention.query_key_value.bias);
+        load_tensor(layer_prefix + "self_attention.dense.weight", model->transformer.layers[i].attention.dense.weight);
+        model->transformer.layers[i].attention.k_cache->data = kvcache_ptr;
+        kvcache_ptr += ggml_nbytes(model->transformer.layers[i].attention.k_cache);
+        model->transformer.layers[i].attention.v_cache->data = kvcache_ptr;
+        kvcache_ptr += ggml_nbytes(model->transformer.layers[i].attention.v_cache);
+        load_tensor(layer_prefix + "post_attention_layernorm.weight",
+                    model->transformer.layers[i].post_attention_layernorm.weight);
+        load_tensor(layer_prefix + "mlp.dense_h_to_4h.weight", model->transformer.layers[i].mlp.dense_h_to_4h.weight);
+        load_tensor(layer_prefix + "mlp.dense_4h_to_h.weight", model->transformer.layers[i].mlp.dense_4h_to_h.weight);
+    }
+    load_tensor("transformer.encoder.final_layernorm.weight", model->transformer.final_layernorm.weight);
+    load_tensor("transformer.output_layer.weight", model->lm_head.weight);
+    CHATGLM_CHECK(kvcache_ptr == kvcache_buffer.get() + kvcache_size) << "corrupted kv cache";
+    CHATGLM_CHECK(ggml_used_mem(ctx.gctx) == ggml_get_mem_size(ctx.gctx)) << "corrupted model weights";
+
+#ifdef GGML_USE_CUBLAS
+    for (int i = 0; i < config.num_layers; i++) {
+        ggml_cuda_transform_tensor(model->transformer.layers[i].attention.query_key_value.weight);
+        ggml_cuda_transform_tensor(model->transformer.layers[i].attention.dense.weight);
+        ggml_cuda_transform_tensor(model->transformer.layers[i].mlp.dense_h_to_4h.weight);
+        ggml_cuda_transform_tensor(model->transformer.layers[i].mlp.dense_4h_to_h.weight);
+    }
+#endif
+}
+
+ChatGLM2Pipeline::~ChatGLM2Pipeline() {
+    if (ctx.gctx) {
+        ggml_free(ctx.gctx);
+        ctx.gctx = nullptr;
+    }
 }
 
 } // namespace chatglm

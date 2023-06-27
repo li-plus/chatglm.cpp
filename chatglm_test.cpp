@@ -807,7 +807,7 @@ TEST_F(ChatGLMTest, GLM2Block) {
     ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_F32, hidden_size, seq_len);
     memcpy(x->data, x_data, sizeof(x_data));
 
-    ggml_tensor *y = model.forward(&ctx, x, 0, 3);
+    ggml_tensor *y = model.forward(&ctx, x, 0);
     ggml_build_forward_expand(&ctx.gf, y);
     ggml_graph_compute(ctx.gctx, &ctx.gf);
 
@@ -891,7 +891,7 @@ static bool equal(const std::vector<int> &a, const std::vector<int> &b) {
     return true;
 }
 
-TEST(ChatGLM, chat) {
+TEST(ChatGLMPipeline, chat) {
     fs::path model_path = fs::path(__FILE__).parent_path() / "chatglm-ggml.bin";
     if (!fs::exists(model_path)) {
         GTEST_SKIP() << "Skipping ChatGLM e2e test (ggml model not found)";
@@ -900,39 +900,28 @@ TEST(ChatGLM, chat) {
 
     // ===== tokenization =====
 
-    // encoding
-    {
-        std::string prompt("你好");
-        std::vector<int> input_ids = pipeline.tokenizer->encode(prompt);
-        std::vector<int> target_ids{5, 74874, 130001, 130004};
-        EXPECT_TRUE(equal(input_ids, target_ids));
-    }
-    {
-        std::string prompt("[Round 0]\n问：你好\n答：你好👋！我是人工智能助手 "
-                           "ChatGLM-6B，很高兴见到你，欢迎问我任何问题。\n[Round 1]\n问：晚上睡不着应该怎么办\n答：");
-        std::vector<int> input_ids = pipeline.tokenizer->encode(prompt);
-        std::vector<int> target_ids{53,    6945,   5,      8,      42,     4,      64286, 12,    74874,  4,     67342,
-                                    12,    74874,  130328, 130247, 130233, 130227, 35,    65806, 68241,  75890, 14132,
-                                    5388,  340,    11,     21,     222,    6,      76693, 66877, 63852,  6,     66430,
-                                    68747, 102501, 63823,  4,      52,     6945,   5,     9,     42,     4,     64286,
-                                    12,    65450,  83400,  64213,  66846,  4,      67342, 12,    130001, 130004};
-        EXPECT_TRUE(equal(input_ids, target_ids));
-    }
-    {
-        // white space
-        std::string prompt("def main():\n    print('hello world')\t# greeting");
-        std::vector<int> input_ids = pipeline.tokenizer->encode(prompt);
-        std::vector<int> target_ids{1616, 594,    125936, 4,  130011, 2274,   89,    7283,
-                                    398,  125686, 130008, 61, 25672,  130001, 130004};
-        EXPECT_TRUE(equal(input_ids, target_ids));
-    }
-    // decoding
-    {
-        std::vector<int> output_ids{1616, 594,    125936, 4,  130011, 2274,   89,    7283,
-                                    398,  125686, 130008, 61, 25672,  130001, 130004};
-        std::string output = pipeline.tokenizer->decode(output_ids);
-        std::string target("def main():\n    print('hello world')\t# greeting");
-        EXPECT_EQ(target, output);
+    struct TokenizerTestCase {
+        std::string prompt;
+        std::vector<int> input_ids;
+    };
+    std::vector<TokenizerTestCase> cases{
+        {"你好", {5, 74874, 130001, 130004}},
+        {"[Round 0]\n问：你好\n答：你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。\n[Round "
+         "1]\n问：晚上睡不着应该怎么办\n答：",
+         {53,     6945,   5,      8,     42,    4,     64286,  12,    74874, 4,   67342,  12,    74874, 130328,
+          130247, 130233, 130227, 35,    65806, 68241, 75890,  14132, 5388,  340, 11,     21,    222,   6,
+          76693,  66877,  63852,  6,     66430, 68747, 102501, 63823, 4,     52,  6945,   5,     9,     42,
+          4,      64286,  12,     65450, 83400, 64213, 66846,  4,     67342, 12,  130001, 130004}},
+        {"def main():\n    print('hello world')\t# greeting",
+         {1616, 594, 125936, 4, 130011, 2274, 89, 7283, 398, 125686, 130008, 61, 25672, 130001, 130004}}};
+
+    for (const auto &c : cases) {
+        // encode
+        std::vector<int> input_ids = pipeline.tokenizer->encode(c.prompt);
+        EXPECT_TRUE(equal(input_ids, c.input_ids));
+        // decode
+        std::string output = pipeline.tokenizer->decode(c.input_ids);
+        EXPECT_EQ(output, c.prompt);
     }
 
     // ===== generation =====
@@ -960,6 +949,78 @@ TEST(ChatGLM, chat) {
         std::vector<std::string> history{oss.str()};
         pipeline.chat(history, gen_config);
     }
+
+    // chat
+    {
+        GenerationConfig gen_config;
+        gen_config.do_sample = false;
+        std::vector<std::string> history{"你好"};
+        std::string output = pipeline.chat(history, gen_config);
+        EXPECT_EQ(output, "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。");
+    }
+}
+
+TEST(ChatGLM2Pipeline, chat) {
+    fs::path model_path = fs::path(__FILE__).parent_path() / "chatglm2-ggml.bin";
+    if (!fs::exists(model_path)) {
+        GTEST_SKIP() << "Skipping ChatGLM2 e2e test (ggml model not found)";
+    }
+    ChatGLM2Pipeline pipeline(model_path);
+
+    // ===== tokenization =====
+
+    struct TokenizerTestCase {
+        std::string prompt;
+        std::vector<int> input_ids;
+    };
+    std::vector<TokenizerTestCase> cases{
+        {"你好", {64790, 64792, 36474, 54591}},
+        {"[Round 1]\n\n问：你好\n\n答：",
+         {64790, 64792, 790, 30951, 517, 30910, 30939, 30996, 13, 13, 54761, 31211, 39701, 13, 13, 55437, 31211}},
+        {"[Round 1]\n\n问：你好\n\n答：你好👋！我是人工智能助手 "
+         "ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。\n\n[Round 2]\n\n问：晚上睡不着应该怎么办\n\n答：",
+         {64790, 64792, 790,   30951, 517,   30910, 30939, 30996, 13,    13,    54761, 31211, 39701,
+          13,    13,    55437, 31211, 39701, 243,   162,   148,   142,   31404, 33030, 34797, 42481,
+          22011, 10461, 30944, 30943, 30941, 30978, 30949, 31123, 48895, 35214, 54622, 31123, 32616,
+          39905, 31901, 31639, 31155, 13,    13,    30995, 30951, 517,   30910, 30943, 30996, 13,
+          13,    54761, 31211, 32820, 54266, 31876, 35153, 13,    13,    55437, 31211}},
+        {"def main():\n    print('hello world')\t# greeting",
+         {64790, 64792, 884, 1301, 9427, 13, 296, 4466, 2029, 15616, 30914, 993, 3387, 12, 31010, 30174}}};
+
+    for (const auto &c : cases) {
+        // encode
+        std::vector<int> input_ids = pipeline.tokenizer->encode(c.prompt);
+        EXPECT_TRUE(equal(input_ids, c.input_ids));
+        // decode
+        std::string output = pipeline.tokenizer->decode(c.input_ids);
+        EXPECT_EQ(output, c.prompt);
+    }
+
+    // ===== generation =====
+
+    // build prompt
+    {
+        EXPECT_EQ(ChatGLM2Pipeline::build_prompt({"你好"}), "[Round 1]\n\n问：你好\n\n答：");
+        EXPECT_EQ(ChatGLM2Pipeline::build_prompt(
+                      {"你好", "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。",
+                       "晚上睡不着应该怎么办"}),
+                  "[Round 1]\n\n问：你好\n\n答：你好👋！我是人工智能助手 "
+                  "ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。\n\n[Round 2]\n\n问：晚上睡不着应该怎么办\n\n答：");
+    }
+
+    // // memory test
+    // {
+    //     GenerationConfig gen_config;
+    //     gen_config.max_length = gen_config.max_context_length + 1;
+    //     gen_config.do_sample = false;
+
+    //     std::ostringstream oss;
+    //     for (int i = 0; i < gen_config.max_context_length; i++) {
+    //         oss << "你好";
+    //     }
+    //     std::vector<std::string> history{oss.str()};
+    //     pipeline.chat(history, gen_config);
+    // }
 
     // chat
     {
