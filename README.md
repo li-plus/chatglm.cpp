@@ -113,7 +113,7 @@ Measured on a Linux server with Intel(R) Xeon(R) Platinum 8260 CPU @ 2.40GHz usi
 
 |           | Q4_0  | Q8_0  | F16  | F32  |
 |-----------|-------|-------|------|------|
-| ms/token  | 92    | 130   | 217  | 399  |
+| ms/token  | 74    | 114   | 189  | 357  |
 | file size | 3.3GB | 6.2GB | 12GB | 23GB |
 | mem usage | 4.0GB | 6.9GB | 13GB | 24GB |
 

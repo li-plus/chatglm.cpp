@@ -23,66 +23,7 @@ struct LogMessageFatal {
 
 std::string to_string(ggml_tensor *tensor, bool with_data = true);
 
-// ===== config =====
-
-struct ChatGLMConfig {
-    int vocab_size;
-    int hidden_size;
-    int num_attention_heads;
-    int num_layers;
-    int max_sequence_length;
-    int bos_token_id;
-    int eos_token_id;
-    int gmask_token_id;
-    int mask_token_id;
-    int pad_token_id;
-    ggml_type dtype;
-};
-
-// ===== tokenizer =====
-
-struct ChatGLMTokenizer {
-    std::unique_ptr<sentencepiece::SentencePieceProcessor> sp;
-    int bos_token_id;
-    int eos_token_id;
-    int mask_token_id;
-    int gmask_token_id;
-    int pad_token_id;
-
-    ChatGLMTokenizer(std::string_view serialized_model_proto, int bos_token_id, int eos_token_id, int mask_token_id,
-                     int gmask_token_id, int pad_token_id);
-
-    std::vector<int> encode(const std::string &text) const;
-
-    std::string decode(const std::vector<int> &ids) const;
-
-  private:
-    static std::string preprocess(const std::string &text);
-
-    static std::string postprocess(const std::string &text);
-};
-
-// ===== streamer =====
-
-struct BaseStreamer {
-    virtual void put(const std::vector<int> &output_ids) = 0;
-    virtual void end() = 0;
-};
-
-// reference: https://github.com/huggingface/transformers/blob/main/src/transformers/generation/streamers.py
-struct TextStreamer : public BaseStreamer {
-    TextStreamer(ChatGLMTokenizer *tokenizer) : tokenizer_(tokenizer), is_prompt_(true), print_len_(0) {}
-    void put(const std::vector<int> &output_ids) override;
-    void end() override;
-
-  private:
-    ChatGLMTokenizer *tokenizer_;
-    bool is_prompt_;
-    std::vector<int> token_cache_;
-    int print_len_;
-};
-
-// ===== model =====
+// ===== modules =====
 
 struct InitContext {
     ggml_context *gctx;
@@ -142,7 +83,117 @@ struct RMSNorm {
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input) const;
 };
 
+struct BaseTokenizer {
+    virtual std::vector<int> encode(const std::string &text) const = 0;
+    virtual std::string decode(const std::vector<int> &ids) const = 0;
+};
+
+// ===== streamer =====
+
+struct BaseStreamer {
+    virtual void put(const std::vector<int> &output_ids) = 0;
+    virtual void end() = 0;
+};
+
+// reference: https://github.com/huggingface/transformers/blob/main/src/transformers/generation/streamers.py
+struct TextStreamer : public BaseStreamer {
+    TextStreamer(BaseTokenizer *tokenizer) : tokenizer_(tokenizer), is_prompt_(true), print_len_(0) {}
+    void put(const std::vector<int> &output_ids) override;
+    void end() override;
+
+  private:
+    BaseTokenizer *tokenizer_;
+    bool is_prompt_;
+    std::vector<int> token_cache_;
+    int print_len_;
+};
+
+// ===== generation =====
+
+struct GenerationConfig {
+    int max_length;
+    int max_context_length;
+    bool do_sample;
+    int top_k;
+    float top_p;
+    float temperature;
+    int num_threads;
+
+    GenerationConfig(int max_length = 2048, int max_context_length = 512, bool do_sample = true, int top_k = 0,
+                     float top_p = 0.7, float temperature = 0.95, int num_threads = 0)
+        : max_length(max_length), max_context_length(max_context_length), do_sample(do_sample), top_k(top_k),
+          top_p(top_p), temperature(temperature), num_threads(num_threads) {}
+};
+
+struct BaseModelForConditionalGeneration {
+    BaseModelForConditionalGeneration() : eos_token_id_(0), mem_size_(0), scratch_size_(0) {}
+    BaseModelForConditionalGeneration(int eos_token_id, size_t mem_size, size_t scratch_size)
+        : eos_token_id_(eos_token_id), mem_size_(mem_size), mem_buffer_(new char[mem_size]),
+          scratch_size_(scratch_size), scratch_buffer_(new char[scratch_size]) {}
+
+    virtual ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const = 0;
+
+    std::vector<int> generate(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
+                              BaseStreamer *streamer = nullptr) const;
+
+    int generate_next_token(const std::vector<int> &input_ids, const GenerationConfig &gen_config, int n_past,
+                            int n_ctx) const;
+
+    struct TokenIdScore {
+        int id;
+        float score;
+
+        bool operator<(const TokenIdScore &other) const { return score < other.score; }
+        bool operator>(const TokenIdScore &other) const { return score > other.score; }
+    };
+
+  private:
+    static void sampling_softmax_inplace(TokenIdScore *first, TokenIdScore *last);
+
+  private:
+    int eos_token_id_;
+    size_t mem_size_;
+    std::unique_ptr<char[]> mem_buffer_; // BLAS buffer
+    size_t scratch_size_;
+    std::unique_ptr<char[]> scratch_buffer_; // intermediate tensor buffer
+};
+
 // ===== ChatGLM-6B =====
+
+struct ChatGLMConfig {
+    int vocab_size;
+    int hidden_size;
+    int num_attention_heads;
+    int num_layers;
+    int max_sequence_length;
+    int bos_token_id;
+    int eos_token_id;
+    int gmask_token_id;
+    int mask_token_id;
+    int pad_token_id;
+    ggml_type dtype;
+};
+
+struct ChatGLMTokenizer : public BaseTokenizer {
+    std::unique_ptr<sentencepiece::SentencePieceProcessor> sp;
+    int bos_token_id;
+    int eos_token_id;
+    int mask_token_id;
+    int gmask_token_id;
+    int pad_token_id;
+
+    ChatGLMTokenizer(std::string_view serialized_model_proto, int bos_token_id, int eos_token_id, int mask_token_id,
+                     int gmask_token_id, int pad_token_id);
+
+    std::vector<int> encode(const std::string &text) const override;
+
+    std::string decode(const std::vector<int> &ids) const override;
+
+  private:
+    static std::string preprocess(const std::string &text);
+
+    static std::string postprocess(const std::string &text);
+};
 
 struct GLU {
     Linear dense_h_to_4h;
@@ -201,42 +252,19 @@ struct ChatGLMModel {
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const;
 };
 
-struct GenerationConfig {
-    int max_length;
-    int max_context_length;
-    bool do_sample;
-    int top_k;
-    float top_p;
-    float temperature;
-    int num_threads;
-
-    GenerationConfig(int max_length = 2048, int max_context_length = 512, bool do_sample = true, int top_k = 0,
-                     float top_p = 0.7, float temperature = 0.95, int num_threads = 0)
-        : max_length(max_length), max_context_length(max_context_length), do_sample(do_sample), top_k(top_k),
-          top_p(top_p), temperature(temperature), num_threads(num_threads) {}
-};
-
-struct ChatGLMForConditionalGeneration {
+struct ChatGLMForConditionalGeneration : public BaseModelForConditionalGeneration {
     ChatGLMConfig config;
     ChatGLMModel transformer;
 
     static constexpr size_t MEM_SIZE = 272ull * 1024 * 1024;
-    std::unique_ptr<char[]> mem_buffer; // BLAS buffer
     static constexpr size_t SCRATCH_SIZE = 128ull * 1024 * 1024;
-    std::unique_ptr<char[]> scratch_buffer; // intermediate tensor buffer
 
     ChatGLMForConditionalGeneration() = default;
     ChatGLMForConditionalGeneration(InitContext *ctx, const ChatGLMConfig &config)
-        : config(config), transformer(ctx, config), mem_buffer(new char[MEM_SIZE]),
-          scratch_buffer(new char[SCRATCH_SIZE]) {}
+        : BaseModelForConditionalGeneration(config.eos_token_id, MEM_SIZE, SCRATCH_SIZE), config(config),
+          transformer(ctx, config) {}
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const;
-
-    std::vector<int> generate(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
-                              BaseStreamer *streamer = nullptr) const;
-
-    int generate_next_token(const std::vector<int> &input_ids, const GenerationConfig &gen_config, int n_past,
-                            int n_ctx) const;
+    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
 };
 
 struct MappedFile {
@@ -265,6 +293,35 @@ struct ChatGLMPipeline {
 
 // ===== ChatGLM2-6B =====
 
+struct ChatGLM2Config {
+    int vocab_size;
+    int hidden_size;
+    int num_attention_heads;
+    int multi_query_group_num;
+    int ffn_hidden_size;
+    int num_layers;
+    int seq_length;
+    int eos_token_id;
+    ggml_type dtype;
+};
+
+struct ChatGLM2Tokenizer : public BaseTokenizer {
+    std::unique_ptr<sentencepiece::SentencePieceProcessor> sp;
+    int mask_token_id;
+    int gmask_token_id;
+    int smask_token_id;
+    int sop_token_id;
+    int eop_token_id;
+
+    ChatGLM2Tokenizer(std::string_view serialized_model_proto);
+
+    std::vector<int> encode(const std::string &text) const override;
+
+    std::string decode(const std::vector<int> &ids) const override;
+
+    bool is_special_id(int id) const;
+};
+
 struct GLM2SelfAttention {
     int num_attention_heads;
     int multi_query_group_num;
@@ -285,7 +342,7 @@ struct GLM2SelfAttention {
           v_cache(ggml_new_tensor_3d(ctx->gctx, GGML_TYPE_F32, max_length, hidden_size / num_attention_heads,
                                      multi_query_group_num)) {}
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
+    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const;
 };
 
 struct GLM2MLP {
@@ -304,20 +361,58 @@ struct GLM2Block {
     GLM2SelfAttention attention;
     RMSNorm post_attention_layernorm;
     GLM2MLP mlp;
-    // int num_layers;
 
     GLM2Block() = default;
-    // GLMBlock(InitContext *ctx, int hidden_size, int num_attention_heads, int num_layers, int max_length)
-    //     : input_layernorm(ctx, hidden_size), attention(ctx, hidden_size, num_attention_heads, max_length),
-    //       post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size), num_layers(num_layers) {}
     GLM2Block(InitContext *ctx, int hidden_size, int num_attention_heads, int multi_query_group_num,
               int ffn_hidden_size, int max_length)
         : input_layernorm(ctx, hidden_size),
           attention(ctx, hidden_size, num_attention_heads, multi_query_group_num, max_length),
           post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size, ffn_hidden_size) {}
 
-    // TODO: simplify args
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
+    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const;
+};
+
+struct ChatGLM2Model {
+    Embedding word_embeddings;
+    std::vector<GLM2Block> layers;
+    RMSNorm final_layernorm;
+
+    ChatGLM2Model() = default;
+    ChatGLM2Model(InitContext *ctx, const ChatGLM2Config &config);
+
+    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past) const;
+};
+
+struct ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGeneration {
+    ChatGLM2Config config;
+    ChatGLM2Model transformer;
+    Linear lm_head;
+
+    static constexpr size_t MEM_SIZE = 272ull * 1024 * 1024;
+    static constexpr size_t SCRATCH_SIZE = 128ull * 1024 * 1024;
+
+    ChatGLM2ForConditionalGeneration() = default;
+    ChatGLM2ForConditionalGeneration(InitContext *ctx, const ChatGLM2Config &config)
+        : BaseModelForConditionalGeneration(config.eos_token_id, MEM_SIZE, SCRATCH_SIZE), config(config),
+          transformer(ctx, config), lm_head(ctx, config.hidden_size, config.vocab_size, false) {}
+
+    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
+};
+
+struct ChatGLM2Pipeline {
+    std::unique_ptr<ChatGLM2Tokenizer> tokenizer;
+    std::unique_ptr<ChatGLM2ForConditionalGeneration> model;
+    InitContext ctx;
+    std::unique_ptr<char[]> kvcache_buffer;
+    std::unique_ptr<MappedFile> mapped_file;
+
+    ChatGLM2Pipeline(const std::string &path);
+    ~ChatGLM2Pipeline();
+
+    std::string chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
+                     BaseStreamer *streamer = nullptr) const;
+
+    static std::string build_prompt(const std::vector<std::string> &history);
 };
 
 } // namespace chatglm
