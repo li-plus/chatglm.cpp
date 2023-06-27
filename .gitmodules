@@ -5,3 +5,6 @@
 	path = third_party/pybind11
 	url = https://github.com/pybind/pybind11.git
 	branch = stable
+[submodule "third_party/ggml"]
+	path = third_party/ggml
+	url = https://github.com/ggerganov/ggml.git
