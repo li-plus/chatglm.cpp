@@ -22,13 +22,6 @@
 
 namespace chatglm {
 
-template <typename T>
-static inline T read_as(std::istream &is) {
-    T data;
-    is.read((char *)&data, sizeof(data));
-    return data;
-}
-
 static std::string shape_to_string(ggml_tensor *tensor) {
     std::ostringstream oss;
     oss << '[';
@@ -130,6 +123,78 @@ void TextStreamer::end() {
     print_len_ = 0;
 }
 
+MappedFile::MappedFile(const std::string &path) {
+    int fd = open(path.c_str(), O_RDONLY);
+    CHATGLM_CHECK(fd > 0) << "cannot open file " << path << ": " << strerror(errno);
+
+    struct stat sb;
+    CHATGLM_CHECK(fstat(fd, &sb) == 0) << strerror(errno);
+    size = sb.st_size;
+
+    data = (char *)mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
+    CHATGLM_CHECK(data != MAP_FAILED) << strerror(errno);
+
+    CHATGLM_CHECK(close(fd) == 0) << strerror(errno);
+}
+
+MappedFile::~MappedFile() { CHATGLM_CHECK(munmap(data, size) == 0) << strerror(errno); }
+
+void ModelLoader::seek(int64_t offset, int whence) {
+    if (whence == SEEK_SET) {
+        ptr = data + offset;
+    } else if (whence == SEEK_CUR) {
+        ptr += offset;
+    } else if (whence == SEEK_END) {
+        ptr = data + size + offset;
+    } else {
+        CHATGLM_THROW << "invalid seek mode " << whence;
+    }
+}
+
+std::string ModelLoader::read_string(size_t length) {
+    std::string s(ptr, ptr + length);
+    ptr += length;
+    return s;
+}
+
+void ModelLoader::read_tensor(const std::string &name, ggml_tensor *tensor) {
+    // read and check tensor name
+    {
+        int name_size = read_basic<int>();
+        CHATGLM_CHECK(name_size == (int)name.size())
+            << "tensor " << name << " name size mismatch: expect " << name.size() << " but got " << name_size;
+        std::string weight_name = read_string(name_size);
+        CHATGLM_CHECK(weight_name == name) << "tensor name mismatch: expect " << name << " but got " << weight_name;
+    }
+
+    // read and check tensor shape
+    {
+        int ndim = read_basic<int>();
+        CHATGLM_CHECK(ndim == tensor->n_dims)
+            << "tensor " << name << " ndim mismatch: expect " << tensor->n_dims << " but got " << ndim;
+        for (int i = ndim - 1; i >= 0; i--) {
+            int dim_size = read_basic<int>();
+            CHATGLM_CHECK(dim_size == tensor->ne[i]) << "tensor " << name << " shape mismatch at dim " << i
+                                                     << ": expect " << tensor->ne[i] << " but got " << dim_size;
+        }
+    }
+
+    // read and check tensor dtype
+    {
+        ggml_type dtype = (ggml_type)read_basic<int>();
+        CHATGLM_CHECK(dtype == tensor->type)
+            << "tensor " << name << " dtype mismatch: expect " << tensor->type << " but got " << dtype;
+    }
+
+    // map tensor data
+    {
+        constexpr int64_t MEM_ALIGNED = 16;
+        const int64_t data_offset = (tell() + (MEM_ALIGNED - 1)) & ~(MEM_ALIGNED - 1);
+        tensor->data = const_cast<char *const>(data) + data_offset;
+        seek(data_offset + ggml_nbytes(tensor), SEEK_SET);
+    }
+}
+
 // ===== modules =====
 
 ggml_tensor *Embedding::forward(ForwardContext *ctx, ggml_tensor *input) const {
@@ -166,17 +231,16 @@ ggml_tensor *RMSNorm::forward(ForwardContext *ctx, ggml_tensor *input) const {
 
 ChatGLMTokenizer::ChatGLMTokenizer(std::string_view serialized_model_proto, int bos_token_id, int eos_token_id,
                                    int mask_token_id, int gmask_token_id, int pad_token_id)
-    : sp(std::make_unique<sentencepiece::SentencePieceProcessor>()), bos_token_id(bos_token_id),
-      eos_token_id(eos_token_id), mask_token_id(mask_token_id), gmask_token_id(gmask_token_id),
-      pad_token_id(pad_token_id) {
-    const auto status = sp->LoadFromSerializedProto(serialized_model_proto);
+    : bos_token_id(bos_token_id), eos_token_id(eos_token_id), mask_token_id(mask_token_id),
+      gmask_token_id(gmask_token_id), pad_token_id(pad_token_id) {
+    const auto status = sp.LoadFromSerializedProto(serialized_model_proto);
     CHATGLM_CHECK(status.ok()) << status.ToString();
 }
 
 std::vector<int> ChatGLMTokenizer::encode(const std::string &text) const {
     std::string input = preprocess(text);
     std::vector<int> ids;
-    sp->Encode(input, &ids);
+    sp.Encode(input, &ids);
     ids.push_back(gmask_token_id);
     ids.push_back(bos_token_id);
     return ids;
@@ -184,9 +248,26 @@ std::vector<int> ChatGLMTokenizer::encode(const std::string &text) const {
 
 std::string ChatGLMTokenizer::decode(const std::vector<int> &ids) const {
     std::string text;
-    sp->Decode(ids, &text);
+    sp.Decode(ids, &text);
     text = postprocess(text);
     return text;
+}
+
+std::string ChatGLMPrompter::build_prompt(const std::vector<std::string> &history) const {
+    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
+
+    std::ostringstream oss_prompt;
+    if (history.size() == 1) {
+        oss_prompt << history.front();
+    } else {
+        for (size_t i = 0; i < history.size(); i += 2) {
+            oss_prompt << "[Round " << i / 2 << "]\n问：" << history[i] << "\n答：";
+            if (i < history.size() - 1) {
+                oss_prompt << history[i + 1] << "\n";
+            }
+        }
+    }
+    return oss_prompt.str();
 }
 
 static std::string regex_replace(const std::string &input, const std::regex &regex,
@@ -377,9 +458,10 @@ void BaseModelForConditionalGeneration::sampling_softmax_inplace(TokenIdScore *f
 std::vector<int> BaseModelForConditionalGeneration::generate(const std::vector<int> &input_ids,
                                                              const GenerationConfig &gen_config,
                                                              BaseStreamer *streamer) const {
-    // CHATGLM_CHECK(gen_config.max_length <= config.max_sequence_length)
-    //     << "max_length (" << gen_config.max_length << ") is larger than model max_sequence_length ("
-    //     << config.max_sequence_length << ")";
+    CHATGLM_CHECK(gen_config.max_length <= max_seq_len_)
+        << "requested max_length (" << gen_config.max_length << ") is larger than model's max_sequence_length ("
+        << max_seq_len_ << ")";
+
     std::vector<int> curr_input_ids(input_ids);
 
     std::vector<int> output_ids;
@@ -517,6 +599,69 @@ ggml_tensor *ChatGLMModel::forward(ForwardContext *ctx, ggml_tensor *input_ids, 
     return hidden_states;
 }
 
+ChatGLMForConditionalGeneration::ChatGLMForConditionalGeneration(const ChatGLMConfig &config)
+    : BaseModelForConditionalGeneration(config.eos_token_id, config.max_sequence_length, MEM_SIZE, SCRATCH_SIZE),
+      config(config) {
+    constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
+    const size_t num_tensors = 3 + config.num_layers * 14;
+    const size_t ctx_size = num_tensors * tensor_ovhd;
+    w_ctx_.gctx = ggml_init({.mem_size = ctx_size, .mem_buffer = nullptr, .no_alloc = true});
+    CHATGLM_CHECK(w_ctx_.gctx) << "failed to init weight context";
+    w_ctx_.dtype = config.dtype;
+
+    transformer = ChatGLMModel(&w_ctx_, config);
+
+    const size_t kv_cache_size =
+        config.num_layers * 2 * config.max_sequence_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16);
+    kv_cache_buffer_.reset(new char[kv_cache_size]);
+    char *kv_cache_ptr = kv_cache_buffer_.get();
+    for (int i = 0; i < config.num_layers; i++) {
+        std::string layer_prefix = "transformer.layers." + std::to_string(i) + '.';
+        transformer.layers[i].attention.k_cache->data = kv_cache_ptr;
+        kv_cache_ptr += ggml_nbytes(transformer.layers[i].attention.k_cache);
+        transformer.layers[i].attention.v_cache->data = kv_cache_ptr;
+        kv_cache_ptr += ggml_nbytes(transformer.layers[i].attention.v_cache);
+    }
+    CHATGLM_CHECK(kv_cache_ptr == kv_cache_buffer_.get() + kv_cache_size) << "corrupted kv cache";
+}
+
+ChatGLMForConditionalGeneration::~ChatGLMForConditionalGeneration() { ggml_free(w_ctx_.gctx); }
+
+void ChatGLMForConditionalGeneration::load(ModelLoader &loader) {
+    loader.read_tensor("transformer.word_embeddings.weight", transformer.word_embeddings.weight);
+    for (int i = 0; i < config.num_layers; i++) {
+        std::string layer_prefix = "transformer.layers." + std::to_string(i) + '.';
+        loader.read_tensor(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
+        loader.read_tensor(layer_prefix + "input_layernorm.bias", transformer.layers[i].input_layernorm.bias);
+        loader.read_tensor(layer_prefix + "attention.query_key_value.weight",
+                           transformer.layers[i].attention.query_key_value.weight);
+        loader.read_tensor(layer_prefix + "attention.query_key_value.bias",
+                           transformer.layers[i].attention.query_key_value.bias);
+        loader.read_tensor(layer_prefix + "attention.dense.weight", transformer.layers[i].attention.dense.weight);
+        loader.read_tensor(layer_prefix + "attention.dense.bias", transformer.layers[i].attention.dense.bias);
+        loader.read_tensor(layer_prefix + "post_attention_layernorm.weight",
+                           transformer.layers[i].post_attention_layernorm.weight);
+        loader.read_tensor(layer_prefix + "post_attention_layernorm.bias",
+                           transformer.layers[i].post_attention_layernorm.bias);
+        loader.read_tensor(layer_prefix + "mlp.dense_h_to_4h.weight", transformer.layers[i].mlp.dense_h_to_4h.weight);
+        loader.read_tensor(layer_prefix + "mlp.dense_h_to_4h.bias", transformer.layers[i].mlp.dense_h_to_4h.bias);
+        loader.read_tensor(layer_prefix + "mlp.dense_4h_to_h.weight", transformer.layers[i].mlp.dense_4h_to_h.weight);
+        loader.read_tensor(layer_prefix + "mlp.dense_4h_to_h.bias", transformer.layers[i].mlp.dense_4h_to_h.bias);
+    }
+    loader.read_tensor("transformer.final_layernorm.weight", transformer.final_layernorm.weight);
+    loader.read_tensor("transformer.final_layernorm.bias", transformer.final_layernorm.bias);
+    CHATGLM_CHECK(ggml_used_mem(w_ctx_.gctx) == ggml_get_mem_size(w_ctx_.gctx)) << "corrupted model weights";
+
+#ifdef GGML_USE_CUBLAS
+    for (int i = 0; i < config.num_layers; i++) {
+        ggml_cuda_transform_tensor(model->transformer.layers[i].attention.query_key_value.weight);
+        ggml_cuda_transform_tensor(model->transformer.layers[i].attention.dense.weight);
+        ggml_cuda_transform_tensor(model->transformer.layers[i].mlp.dense_h_to_4h.weight);
+        ggml_cuda_transform_tensor(model->transformer.layers[i].mlp.dense_4h_to_h.weight);
+    }
+#endif
+}
+
 ggml_tensor *ChatGLMForConditionalGeneration::forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past,
                                                       int n_ctx) const {
     ggml_tensor *transformer_outputs = transformer.forward(ctx, input_ids, n_past, n_ctx);
@@ -531,177 +676,18 @@ ggml_tensor *ChatGLMForConditionalGeneration::forward(ForwardContext *ctx, ggml_
     return lm_logits;
 }
 
-MappedFile::MappedFile(const std::string &path) {
-    int fd = open(path.c_str(), O_RDONLY);
-    CHATGLM_CHECK(fd > 0) << "cannot open file " << path << ": " << strerror(errno);
-
-    struct stat sb;
-    CHATGLM_CHECK(fstat(fd, &sb) == 0) << strerror(errno);
-    size = sb.st_size;
-
-    data = mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
-    CHATGLM_CHECK(data != MAP_FAILED) << strerror(errno);
-
-    CHATGLM_CHECK(close(fd) == 0) << strerror(errno);
-}
-
-MappedFile::~MappedFile() { CHATGLM_CHECK(munmap(data, size) == 0) << strerror(errno); }
-
 enum ModelArch {
     CHATGLM = 1,
     CHATGLM2 = 2,
 };
 
-ChatGLMPipeline::ChatGLMPipeline(const std::string &path) {
-    mapped_file = std::make_unique<MappedFile>(path);
-
-    std::ifstream fin(path, std::ios::binary);
-    CHATGLM_CHECK(fin) << "failed to open model file " << path;
-
-    // load magic
-    std::string magic(4, '\0');
-    fin.read(&magic[0], magic.size());
-    CHATGLM_CHECK(magic == "ggml") << "model file is broken (bad magic)";
-
-    // load model arch
-    ModelArch arch = (ModelArch)read_as<int>(fin);
-    CHATGLM_CHECK(arch == ModelArch::CHATGLM) << "invalid model arch " << arch;
-
-    // load config
-    ChatGLMConfig config = read_as<ChatGLMConfig>(fin);
-
-    // load tokenizer
-    int proto_size = read_as<int>(fin);
-    std::string_view serialized_model_proto((char *)mapped_file->data + fin.tellg(), proto_size);
-    fin.seekg(proto_size, fin.cur);
-    tokenizer = std::make_unique<ChatGLMTokenizer>(serialized_model_proto, config.bos_token_id, config.eos_token_id,
-                                                   config.mask_token_id, config.gmask_token_id, config.pad_token_id);
-
-    // load model
-    constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
-    const size_t num_tensors = 3 + config.num_layers * 14;
-    const size_t ctx_size = num_tensors * tensor_ovhd;
-    ctx.gctx = ggml_init({.mem_size = ctx_size, .mem_buffer = nullptr, .no_alloc = true});
-    CHATGLM_CHECK(ctx.gctx) << "failed to init weight context";
-    ctx.dtype = config.dtype;
-
-    const size_t kvcache_size =
-        config.num_layers * 2 * config.max_sequence_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16);
-    kvcache_buffer.reset(new char[kvcache_size]);
-    char *kvcache_ptr = kvcache_buffer.get();
-
-    auto load_tensor = [this, &fin](const std::string &name, ggml_tensor *tensor) {
-        int ndim = read_as<int>(fin);
-        CHATGLM_CHECK(ndim == tensor->n_dims)
-            << "tensor " << name << " ndim mismatch: expect " << tensor->n_dims << ", got " << ndim;
-        int name_size = read_as<int>(fin);
-        ggml_type dtype = (ggml_type)read_as<int>(fin);
-        CHATGLM_CHECK(dtype == tensor->type)
-            << "tensor " << name << " dtype mismatch: expect " << tensor->type << ", got " << dtype;
-        for (int i = 0; i < ndim; i++) {
-            int dim = read_as<int>(fin);
-            CHATGLM_CHECK(dim == tensor->ne[ndim - 1 - i]) << "tensor " << name << " dim " << i << " mismatch: expect "
-                                                           << tensor->ne[ndim - 1 - i] << ", got " << dim;
-        }
-        std::string tensor_name(name_size, 0);
-        fin.read(&tensor_name[0], name_size);
-        CHATGLM_CHECK(tensor_name == name)
-            << "tensor " << name << " name mismatch: expect " << name << ", got " << tensor_name;
-
-        constexpr int64_t MEM_ALIGNED = 16;
-        const int64_t data_offset = (fin.tellg() + (MEM_ALIGNED - 1)) & ~(MEM_ALIGNED - 1);
-        tensor->data = (char *)mapped_file->data + data_offset;
-        fin.seekg(data_offset + ggml_nbytes(tensor));
-    };
-
-    model = std::make_unique<ChatGLMForConditionalGeneration>(&ctx, config);
-    load_tensor("transformer.word_embeddings.weight", model->transformer.word_embeddings.weight);
-    for (int i = 0; i < config.num_layers; i++) {
-        std::string layer_prefix = "transformer.layers." + std::to_string(i) + '.';
-        load_tensor(layer_prefix + "input_layernorm.weight", model->transformer.layers[i].input_layernorm.weight);
-        load_tensor(layer_prefix + "input_layernorm.bias", model->transformer.layers[i].input_layernorm.bias);
-        load_tensor(layer_prefix + "attention.query_key_value.weight",
-                    model->transformer.layers[i].attention.query_key_value.weight);
-        load_tensor(layer_prefix + "attention.query_key_value.bias",
-                    model->transformer.layers[i].attention.query_key_value.bias);
-        load_tensor(layer_prefix + "attention.dense.weight", model->transformer.layers[i].attention.dense.weight);
-        load_tensor(layer_prefix + "attention.dense.bias", model->transformer.layers[i].attention.dense.bias);
-        model->transformer.layers[i].attention.k_cache->data = kvcache_ptr;
-        kvcache_ptr += ggml_nbytes(model->transformer.layers[i].attention.k_cache);
-        model->transformer.layers[i].attention.v_cache->data = kvcache_ptr;
-        kvcache_ptr += ggml_nbytes(model->transformer.layers[i].attention.v_cache);
-        load_tensor(layer_prefix + "post_attention_layernorm.weight",
-                    model->transformer.layers[i].post_attention_layernorm.weight);
-        load_tensor(layer_prefix + "post_attention_layernorm.bias",
-                    model->transformer.layers[i].post_attention_layernorm.bias);
-        load_tensor(layer_prefix + "mlp.dense_h_to_4h.weight", model->transformer.layers[i].mlp.dense_h_to_4h.weight);
-        load_tensor(layer_prefix + "mlp.dense_h_to_4h.bias", model->transformer.layers[i].mlp.dense_h_to_4h.bias);
-        load_tensor(layer_prefix + "mlp.dense_4h_to_h.weight", model->transformer.layers[i].mlp.dense_4h_to_h.weight);
-        load_tensor(layer_prefix + "mlp.dense_4h_to_h.bias", model->transformer.layers[i].mlp.dense_4h_to_h.bias);
-    }
-    load_tensor("transformer.final_layernorm.weight", model->transformer.final_layernorm.weight);
-    load_tensor("transformer.final_layernorm.bias", model->transformer.final_layernorm.bias);
-    CHATGLM_CHECK(kvcache_ptr == kvcache_buffer.get() + kvcache_size) << "corrupted kv cache";
-    CHATGLM_CHECK(ggml_used_mem(ctx.gctx) == ggml_get_mem_size(ctx.gctx)) << "corrupted model weights";
-
-#ifdef GGML_USE_CUBLAS
-    for (int i = 0; i < config.num_layers; i++) {
-        ggml_cuda_transform_tensor(model->transformer.layers[i].attention.query_key_value.weight);
-        ggml_cuda_transform_tensor(model->transformer.layers[i].attention.dense.weight);
-        ggml_cuda_transform_tensor(model->transformer.layers[i].mlp.dense_h_to_4h.weight);
-        ggml_cuda_transform_tensor(model->transformer.layers[i].mlp.dense_4h_to_h.weight);
-    }
-#endif
-}
-
-ChatGLMPipeline::~ChatGLMPipeline() {
-    if (ctx.gctx) {
-        ggml_free(ctx.gctx);
-        ctx.gctx = nullptr;
-    }
-}
-
-std::string ChatGLMPipeline::chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
-                                  BaseStreamer *streamer) const {
-    std::string prompt = build_prompt(history);
-    std::vector<int> input_ids = tokenizer->encode(prompt);
-    if ((int)input_ids.size() > gen_config.max_context_length) {
-        // sliding window: always take the last max_context_length tokens
-        input_ids.erase(input_ids.begin(), input_ids.end() - gen_config.max_context_length);
-    }
-
-    std::vector<int> output_ids = model->generate(input_ids, gen_config, streamer);
-    std::vector<int> new_output_ids(output_ids.begin() + input_ids.size(), output_ids.end());
-
-    std::string output = tokenizer->decode(new_output_ids);
-    return output;
-}
-
-std::string ChatGLMPipeline::build_prompt(const std::vector<std::string> &history) {
-    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
-
-    std::ostringstream oss_prompt;
-    if (history.size() == 1) {
-        oss_prompt << history.front();
-    } else {
-        for (size_t i = 0; i < history.size(); i += 2) {
-            oss_prompt << "[Round " << i / 2 << "]\n问：" << history[i] << "\n答：";
-            if (i < history.size() - 1) {
-                oss_prompt << history[i + 1] << "\n";
-            }
-        }
-    }
-    return oss_prompt.str();
-}
-
 // ===== ChatGLM2-6B =====
 
-ChatGLM2Tokenizer::ChatGLM2Tokenizer(std::string_view serialized_model_proto)
-    : sp(std::make_unique<sentencepiece::SentencePieceProcessor>()) {
-    const auto status = sp->LoadFromSerializedProto(serialized_model_proto);
+ChatGLM2Tokenizer::ChatGLM2Tokenizer(std::string_view serialized_model_proto) {
+    const auto status = sp.LoadFromSerializedProto(serialized_model_proto);
     CHATGLM_CHECK(status.ok()) << status.ToString();
 
-    int special_id = sp->GetPieceSize();
+    int special_id = sp.GetPieceSize();
     mask_token_id = special_id++;
     gmask_token_id = special_id++;
     smask_token_id = special_id++;
@@ -711,7 +697,7 @@ ChatGLM2Tokenizer::ChatGLM2Tokenizer(std::string_view serialized_model_proto)
 
 std::vector<int> ChatGLM2Tokenizer::encode(const std::string &text) const {
     std::vector<int> ids;
-    sp->Encode(text, &ids);
+    sp.Encode(text, &ids);
     ids.insert(ids.begin(), {gmask_token_id, sop_token_id}); // special prefix
     return ids;
 }
@@ -723,7 +709,7 @@ std::string ChatGLM2Tokenizer::decode(const std::vector<int> &ids) const {
                      normal_ids.end());
 
     std::string text;
-    sp->Decode(normal_ids, &text);
+    sp.Decode(normal_ids, &text);
     return text;
 }
 
@@ -732,7 +718,7 @@ bool ChatGLM2Tokenizer::is_special_id(int id) const {
            id == eop_token_id;
 }
 
-std::string ChatGLM2Pipeline::build_prompt(const std::vector<std::string> &history) {
+std::string ChatGLM2Prompter::build_prompt(const std::vector<std::string> &history) const {
     CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
 
     std::ostringstream oss_prompt;
@@ -874,6 +860,64 @@ ggml_tensor *ChatGLM2Model::forward(ForwardContext *ctx, ggml_tensor *input_ids,
     return hidden_states;
 }
 
+ChatGLM2ForConditionalGeneration::ChatGLM2ForConditionalGeneration(const ChatGLM2Config &config)
+    : BaseModelForConditionalGeneration(config.eos_token_id, config.seq_length, MEM_SIZE, SCRATCH_SIZE),
+      config(config) {
+    constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
+    const size_t num_tensors = 3 + config.num_layers * 9;
+    const size_t ctx_size = num_tensors * tensor_ovhd;
+    w_ctx_.gctx = ggml_init({.mem_size = ctx_size, .mem_buffer = nullptr, .no_alloc = true});
+    CHATGLM_CHECK(w_ctx_.gctx) << "failed to init weight context";
+    w_ctx_.dtype = config.dtype;
+
+    transformer = ChatGLM2Model(&w_ctx_, config);
+    lm_head = Linear(&w_ctx_, config.hidden_size, config.vocab_size, false);
+
+    const size_t kv_cache_size = config.num_layers * 2ull * config.seq_length * config.hidden_size /
+                                 config.num_attention_heads * config.multi_query_group_num *
+                                 ggml_type_size(GGML_TYPE_F32);
+    kv_cache_buffer_.reset(new char[kv_cache_size]);
+
+    char *kv_cache_ptr = kv_cache_buffer_.get();
+    for (int i = 0; i < config.num_layers; i++) {
+        std::string layer_prefix = "transformer.layers." + std::to_string(i) + '.';
+        transformer.layers[i].attention.k_cache->data = kv_cache_ptr;
+        kv_cache_ptr += ggml_nbytes(transformer.layers[i].attention.k_cache);
+        transformer.layers[i].attention.v_cache->data = kv_cache_ptr;
+        kv_cache_ptr += ggml_nbytes(transformer.layers[i].attention.v_cache);
+    }
+    CHATGLM_CHECK(kv_cache_ptr == kv_cache_buffer_.get() + kv_cache_size) << "corrupted kv cache";
+}
+
+void ChatGLM2ForConditionalGeneration::load(ModelLoader &loader) {
+    loader.read_tensor("transformer.embedding.word_embeddings.weight", transformer.word_embeddings.weight);
+    for (int i = 0; i < config.num_layers; i++) {
+        std::string layer_prefix = "transformer.encoder.layers." + std::to_string(i) + '.';
+        loader.read_tensor(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
+        loader.read_tensor(layer_prefix + "self_attention.query_key_value.weight",
+                           transformer.layers[i].attention.query_key_value.weight);
+        loader.read_tensor(layer_prefix + "self_attention.query_key_value.bias",
+                           transformer.layers[i].attention.query_key_value.bias);
+        loader.read_tensor(layer_prefix + "self_attention.dense.weight", transformer.layers[i].attention.dense.weight);
+        loader.read_tensor(layer_prefix + "post_attention_layernorm.weight",
+                           transformer.layers[i].post_attention_layernorm.weight);
+        loader.read_tensor(layer_prefix + "mlp.dense_h_to_4h.weight", transformer.layers[i].mlp.dense_h_to_4h.weight);
+        loader.read_tensor(layer_prefix + "mlp.dense_4h_to_h.weight", transformer.layers[i].mlp.dense_4h_to_h.weight);
+    }
+    loader.read_tensor("transformer.encoder.final_layernorm.weight", transformer.final_layernorm.weight);
+    loader.read_tensor("transformer.output_layer.weight", lm_head.weight);
+    CHATGLM_CHECK(ggml_used_mem(w_ctx_.gctx) == ggml_get_mem_size(w_ctx_.gctx)) << "corrupted model weights";
+
+#ifdef GGML_USE_CUBLAS
+    for (int i = 0; i < config.num_layers; i++) {
+        ggml_cuda_transform_tensor(transformer.layers[i].attention.query_key_value.weight);
+        ggml_cuda_transform_tensor(transformer.layers[i].attention.dense.weight);
+        ggml_cuda_transform_tensor(transformer.layers[i].mlp.dense_h_to_4h.weight);
+        ggml_cuda_transform_tensor(transformer.layers[i].mlp.dense_4h_to_h.weight);
+    }
+#endif
+}
+
 ggml_tensor *ChatGLM2ForConditionalGeneration::forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past,
                                                        int n_ctx) const {
     ggml_tensor *transformer_outputs = transformer.forward(ctx, input_ids, n_past);
@@ -887,105 +931,71 @@ ggml_tensor *ChatGLM2ForConditionalGeneration::forward(ForwardContext *ctx, ggml
     return lm_logits;
 }
 
-ChatGLM2Pipeline::ChatGLM2Pipeline(const std::string &path) : mapped_file(std::make_unique<MappedFile>(path)) {
-    std::ifstream fin(path, std::ios::binary);
-    CHATGLM_CHECK(fin) << "failed to open model file " << path;
+// ===== pipeline =====
+
+Pipeline::Pipeline(const std::string &path) {
+    mapped_file = std::make_unique<MappedFile>(path);
+    ModelLoader loader(std::string_view((char *)mapped_file->data, mapped_file->size));
 
     // load magic
-    std::string magic(4, '\0');
-    fin.read(&magic[0], magic.size());
+    std::string magic = loader.read_string(4);
     CHATGLM_CHECK(magic == "ggml") << "model file is broken (bad magic)";
 
     // load model arch
-    ModelArch arch = (ModelArch)read_as<int>(fin);
-    CHATGLM_CHECK(arch == ModelArch::CHATGLM2) << "invalid model arch " << arch;
+    ModelArch arch = (ModelArch)loader.read_basic<int>();
+    if (arch == ModelArch::CHATGLM) {
+        // load config
+        ChatGLMConfig config = loader.read_basic<ChatGLMConfig>();
 
-    // load config
-    ChatGLM2Config config = read_as<ChatGLM2Config>(fin);
+        // load tokenizer
+        int proto_size = loader.read_basic<int>();
+        std::string_view serialized_model_proto((char *)mapped_file->data + loader.tell(), proto_size);
+        loader.seek(proto_size, SEEK_CUR);
+        tokenizer =
+            std::make_unique<ChatGLMTokenizer>(serialized_model_proto, config.bos_token_id, config.eos_token_id,
+                                               config.mask_token_id, config.gmask_token_id, config.pad_token_id);
 
-    // load tokenizer
-    int proto_size = read_as<int>(fin);
-    std::string_view serialized_model_proto((char *)mapped_file->data + fin.tellg(), proto_size);
-    fin.seekg(proto_size, fin.cur);
-    tokenizer = std::make_unique<ChatGLM2Tokenizer>(serialized_model_proto);
+        // prompter
+        prompter = std::make_unique<ChatGLMPrompter>();
 
-    // load model
-    constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
-    const size_t num_tensors = 3 + config.num_layers * 9;
-    const size_t ctx_size = num_tensors * tensor_ovhd;
-    ctx.gctx = ggml_init({.mem_size = ctx_size, .mem_buffer = nullptr, .no_alloc = true});
-    CHATGLM_CHECK(ctx.gctx) << "failed to init weight context";
-    ctx.dtype = config.dtype;
+        // load model
+        model = std::make_unique<ChatGLMForConditionalGeneration>(config);
+        model->load(loader);
+    } else if (arch == ModelArch::CHATGLM2) {
+        // load config
+        ChatGLM2Config config = loader.read_basic<ChatGLM2Config>();
 
-    const size_t kvcache_size = config.num_layers * 2ull * config.seq_length * config.hidden_size /
-                                config.num_attention_heads * config.multi_query_group_num *
-                                ggml_type_size(GGML_TYPE_F32);
-    kvcache_buffer.reset(new char[kvcache_size]);
-    char *kvcache_ptr = kvcache_buffer.get();
+        // load tokenizer
+        int proto_size = loader.read_basic<int>();
+        std::string_view serialized_model_proto((char *)mapped_file->data + loader.tell(), proto_size);
+        loader.seek(proto_size, SEEK_CUR);
+        tokenizer = std::make_unique<ChatGLM2Tokenizer>(serialized_model_proto);
 
-    auto load_tensor = [this, &fin](const std::string &name, ggml_tensor *tensor) {
-        int ndim = read_as<int>(fin);
-        CHATGLM_CHECK(ndim == tensor->n_dims)
-            << "tensor " << name << " ndim mismatch: expect " << tensor->n_dims << " but got " << ndim;
-        int name_size = read_as<int>(fin);
-        ggml_type dtype = (ggml_type)read_as<int>(fin);
-        CHATGLM_CHECK(dtype == tensor->type)
-            << "tensor " << name << " dtype mismatch: expect " << tensor->type << " but got " << dtype;
-        for (int i = 0; i < ndim; i++) {
-            int dim = read_as<int>(fin);
-            CHATGLM_CHECK(dim == tensor->ne[ndim - 1 - i]) << "tensor " << name << " dim " << i << " mismatch: expect "
-                                                           << tensor->ne[ndim - 1 - i] << " but got " << dim;
-        }
-        std::string tensor_name(name_size, 0);
-        fin.read(&tensor_name[0], name_size);
-        CHATGLM_CHECK(tensor_name == name)
-            << "tensor " << name << " name mismatch: expect " << name << ", got " << tensor_name;
+        // prompter
+        prompter = std::make_unique<ChatGLM2Prompter>();
 
-        constexpr int64_t MEM_ALIGNED = 16;
-        const int64_t data_offset = (fin.tellg() + (MEM_ALIGNED - 1)) & ~(MEM_ALIGNED - 1);
-        tensor->data = (char *)mapped_file->data + data_offset;
-        fin.seekg(data_offset + ggml_nbytes(tensor));
-    };
-
-    model = std::make_unique<ChatGLM2ForConditionalGeneration>(&ctx, config);
-    load_tensor("transformer.embedding.word_embeddings.weight", model->transformer.word_embeddings.weight);
-    for (int i = 0; i < config.num_layers; i++) {
-        std::string layer_prefix = "transformer.encoder.layers." + std::to_string(i) + '.';
-        load_tensor(layer_prefix + "input_layernorm.weight", model->transformer.layers[i].input_layernorm.weight);
-        load_tensor(layer_prefix + "self_attention.query_key_value.weight",
-                    model->transformer.layers[i].attention.query_key_value.weight);
-        load_tensor(layer_prefix + "self_attention.query_key_value.bias",
-                    model->transformer.layers[i].attention.query_key_value.bias);
-        load_tensor(layer_prefix + "self_attention.dense.weight", model->transformer.layers[i].attention.dense.weight);
-        model->transformer.layers[i].attention.k_cache->data = kvcache_ptr;
-        kvcache_ptr += ggml_nbytes(model->transformer.layers[i].attention.k_cache);
-        model->transformer.layers[i].attention.v_cache->data = kvcache_ptr;
-        kvcache_ptr += ggml_nbytes(model->transformer.layers[i].attention.v_cache);
-        load_tensor(layer_prefix + "post_attention_layernorm.weight",
-                    model->transformer.layers[i].post_attention_layernorm.weight);
-        load_tensor(layer_prefix + "mlp.dense_h_to_4h.weight", model->transformer.layers[i].mlp.dense_h_to_4h.weight);
-        load_tensor(layer_prefix + "mlp.dense_4h_to_h.weight", model->transformer.layers[i].mlp.dense_4h_to_h.weight);
+        // load model
+        model = std::make_unique<ChatGLM2ForConditionalGeneration>(config);
+        model->load(loader);
+    } else {
+        CHATGLM_THROW << "invalid model arch " << arch;
     }
-    load_tensor("transformer.encoder.final_layernorm.weight", model->transformer.final_layernorm.weight);
-    load_tensor("transformer.output_layer.weight", model->lm_head.weight);
-    CHATGLM_CHECK(kvcache_ptr == kvcache_buffer.get() + kvcache_size) << "corrupted kv cache";
-    CHATGLM_CHECK(ggml_used_mem(ctx.gctx) == ggml_get_mem_size(ctx.gctx)) << "corrupted model weights";
-
-#ifdef GGML_USE_CUBLAS
-    for (int i = 0; i < config.num_layers; i++) {
-        ggml_cuda_transform_tensor(model->transformer.layers[i].attention.query_key_value.weight);
-        ggml_cuda_transform_tensor(model->transformer.layers[i].attention.dense.weight);
-        ggml_cuda_transform_tensor(model->transformer.layers[i].mlp.dense_h_to_4h.weight);
-        ggml_cuda_transform_tensor(model->transformer.layers[i].mlp.dense_4h_to_h.weight);
-    }
-#endif
 }
 
-ChatGLM2Pipeline::~ChatGLM2Pipeline() {
-    if (ctx.gctx) {
-        ggml_free(ctx.gctx);
-        ctx.gctx = nullptr;
+std::string Pipeline::chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
+                           BaseStreamer *streamer) const {
+    std::string prompt = prompter->build_prompt(history);
+    std::vector<int> input_ids = tokenizer->encode(prompt);
+    if ((int)input_ids.size() > gen_config.max_context_length) {
+        // sliding window: always take the last max_context_length tokens
+        input_ids.erase(input_ids.begin(), input_ids.end() - gen_config.max_context_length);
     }
+
+    std::vector<int> output_ids = model->generate(input_ids, gen_config, streamer);
+    std::vector<int> new_output_ids(output_ids.begin() + input_ids.size(), output_ids.end());
+
+    std::string output = tokenizer->decode(new_output_ids);
+    return output;
 }
 
 } // namespace chatglm

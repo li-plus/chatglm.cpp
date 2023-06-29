@@ -3,6 +3,7 @@
 #include <ggml.h>
 #include <sentencepiece_processor.h>
 #include <sstream>
+#include <unordered_map>
 #include <vector>
 
 namespace chatglm {
@@ -23,7 +24,16 @@ struct LogMessageFatal {
 
 std::string to_string(ggml_tensor *tensor, bool with_data = true);
 
-// ===== modules =====
+// ===== common =====
+
+struct BaseTokenizer {
+    virtual std::vector<int> encode(const std::string &text) const = 0;
+    virtual std::string decode(const std::vector<int> &ids) const = 0;
+};
+
+struct BasePrompter {
+    virtual std::string build_prompt(const std::vector<std::string> &history) const = 0;
+};
 
 struct InitContext {
     ggml_context *gctx;
@@ -83,13 +93,6 @@ struct RMSNorm {
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input) const;
 };
 
-struct BaseTokenizer {
-    virtual std::vector<int> encode(const std::string &text) const = 0;
-    virtual std::string decode(const std::vector<int> &ids) const = 0;
-};
-
-// ===== streamer =====
-
 struct BaseStreamer {
     virtual void put(const std::vector<int> &output_ids) = 0;
     virtual void end() = 0;
@@ -106,6 +109,37 @@ struct TextStreamer : public BaseStreamer {
     bool is_prompt_;
     std::vector<int> token_cache_;
     int print_len_;
+};
+
+struct MappedFile {
+    char *data;
+    size_t size;
+
+    MappedFile(const std::string &path);
+    ~MappedFile();
+};
+
+struct ModelLoader {
+    const char *const data;
+    size_t size;
+    const char *ptr;
+
+    ModelLoader(std::string_view buffer) : data(buffer.data()), size(buffer.size()), ptr(buffer.data()) {}
+
+    int64_t tell() const { return ptr - data; }
+
+    void seek(int64_t offset, int whence);
+
+    template <typename T>
+    T read_basic() {
+        T obj = *(T *)ptr;
+        ptr += sizeof(T);
+        return obj;
+    }
+
+    std::string read_string(size_t length);
+
+    void read_tensor(const std::string &name, ggml_tensor *tensor);
 };
 
 // ===== generation =====
@@ -126,11 +160,13 @@ struct GenerationConfig {
 };
 
 struct BaseModelForConditionalGeneration {
-    BaseModelForConditionalGeneration() : eos_token_id_(0), mem_size_(0), scratch_size_(0) {}
-    BaseModelForConditionalGeneration(int eos_token_id, size_t mem_size, size_t scratch_size)
-        : eos_token_id_(eos_token_id), mem_size_(mem_size), mem_buffer_(new char[mem_size]),
+    BaseModelForConditionalGeneration() : eos_token_id_(0), max_seq_len_(0), mem_size_(0), scratch_size_(0) {}
+    BaseModelForConditionalGeneration(int eos_token_id, int max_seq_len, size_t mem_size, size_t scratch_size)
+        : eos_token_id_(eos_token_id), max_seq_len_(max_seq_len), mem_size_(mem_size), mem_buffer_(new char[mem_size]),
           scratch_size_(scratch_size), scratch_buffer_(new char[scratch_size]) {}
+    virtual ~BaseModelForConditionalGeneration() = default;
 
+    virtual void load(ModelLoader &loader) = 0;
     virtual ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const = 0;
 
     std::vector<int> generate(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
@@ -152,6 +188,7 @@ struct BaseModelForConditionalGeneration {
 
   private:
     int eos_token_id_;
+    int max_seq_len_;
     size_t mem_size_;
     std::unique_ptr<char[]> mem_buffer_; // BLAS buffer
     size_t scratch_size_;
@@ -175,7 +212,7 @@ struct ChatGLMConfig {
 };
 
 struct ChatGLMTokenizer : public BaseTokenizer {
-    std::unique_ptr<sentencepiece::SentencePieceProcessor> sp;
+    sentencepiece::SentencePieceProcessor sp;
     int bos_token_id;
     int eos_token_id;
     int mask_token_id;
@@ -193,6 +230,10 @@ struct ChatGLMTokenizer : public BaseTokenizer {
     static std::string preprocess(const std::string &text);
 
     static std::string postprocess(const std::string &text);
+};
+
+struct ChatGLMPrompter : public BasePrompter {
+    std::string build_prompt(const std::vector<std::string> &history) const override;
 };
 
 struct GLU {
@@ -253,42 +294,26 @@ struct ChatGLMModel {
 };
 
 struct ChatGLMForConditionalGeneration : public BaseModelForConditionalGeneration {
-    ChatGLMConfig config;
-    ChatGLMModel transformer;
-
     static constexpr size_t MEM_SIZE = 272ull * 1024 * 1024;
     static constexpr size_t SCRATCH_SIZE = 128ull * 1024 * 1024;
 
     ChatGLMForConditionalGeneration() = default;
-    ChatGLMForConditionalGeneration(InitContext *ctx, const ChatGLMConfig &config)
-        : BaseModelForConditionalGeneration(config.eos_token_id, MEM_SIZE, SCRATCH_SIZE), config(config),
-          transformer(ctx, config) {}
+    ChatGLMForConditionalGeneration(const ChatGLMConfig &config);
+    ~ChatGLMForConditionalGeneration() override;
+
+    void load(ModelLoader &loader) override;
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
-};
 
-struct MappedFile {
-    void *data;
-    size_t size;
+  public:
+    ChatGLMConfig config;
+    ChatGLMModel transformer;
 
-    MappedFile(const std::string &path);
-    ~MappedFile();
-};
-
-struct ChatGLMPipeline {
-    std::unique_ptr<ChatGLMTokenizer> tokenizer;
-    std::unique_ptr<ChatGLMForConditionalGeneration> model;
-    InitContext ctx;
-    std::unique_ptr<char[]> kvcache_buffer;
-    std::unique_ptr<MappedFile> mapped_file;
-
-    ChatGLMPipeline(const std::string &path);
-    ~ChatGLMPipeline();
-
-    std::string chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
-                     BaseStreamer *streamer = nullptr) const;
-
-    static std::string build_prompt(const std::vector<std::string> &history);
+  private:
+    // hold ggml_context & kv_cache
+    InitContext w_ctx_; // weight context
+    // InitContext kv_ctx_; // TODO: kv cache context
+    std::unique_ptr<char[]> kv_cache_buffer_;
 };
 
 // ===== ChatGLM2-6B =====
@@ -306,7 +331,7 @@ struct ChatGLM2Config {
 };
 
 struct ChatGLM2Tokenizer : public BaseTokenizer {
-    std::unique_ptr<sentencepiece::SentencePieceProcessor> sp;
+    sentencepiece::SentencePieceProcessor sp;
     int mask_token_id;
     int gmask_token_id;
     int smask_token_id;
@@ -320,6 +345,10 @@ struct ChatGLM2Tokenizer : public BaseTokenizer {
     std::string decode(const std::vector<int> &ids) const override;
 
     bool is_special_id(int id) const;
+};
+
+struct ChatGLM2Prompter : public BasePrompter {
+    std::string build_prompt(const std::vector<std::string> &history) const override;
 };
 
 struct GLM2SelfAttention {
@@ -384,19 +413,26 @@ struct ChatGLM2Model {
 };
 
 struct ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGeneration {
+    static constexpr size_t MEM_SIZE = 272ull * 1024 * 1024;
+    static constexpr size_t SCRATCH_SIZE = 144ull * 1024 * 1024;
+
+    ChatGLM2ForConditionalGeneration() = default;
+    ChatGLM2ForConditionalGeneration(const ChatGLM2Config &config);
+
+    void load(ModelLoader &loader) override;
+
+    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
+
+  public:
     ChatGLM2Config config;
     ChatGLM2Model transformer;
     Linear lm_head;
 
-    static constexpr size_t MEM_SIZE = 272ull * 1024 * 1024;
-    static constexpr size_t SCRATCH_SIZE = 128ull * 1024 * 1024;
-
-    ChatGLM2ForConditionalGeneration() = default;
-    ChatGLM2ForConditionalGeneration(InitContext *ctx, const ChatGLM2Config &config)
-        : BaseModelForConditionalGeneration(config.eos_token_id, MEM_SIZE, SCRATCH_SIZE), config(config),
-          transformer(ctx, config), lm_head(ctx, config.hidden_size, config.vocab_size, false) {}
-
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
+  private:
+    // hold ggml_context & kv_cache
+    InitContext w_ctx_; // weight context
+    // InitContext kv_ctx_; // TODO: kv cache context
+    std::unique_ptr<char[]> kv_cache_buffer_;
 };
 
 struct ChatGLM2Pipeline {
@@ -408,6 +444,20 @@ struct ChatGLM2Pipeline {
 
     ChatGLM2Pipeline(const std::string &path);
     ~ChatGLM2Pipeline();
+
+    std::string chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
+                     BaseStreamer *streamer = nullptr) const;
+};
+
+// ===== pipeline =====
+
+struct Pipeline {
+    std::unique_ptr<BaseTokenizer> tokenizer;
+    std::unique_ptr<BaseModelForConditionalGeneration> model;
+    std::unique_ptr<BasePrompter> prompter;
+    std::unique_ptr<MappedFile> mapped_file;
+
+    Pipeline(const std::string &path);
 
     std::string chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
                      BaseStreamer *streamer = nullptr) const;

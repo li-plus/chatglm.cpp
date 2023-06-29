@@ -71,19 +71,14 @@ def quantize_q4_0(tensor: torch.Tensor) -> torch.CharTensor:
 def dump_tensor(f, name: str, tensor: torch.Tensor, ggml_type: GgmlType):
     assert tensor.dtype == torch.float32
 
-    # header
-    f.write(
-        struct.pack(
-            "i" * (3 + tensor.ndim),
-            tensor.ndim,
-            len(name.encode()),
-            ggml_type.value,
-            *tensor.shape,
-        )
-    )
+    # tensor name
+    f.write(struct.pack("i", len(name.encode())))
     f.write(name.encode())
 
-    # data
+    # tensor shape & dtype
+    f.write(struct.pack("i" * (2 + tensor.ndim), tensor.ndim, *tensor.shape, ggml_type.value))
+
+    # tensor data
     if ggml_type == GgmlType.F32:
         tensor = tensor.float()
     elif ggml_type == GgmlType.F16:
