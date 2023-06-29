@@ -478,14 +478,14 @@ std::vector<int> BaseModelForConditionalGeneration::generate(const std::vector<i
     return output_ids;
 }
 
-ggml_tensor *GLU::forward(ForwardContext *ctx, ggml_tensor *hidden_states) const {
+ggml_tensor *GLMMLP::forward(ForwardContext *ctx, ggml_tensor *hidden_states) const {
     ggml_tensor *output = dense_h_to_4h.forward(ctx, hidden_states);
     output = ggml_gelu_inplace(ctx->gctx.get(), output);
     output = dense_4h_to_h.forward(ctx, output);
     return output;
 }
 
-ggml_tensor *SelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
+ggml_tensor *GLMSelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
     int hidden_size = hidden_states->ne[0];
     int qlen = hidden_states->ne[1];
     int head_size = hidden_size / num_attention_heads;

@@ -287,10 +287,10 @@ class ChatGLMTokenizer : public BaseTokenizer {
     int pad_token_id;
 };
 
-class GLU {
+class GLMMLP {
   public:
-    GLU() = default;
-    GLU(InitContext *ctx, int hidden_size)
+    GLMMLP() = default;
+    GLMMLP(InitContext *ctx, int hidden_size)
         : dense_h_to_4h(ctx, hidden_size, 4 * hidden_size), dense_4h_to_h(ctx, 4 * hidden_size, hidden_size) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states) const;
@@ -300,11 +300,11 @@ class GLU {
     Linear dense_4h_to_h;
 };
 
-class SelfAttention {
+class GLMSelfAttention {
   public:
     // TODO: kvcache type
-    SelfAttention() : num_attention_heads(0) {}
-    SelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int max_length)
+    GLMSelfAttention() : num_attention_heads(0) {}
+    GLMSelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int max_length)
         : query_key_value(ctx, hidden_size, 3 * hidden_size), dense(ctx, hidden_size, hidden_size),
           num_attention_heads(num_attention_heads),
           k_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
@@ -333,9 +333,9 @@ class GLMBlock {
 
   public:
     LayerNorm input_layernorm;
-    SelfAttention attention;
+    GLMSelfAttention attention;
     LayerNorm post_attention_layernorm;
-    GLU mlp;
+    GLMMLP mlp;
     int num_layers;
 };
 
