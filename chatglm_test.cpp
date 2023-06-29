@@ -897,6 +897,7 @@ TEST(Pipeline, ChatGLM) {
         GTEST_SKIP() << "Skipping ChatGLM e2e test (ggml model not found)";
     }
     Pipeline pipeline(model_path);
+    EXPECT_TRUE(dynamic_cast<ChatGLMForConditionalGeneration *>(pipeline.model.get()));
 
     // ===== tokenization =====
 
@@ -926,10 +927,10 @@ TEST(Pipeline, ChatGLM) {
 
     // ===== prompter =====
     {
-        ChatGLMPrompter prompter;
-        EXPECT_EQ(prompter.build_prompt({"你好"}), "你好");
-        EXPECT_EQ(prompter.build_prompt({"你好", "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。",
-                                         "晚上睡不着应该怎么办"}),
+        EXPECT_EQ(pipeline.model->build_prompt({"你好"}), "你好");
+        EXPECT_EQ(pipeline.model->build_prompt({"你好",
+                                                "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。",
+                                                "晚上睡不着应该怎么办"}),
                   "[Round 0]\n问：你好\n答：你好👋！我是人工智能助手 "
                   "ChatGLM-6B，很高兴见到你，欢迎问我任何问题。\n[Round 1]\n问：晚上睡不着应该怎么办\n答：");
     }
@@ -966,6 +967,7 @@ TEST(Pipeline, ChatGLM2) {
         GTEST_SKIP() << "Skipping ChatGLM2 e2e test (ggml model not found)";
     }
     Pipeline pipeline(model_path);
+    EXPECT_TRUE(dynamic_cast<ChatGLM2ForConditionalGeneration *>(pipeline.model.get()));
 
     // ===== tokenization =====
 
@@ -998,13 +1000,12 @@ TEST(Pipeline, ChatGLM2) {
 
     // ===== prompter =====
     {
-        ChatGLM2Prompter prompter;
-        EXPECT_EQ(prompter.build_prompt({"你好"}), "[Round 1]\n\n问：你好\n\n答：");
-        EXPECT_EQ(
-            prompter.build_prompt({"你好", "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。",
-                                   "晚上睡不着应该怎么办"}),
-            "[Round 1]\n\n问：你好\n\n答：你好👋！我是人工智能助手 "
-            "ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。\n\n[Round 2]\n\n问：晚上睡不着应该怎么办\n\n答：");
+        EXPECT_EQ(pipeline.model->build_prompt({"你好"}), "[Round 1]\n\n问：你好\n\n答：");
+        EXPECT_EQ(pipeline.model->build_prompt({"你好",
+                                                "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。",
+                                                "晚上睡不着应该怎么办"}),
+                  "[Round 1]\n\n问：你好\n\n答：你好👋！我是人工智能助手 "
+                  "ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。\n\n[Round 2]\n\n问：晚上睡不着应该怎么办\n\n答：");
     }
 
     // ===== generation =====

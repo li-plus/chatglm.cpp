@@ -253,23 +253,6 @@ std::string ChatGLMTokenizer::decode(const std::vector<int> &ids) const {
     return text;
 }
 
-std::string ChatGLMPrompter::build_prompt(const std::vector<std::string> &history) const {
-    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
-
-    std::ostringstream oss_prompt;
-    if (history.size() == 1) {
-        oss_prompt << history.front();
-    } else {
-        for (size_t i = 0; i < history.size(); i += 2) {
-            oss_prompt << "[Round " << i / 2 << "]\n问：" << history[i] << "\n答：";
-            if (i < history.size() - 1) {
-                oss_prompt << history[i + 1] << "\n";
-            }
-        }
-    }
-    return oss_prompt.str();
-}
-
 static std::string regex_replace(const std::string &input, const std::regex &regex,
                                  std::function<std::string(const std::smatch &)> format) {
     std::ostringstream oss;
@@ -627,6 +610,23 @@ ChatGLMForConditionalGeneration::ChatGLMForConditionalGeneration(const ChatGLMCo
 
 ChatGLMForConditionalGeneration::~ChatGLMForConditionalGeneration() { ggml_free(w_ctx_.gctx); }
 
+std::string ChatGLMForConditionalGeneration::build_prompt(const std::vector<std::string> &history) const {
+    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
+
+    std::ostringstream oss_prompt;
+    if (history.size() == 1) {
+        oss_prompt << history.front();
+    } else {
+        for (size_t i = 0; i < history.size(); i += 2) {
+            oss_prompt << "[Round " << i / 2 << "]\n问：" << history[i] << "\n答：";
+            if (i < history.size() - 1) {
+                oss_prompt << history[i + 1] << "\n";
+            }
+        }
+    }
+    return oss_prompt.str();
+}
+
 void ChatGLMForConditionalGeneration::load(ModelLoader &loader) {
     loader.read_tensor("transformer.word_embeddings.weight", transformer.word_embeddings.weight);
     for (int i = 0; i < config.num_layers; i++) {
@@ -716,19 +716,6 @@ std::string ChatGLM2Tokenizer::decode(const std::vector<int> &ids) const {
 bool ChatGLM2Tokenizer::is_special_id(int id) const {
     return id == mask_token_id || id == gmask_token_id || id == smask_token_id || id == sop_token_id ||
            id == eop_token_id;
-}
-
-std::string ChatGLM2Prompter::build_prompt(const std::vector<std::string> &history) const {
-    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
-
-    std::ostringstream oss_prompt;
-    for (size_t i = 0; i < history.size(); i += 2) {
-        oss_prompt << "[Round " << i / 2 + 1 << "]\n\n问：" << history[i] << "\n\n答：";
-        if (i < history.size() - 1) {
-            oss_prompt << history[i + 1] << "\n\n";
-        }
-    }
-    return oss_prompt.str();
 }
 
 ggml_tensor *GLM2SelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const {
@@ -889,6 +876,19 @@ ChatGLM2ForConditionalGeneration::ChatGLM2ForConditionalGeneration(const ChatGLM
     CHATGLM_CHECK(kv_cache_ptr == kv_cache_buffer_.get() + kv_cache_size) << "corrupted kv cache";
 }
 
+std::string ChatGLM2ForConditionalGeneration::build_prompt(const std::vector<std::string> &history) const {
+    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
+
+    std::ostringstream oss_prompt;
+    for (size_t i = 0; i < history.size(); i += 2) {
+        oss_prompt << "[Round " << i / 2 + 1 << "]\n\n问：" << history[i] << "\n\n答：";
+        if (i < history.size() - 1) {
+            oss_prompt << history[i + 1] << "\n\n";
+        }
+    }
+    return oss_prompt.str();
+}
+
 void ChatGLM2ForConditionalGeneration::load(ModelLoader &loader) {
     loader.read_tensor("transformer.embedding.word_embeddings.weight", transformer.word_embeddings.weight);
     for (int i = 0; i < config.num_layers; i++) {
@@ -955,9 +955,6 @@ Pipeline::Pipeline(const std::string &path) {
             std::make_unique<ChatGLMTokenizer>(serialized_model_proto, config.bos_token_id, config.eos_token_id,
                                                config.mask_token_id, config.gmask_token_id, config.pad_token_id);
 
-        // prompter
-        prompter = std::make_unique<ChatGLMPrompter>();
-
         // load model
         model = std::make_unique<ChatGLMForConditionalGeneration>(config);
         model->load(loader);
@@ -971,9 +968,6 @@ Pipeline::Pipeline(const std::string &path) {
         loader.seek(proto_size, SEEK_CUR);
         tokenizer = std::make_unique<ChatGLM2Tokenizer>(serialized_model_proto);
 
-        // prompter
-        prompter = std::make_unique<ChatGLM2Prompter>();
-
         // load model
         model = std::make_unique<ChatGLM2ForConditionalGeneration>(config);
         model->load(loader);
@@ -984,7 +978,7 @@ Pipeline::Pipeline(const std::string &path) {
 
 std::string Pipeline::chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
                            BaseStreamer *streamer) const {
-    std::string prompt = prompter->build_prompt(history);
+    std::string prompt = model->build_prompt(history);
     std::vector<int> input_ids = tokenizer->encode(prompt);
     if ((int)input_ids.size() > gen_config.max_context_length) {
         // sliding window: always take the last max_context_length tokens

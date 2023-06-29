@@ -31,10 +31,6 @@ struct BaseTokenizer {
     virtual std::string decode(const std::vector<int> &ids) const = 0;
 };
 
-struct BasePrompter {
-    virtual std::string build_prompt(const std::vector<std::string> &history) const = 0;
-};
-
 struct InitContext {
     ggml_context *gctx;
     ggml_type dtype;
@@ -166,6 +162,7 @@ struct BaseModelForConditionalGeneration {
           scratch_size_(scratch_size), scratch_buffer_(new char[scratch_size]) {}
     virtual ~BaseModelForConditionalGeneration() = default;
 
+    virtual std::string build_prompt(const std::vector<std::string> &history) const = 0;
     virtual void load(ModelLoader &loader) = 0;
     virtual ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const = 0;
 
@@ -230,10 +227,6 @@ struct ChatGLMTokenizer : public BaseTokenizer {
     static std::string preprocess(const std::string &text);
 
     static std::string postprocess(const std::string &text);
-};
-
-struct ChatGLMPrompter : public BasePrompter {
-    std::string build_prompt(const std::vector<std::string> &history) const override;
 };
 
 struct GLU {
@@ -303,6 +296,8 @@ struct ChatGLMForConditionalGeneration : public BaseModelForConditionalGeneratio
 
     void load(ModelLoader &loader) override;
 
+    std::string build_prompt(const std::vector<std::string> &history) const override;
+
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
 
   public:
@@ -345,10 +340,6 @@ struct ChatGLM2Tokenizer : public BaseTokenizer {
     std::string decode(const std::vector<int> &ids) const override;
 
     bool is_special_id(int id) const;
-};
-
-struct ChatGLM2Prompter : public BasePrompter {
-    std::string build_prompt(const std::vector<std::string> &history) const override;
 };
 
 struct GLM2SelfAttention {
@@ -419,6 +410,8 @@ struct ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGenerati
     ChatGLM2ForConditionalGeneration() = default;
     ChatGLM2ForConditionalGeneration(const ChatGLM2Config &config);
 
+    std::string build_prompt(const std::vector<std::string> &history) const override;
+
     void load(ModelLoader &loader) override;
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
@@ -454,15 +447,12 @@ struct ChatGLM2Pipeline {
 struct Pipeline {
     std::unique_ptr<BaseTokenizer> tokenizer;
     std::unique_ptr<BaseModelForConditionalGeneration> model;
-    std::unique_ptr<BasePrompter> prompter;
     std::unique_ptr<MappedFile> mapped_file;
 
     Pipeline(const std::string &path);
 
     std::string chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
                      BaseStreamer *streamer = nullptr) const;
-
-    static std::string build_prompt(const std::vector<std::string> &history);
 };
 
 } // namespace chatglm
