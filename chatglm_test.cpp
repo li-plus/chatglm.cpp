@@ -32,19 +32,14 @@ class ChatGLMTest : public ::testing::Test {
 
     void SetUp() override {
         ictx.dtype = GGML_TYPE_F32;
-        ictx.gctx = ggml_init({1024 * 1024, nullptr, false});
+        ictx.gctx = GGMLContext({1024 * 1024, nullptr, false});
 
         scratch_buf.resize(1024 * 1024);
 
-        ctx.gctx = ggml_init({1024 * 1024, nullptr, false});
+        ctx.gctx = GGMLContext({1024 * 1024, nullptr, false});
         ctx.scratch = {.offs = 0, .size = scratch_buf.size(), .data = scratch_buf.data()};
         ctx.gf = {};
         ctx.gf.n_threads = 1;
-    }
-
-    void TearDown() override {
-        ggml_free(ictx.gctx);
-        ggml_free(ctx.gctx);
     }
 };
 
@@ -66,14 +61,14 @@ print("y", y.flatten())
     float y_data[]{0.5684,  -1.0845, -1.3986, -0.4033, -0.5966, 0.1820,  1.5410, -0.2934,
                    -2.1788, 0.4033,  0.8380,  -0.7193, -0.4033, -0.5966, 0.1820};
 
-    ggml_tensor *x = ggml_new_tensor_1d(ctx.gctx, GGML_TYPE_I32, 5);
+    ggml_tensor *x = ggml_new_tensor_1d(ctx.gctx.get(), GGML_TYPE_I32, 5);
     memcpy(x->data, x_data, sizeof(x_data));
     Embedding model(&ictx, 4, 3);
     memcpy(model.weight->data, weight_data, sizeof(weight_data));
     ggml_tensor *y = model.forward(&ctx, x);
 
     ggml_build_forward_expand(&ctx.gf, y);
-    ggml_graph_compute(ctx.gctx, &ctx.gf);
+    ggml_graph_compute(ctx.gctx.get(), &ctx.gf);
 
     expect_all_close((float *)y->data, y_data, ggml_nelements(y));
 }
@@ -101,7 +96,7 @@ print('y', y.flatten())
     float y_data[]{-0.1298, 4.6113, -0.3385, -1.6945, -0.8222, -6.0819, -4.2276, 1.0356,
                    -0.9776, 3.5312, -1.1743, -1.9665, 0.4142,  -4.9518, -0.6050, 1.8991};
 
-    ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_F32, 3, 2);
+    ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 3, 2);
     memcpy(x->data, x_data, sizeof(x_data));
 
     // fp32
@@ -114,7 +109,7 @@ print('y', y.flatten())
         ggml_tensor *y = model.forward(&ctx, x);
 
         ggml_build_forward_expand(&ctx.gf, y);
-        ggml_graph_compute(ctx.gctx, &ctx.gf);
+        ggml_graph_compute(ctx.gctx.get(), &ctx.gf);
 
         expect_all_close((float *)y->data, y_data, ggml_nelements(y));
     }
@@ -128,7 +123,7 @@ print('y', y.flatten())
         ggml_tensor *y = model.forward(&ctx, x);
 
         ggml_build_forward_expand(&ctx.gf, y);
-        ggml_graph_compute(ctx.gctx, &ctx.gf);
+        ggml_graph_compute(ctx.gctx.get(), &ctx.gf);
 
         EXPECT_EQ(y->type, GGML_TYPE_F32);
         expect_all_close((float *)y->data, y_data, ggml_nelements(y), 5e-3);
@@ -157,7 +152,7 @@ print('y', y.flatten())
     float y_data[]{-0.9153, -2.2485, -1.4268, -0.2403, 1.6855, 0.1889,  -0.2470, 0.4726, 0.4030,
                    -0.8501, -2.0141, -1.5776, -0.4376, 1.5300, -0.6553, 0.7756,  0.6091, -0.1405};
 
-    ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_F32, 9, 2);
+    ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 9, 2);
     memcpy(x->data, x_data, sizeof(x_data));
     LayerNorm model(&ictx, 9);
     memcpy(model.weight->data, w_data, sizeof(w_data));
@@ -165,7 +160,7 @@ print('y', y.flatten())
     ggml_tensor *y = model.forward(&ctx, x);
 
     ggml_build_forward_expand(&ctx.gf, y);
-    ggml_graph_compute(ctx.gctx, &ctx.gf);
+    ggml_graph_compute(ctx.gctx.get(), &ctx.gf);
 
     expect_all_close((float *)y->data, y_data, ggml_nelements(y));
 }
@@ -180,12 +175,12 @@ TEST_F(ChatGLMTest, RMSNorm) {
     RMSNorm model(&ictx, 7);
     memcpy(model.weight->data, w_data, sizeof(w_data));
 
-    ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_F32, 7, 2);
+    ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 7, 2);
     memcpy(x->data, x_data, sizeof(x_data));
     ggml_tensor *y = model.forward(&ctx, x);
 
     ggml_build_forward_expand(&ctx.gf, y);
-    ggml_graph_compute(ctx.gctx, &ctx.gf);
+    ggml_graph_compute(ctx.gctx.get(), &ctx.gf);
 
     expect_all_close((float *)y->data, y_data, ggml_nelements(y));
 }
@@ -220,7 +215,7 @@ print("y", y.flatten())
     float dense_4h_to_h_bias_data[]{0.0540, -0.0486, -0.0475};
     float y_data[]{0.1555, -0.2438, 0.0476, 0.2104, 0.1448, 0.0937};
 
-    ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_F32, 3, 2);
+    ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 3, 2);
     memcpy(x->data, x_data, sizeof(x_data));
 
     GLU model(&ictx, 3);
@@ -231,7 +226,7 @@ print("y", y.flatten())
     ggml_tensor *y = model.forward(&ctx, x);
 
     ggml_build_forward_expand(&ctx.gf, y);
-    ggml_graph_compute(ctx.gctx, &ctx.gf);
+    ggml_graph_compute(ctx.gctx.get(), &ctx.gf);
 
     expect_all_close((float *)y->data, y_data, ggml_nelements(y));
 }
@@ -454,12 +449,12 @@ print("y3", y3.flatten())
             1.5804e-01, -1.7552e-01, 2.2854e-01,  -1.2723e-01, -2.5867e-01, -3.2931e-02, 2.1397e-01, 2.2805e-01,
             1.5255e-01, 1.1970e-02,  4.6676e-02,  -9.0893e-02, 1.3114e-01,  5.0670e-02,  2.1247e-01, 4.2616e-02};
 
-        ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_F32, 16, 4);
+        ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 16, 4);
         memcpy(x->data, x_data, sizeof(x_data));
         ggml_tensor *y = model.forward(&ctx, x, 0, 4);
 
         ggml_build_forward_expand(&ctx.gf, y);
-        ggml_graph_compute(ctx.gctx, &ctx.gf);
+        ggml_graph_compute(ctx.gctx.get(), &ctx.gf);
 
         expect_all_close((float *)y->data, y_data, ggml_nelements(y));
     }
@@ -470,13 +465,13 @@ print("y3", y3.flatten())
                        0.0485, 0.9935,  2.1180, -0.1827, -0.7768, 1.7764, -0.5033, 0.0566};
         float y_data[]{0.1011, -0.1058, 0.1434,  -0.1980, -0.1304, 0.0632, 0.2109, 0.0619,
                        0.0893, 0.0146,  -0.1291, -0.1430, 0.1655,  0.0916, 0.1488, -0.0282};
-        ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_F32, 16, 1);
+        ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 16, 1);
         memcpy(x->data, x_data, sizeof(x_data));
 
         ggml_tensor *y = model.forward(&ctx, x, 4, 4);
 
         ggml_build_forward_expand(&ctx.gf, y);
-        ggml_graph_compute(ctx.gctx, &ctx.gf);
+        ggml_graph_compute(ctx.gctx.get(), &ctx.gf);
 
         expect_all_close((float *)y->data, y_data, ggml_nelements(y));
     }
@@ -485,13 +480,13 @@ print("y3", y3.flatten())
                        -0.6305, -0.0654, 0.6188,  2.0020, 0.2952,  0.5314,  -0.5227, 0.0995};
         float y_data[]{0.1479, -0.1224, 0.2174,  -0.1259, -0.1662, 0.0400, 0.2235, 0.1599,
                        0.0633, 0.0484,  -0.0541, -0.1475, 0.1395,  0.0448, 0.2216, 0.0838};
-        ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_F32, 16, 1);
+        ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 16, 1);
         memcpy(x->data, x_data, sizeof(x_data));
 
         ggml_tensor *y = model.forward(&ctx, x, 5, 4);
 
         ggml_build_forward_expand(&ctx.gf, y);
-        ggml_graph_compute(ctx.gctx, &ctx.gf);
+        ggml_graph_compute(ctx.gctx.get(), &ctx.gf);
 
         expect_all_close((float *)y->data, y_data, ggml_nelements(y));
     }
@@ -631,7 +626,7 @@ print("y", y.flatten())
                    -7.4960, 11.8125, 7.5786,  -9.6781, 7.1442,  14.2660, 4.8352,  -7.2181,  6.3933,  -4.4885, -10.8612,
                    -2.3747, 0.0401,  -0.9771, 6.1194,  2.9300,  2.2652,  6.4303,  -17.4357, -5.0949, 5.3586};
 
-    ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_F32, 8, 4);
+    ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 8, 4);
     memcpy(x->data, x_data, sizeof(x_data));
 
     GLMBlock model(&ictx, 8, 2, 28, 16);
@@ -652,7 +647,7 @@ print("y", y.flatten())
     ggml_tensor *y = model.forward(&ctx, x, 0, 4);
 
     ggml_build_forward_expand(&ctx.gf, y);
-    ggml_graph_compute(ctx.gctx, &ctx.gf);
+    ggml_graph_compute(ctx.gctx.get(), &ctx.gf);
 
     expect_all_close((float *)y->data, y_data, ggml_nelements(y), 5e-4);
 }
@@ -804,12 +799,12 @@ TEST_F(ChatGLMTest, GLM2Block) {
     memcpy(model.mlp.dense_h_to_4h.weight->data, mlp_dense_h_to_4h_weight, sizeof(mlp_dense_h_to_4h_weight));
     memcpy(model.mlp.dense_4h_to_h.weight->data, mlp_dense_4h_to_h_weight, sizeof(mlp_dense_4h_to_h_weight));
 
-    ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_F32, hidden_size, seq_len);
+    ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
     memcpy(x->data, x_data, sizeof(x_data));
 
     ggml_tensor *y = model.forward(&ctx, x, 0);
     ggml_build_forward_expand(&ctx.gf, y);
-    ggml_graph_compute(ctx.gctx, &ctx.gf);
+    ggml_graph_compute(ctx.gctx.get(), &ctx.gf);
 
     expect_all_close((float *)y->data, y_data, ggml_nelements(y));
 }
@@ -850,12 +845,12 @@ TEST_F(ChatGLMTest, quantize) {
         -1.4777e+00, -1.7557e+00, 7.6166e-02,  -1.0786e+00, 1.4403e+00,  -1.1059e-01, 5.7686e-01,  -1.6917e-01,
         -6.4025e-02, 1.0384e+00,  9.0682e-01,  -4.7551e-01, -8.7074e-01, 1.4474e-01,  1.9029e+00,  3.9040e-01};
 
-    ggml_tensor *src = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_F32, 128, 2);
+    ggml_tensor *src = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 128, 2);
     memcpy(src->data, src_data, sizeof(src_data));
 
     // q8_0
     {
-        ggml_tensor *q8_dst = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_Q8_0, 128, 2);
+        ggml_tensor *q8_dst = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_Q8_0, 128, 2);
         int64_t hist[16]{};
         ggml_quantize_q8_0((float *)src->data, q8_dst->data, ggml_nelements(src), src->ne[0], hist);
 
@@ -867,7 +862,7 @@ TEST_F(ChatGLMTest, quantize) {
     }
     // q4_0
     {
-        ggml_tensor *q4_dst = ggml_new_tensor_2d(ctx.gctx, GGML_TYPE_Q4_0, 128, 2);
+        ggml_tensor *q4_dst = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_Q4_0, 128, 2);
         int64_t hist[16]{};
         ggml_quantize_q4_0((float *)src->data, q4_dst->data, ggml_nelements(src), src->ne[0], hist);
 
