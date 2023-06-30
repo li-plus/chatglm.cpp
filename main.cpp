@@ -1,5 +1,6 @@
 #include "chatglm.h"
 #include <getopt.h>
+#include <iomanip>
 #include <iostream>
 
 struct Args {
@@ -103,6 +104,7 @@ static Args parse_args(int argc, char **argv) {
 
 void chat(const Args &args) {
     chatglm::Pipeline pipeline(args.model_path);
+    std::string model_name = pipeline.model->name();
 
     chatglm::TextStreamer streamer(pipeline.tokenizer.get());
     chatglm::GenerationConfig gen_config(args.max_length, args.max_context_length, args.temp > 0, args.top_k,
@@ -118,7 +120,8 @@ void chat(const Args &args) {
 
         std::vector<std::string> history;
         while (1) {
-            std::cout << "Prompt  > " << std::flush;
+            std::cout << std::setw(model_name.size()) << std::left << "Prompt"
+                      << " > " << std::flush;
             std::string prompt;
             if (!std::getline(std::cin, prompt)) {
                 break;
@@ -127,7 +130,7 @@ void chat(const Args &args) {
                 continue;
             }
             history.emplace_back(std::move(prompt));
-            std::cout << "ChatGLM > ";
+            std::cout << model_name << " > ";
             std::string output = pipeline.chat(history, gen_config, &streamer);
             history.emplace_back(std::move(output));
         }
