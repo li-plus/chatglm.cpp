@@ -125,16 +125,15 @@ def make_data_glm2_block():
     m.input_layernorm.weight.data.uniform_()
     m.post_attention_layernorm.weight.data.uniform_()
 
-    seq_length = 5
+    seq_length = 3
     rotary_dim = config.hidden_size // config.num_attention_heads if config.kv_channels is None else config.kv_channels
-    rotary_pos_emb = RotaryEmbedding(rotary_dim // 2, original_impl=config.original_rope)
-    rotary_pos_emb = rotary_pos_emb(seq_length)
-    rotary_pos_emb = rotary_pos_emb[None, :seq_length]
-    rotary_pos_emb = rotary_pos_emb.transpose(0, 1).contiguous()
+    rotary_pos_emb_module = RotaryEmbedding(rotary_dim // 2, original_impl=config.original_rope)
+    rotary_pos_emb = rotary_pos_emb_module(8)[None, :seq_length].transpose(0, 1).contiguous()
 
+    # self attention
     x = torch.randn(seq_length, 1, config.hidden_size)
     with torch.no_grad():
-        y, _ = m(x, attention_mask=None, rotary_pos_emb=rotary_pos_emb)
+        y, kv_cache = m(x, attention_mask=None, rotary_pos_emb=rotary_pos_emb)
 
     print(m)
 
@@ -148,6 +147,23 @@ def make_data_glm2_block():
 
     print("x", x.flatten())
     print("y", y.flatten())
+
+    # cross attention
+    position_ids = torch.tensor([[seq_length]])
+    rotary_pos_emb = rotary_pos_emb_module(8)[position_ids].transpose(0, 1).contiguous()
+    x = torch.randn(1, 1, config.hidden_size)
+    with torch.no_grad():
+        y, kv_cache = m(x, attention_mask=None, rotary_pos_emb=rotary_pos_emb, kv_cache=kv_cache)
+    print("x2", x.flatten())
+    print("y2", y.flatten())
+
+    position_ids = torch.tensor([[seq_length + 1]])
+    rotary_pos_emb = rotary_pos_emb_module(8)[position_ids].transpose(0, 1).contiguous()
+    x = torch.randn(1, 1, config.hidden_size)
+    with torch.no_grad():
+        y, kv_cache = m(x, attention_mask=None, rotary_pos_emb=rotary_pos_emb, kv_cache=kv_cache)
+    print("x3", x.flatten())
+    print("y3", y.flatten())
 
 
 if __name__ == "__main__":

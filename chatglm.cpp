@@ -47,13 +47,16 @@ std::string to_string(ggml_tensor *tensor, bool with_data) {
     oss << "ggml_tensor(";
 
     if (with_data) {
-        oss << "[";
+        if (tensor->n_dims > 3)
+            oss << "[";
         for (int i3 = 0; i3 < tensor->ne[3]; i3++) {
-            oss << '[';
+            if (tensor->n_dims > 2)
+                oss << (i3 > 0 ? ",\n\n[" : "[");
             for (int i2 = 0; i2 < tensor->ne[2]; i2++) {
-                oss << '[';
+                if (tensor->n_dims > 1)
+                    oss << (i2 > 0 ? ",\n\n[" : "[");
                 for (int i1 = 0; i1 < tensor->ne[1]; i1++) {
-                    oss << '[';
+                    oss << (i1 > 0 ? ",\n[" : "[");
                     for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
                         auto ptr = (char *)tensor->data + i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] +
                                    i0 * tensor->nb[0];
@@ -67,16 +70,19 @@ std::string to_string(ggml_tensor *tensor, bool with_data) {
                         }
                         oss << (i0 > 0 ? ", " : "") << std::setw(7) << std::fixed << std::setprecision(4) << val;
                     }
-                    oss << "],\n";
+                    oss << "]";
                 }
-                oss << "],\n";
+                if (tensor->n_dims > 1)
+                    oss << "]";
             }
-            oss << "],\n";
+            if (tensor->n_dims > 2)
+                oss << "]";
         }
-        oss << "], ";
+        if (tensor->n_dims > 3)
+            oss << "]";
     }
 
-    oss << "shape=" << shape_to_string(tensor) << ", stride=" << strides_to_string(tensor) << ")";
+    oss << ", shape=" << shape_to_string(tensor) << ", stride=" << strides_to_string(tensor) << ")";
     return oss.str();
 }
 
@@ -772,7 +778,7 @@ ggml_tensor *GLM2SelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden
                                v_cache->nb[1], 0, v_cache->nb[2],
                                0); // [mqa_n_head, mqa_scale, head_size, klen]
 
-    // TODO: masked = (npast == 0)?
+    // flash attention
     ggml_tensor *context_layer = ggml_flash_attn(ctx->gctx.get(), query_layer, key_layer, value_layer,
                                                  true); // [mqa_scale, mqa_n_head, qlen, head_size]
     context_layer = ggml_reshape_2d(
@@ -781,21 +787,6 @@ ggml_tensor *GLM2SelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden
 
     ggml_tensor *attn_output = dense.forward(ctx, context_layer);
     return attn_output;
-    // ggml_tensor *attn_scores = ggml_mul_mat(ctx->gctx.get(), key_layer, query_layer); // [n_head, qlen, klen]
-    // if (n_past == 0) {
-    //     // build attention mask for context input
-    //     ggml_tensor *inf = ggml_new_tensor_3d(ctx->gctx.get(), attn_scores->type, 1, qlen - 1, num_attention_heads);
-    //     ggml_set_f32(inf, -INFINITY);
-    //     ggml_tensor *masked_attn_scores = ggml_view_3d(
-    //         ctx->gctx.get(), attn_scores, 1, qlen - 1, num_attention_heads, qlen * ggml_element_size(attn_scores),
-    //         qlen * qlen * ggml_element_size(attn_scores), (qlen - 1) * ggml_element_size(attn_scores));
-    //     ggml_build_forward_expand(&ctx->gf, ggml_cpy(ctx->gctx.get(), inf, masked_attn_scores));
-    // }
-    // attn_scores = ggml_scale_inplace(ctx->gctx.get(), attn_scores, ggml_new_f32(ctx->gctx.get(), 1.f /
-    // std::sqrt(head_size))); ggml_tensor *attn_probs = ggml_soft_max_inplace(ctx->gctx.get(), attn_scores); //
-    // [n_head, qlen, klen]
-
-    // ggml_tensor *context_layer = ggml_mul_mat(ctx->gctx.get(), value_layer, attn_probs); // [n_head, qlen, head_size]
 }
 
 ggml_tensor *GLM2MLP::forward(ForwardContext *ctx, ggml_tensor *hidden_states) const {
