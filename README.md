@@ -47,7 +47,7 @@ cmake --build build -j
 
 Now you may chat with the quantized ChatGLM model by running:
 ```sh
-./build/bin/main -m chatglm-ggml.bin -q 你好
+./build/bin/main -m chatglm-ggml.bin -p 你好
 # 你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。
 ```
 
