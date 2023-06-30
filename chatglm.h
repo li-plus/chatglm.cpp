@@ -210,17 +210,26 @@ struct GenerationConfig {
           top_p(top_p), temperature(temperature), num_threads(num_threads) {}
 };
 
+enum ModelArch {
+    CHATGLM = 1,
+    CHATGLM2 = 2,
+};
+
+std::string to_string(ModelArch arch);
+
 class BaseModelForConditionalGeneration {
   public:
-    BaseModelForConditionalGeneration() : eos_token_id_(0), max_seq_len_(0), mem_size_(0), scratch_size_(0) {}
-    BaseModelForConditionalGeneration(int eos_token_id, int max_seq_len, size_t mem_size, size_t scratch_size)
-        : eos_token_id_(eos_token_id), max_seq_len_(max_seq_len), mem_size_(mem_size), mem_buffer_(new char[mem_size]),
-          scratch_size_(scratch_size), scratch_buffer_(new char[scratch_size]) {}
+    BaseModelForConditionalGeneration(ModelArch arch, int eos_token_id, int max_seq_len, size_t mem_size,
+                                      size_t scratch_size)
+        : arch_(arch), eos_token_id_(eos_token_id), max_seq_len_(max_seq_len), mem_size_(mem_size),
+          mem_buffer_(new char[mem_size]), scratch_size_(scratch_size), scratch_buffer_(new char[scratch_size]) {}
     virtual ~BaseModelForConditionalGeneration() = default;
 
     virtual std::string build_prompt(const std::vector<std::string> &history) const = 0;
     virtual void load(ModelLoader &loader) = 0;
     virtual ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const = 0;
+
+    std::string name() const { return to_string(arch_); }
 
     std::vector<int> generate(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
                               BaseStreamer *streamer = nullptr) const;
@@ -240,6 +249,7 @@ class BaseModelForConditionalGeneration {
     static void sampling_softmax_inplace(TokenIdScore *first, TokenIdScore *last);
 
   private:
+    ModelArch arch_;
     int eos_token_id_;
     int max_seq_len_;
     size_t mem_size_;

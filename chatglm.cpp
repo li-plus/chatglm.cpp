@@ -349,6 +349,17 @@ static inline int get_num_physical_cores() {
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
 }
 
+std::string to_string(ModelArch arch) {
+    switch (arch) {
+    case CHATGLM:
+        return "ChatGLM";
+    case CHATGLM2:
+        return "ChatGLM2";
+    default:
+        CHATGLM_THROW << "unknown model arch " << arch;
+    }
+}
+
 int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int> &input_ids,
                                                            const GenerationConfig &gen_config, int n_past,
                                                            int n_ctx) const {
@@ -592,7 +603,8 @@ ggml_tensor *ChatGLMModel::forward(ForwardContext *ctx, ggml_tensor *input_ids, 
 }
 
 ChatGLMForConditionalGeneration::ChatGLMForConditionalGeneration(const ChatGLMConfig &config)
-    : BaseModelForConditionalGeneration(config.eos_token_id, config.max_sequence_length, MEM_SIZE, SCRATCH_SIZE),
+    : BaseModelForConditionalGeneration(CHATGLM, config.eos_token_id, config.max_sequence_length, MEM_SIZE,
+                                        SCRATCH_SIZE),
       config(config) {
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
     const size_t num_tensors = 3 + config.num_layers * 14;
@@ -682,11 +694,6 @@ ggml_tensor *ChatGLMForConditionalGeneration::forward(ForwardContext *ctx, ggml_
     ggml_tensor *lm_logits = ggml_mul_mat(ctx->gctx.get(), lm_head_weight, transformer_outputs);
     return lm_logits;
 }
-
-enum ModelArch {
-    CHATGLM = 1,
-    CHATGLM2 = 2,
-};
 
 // ===== ChatGLM2-6B =====
 
@@ -842,7 +849,7 @@ ggml_tensor *ChatGLM2Model::forward(ForwardContext *ctx, ggml_tensor *input_ids,
 }
 
 ChatGLM2ForConditionalGeneration::ChatGLM2ForConditionalGeneration(const ChatGLM2Config &config)
-    : BaseModelForConditionalGeneration(config.eos_token_id, config.seq_length, MEM_SIZE, SCRATCH_SIZE),
+    : BaseModelForConditionalGeneration(CHATGLM2, config.eos_token_id, config.seq_length, MEM_SIZE, SCRATCH_SIZE),
       config(config) {
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
     const size_t num_tensors = 3 + config.num_layers * 9;
