@@ -11,7 +11,7 @@ parser.add_argument("-m", "--model", default="chatglm-ggml.bin", type=str)
 parser.add_argument("-t", "--threads", default=0, type=int)
 args = parser.parse_args()
 
-pipeline = chatglm_cpp.ChatGLMPipeline(args.model)
+pipeline = chatglm_cpp.Pipeline(args.model)
 
 """Override Chatbot.postprocess"""
 
@@ -68,7 +68,12 @@ def predict(input, chatbot, max_length, top_p, temperature, history):
     response = ""
     history.append(input)
     for response_piece in pipeline.stream_chat(
-        history, max_length=max_length, do_sample=temperature > 0, top_p=top_p, temperature=temperature
+        history,
+        max_length=max_length,
+        do_sample=temperature > 0,
+        top_p=top_p,
+        temperature=temperature,
+        num_threads=args.threads,
     ):
         response += response_piece
         chatbot[-1] = (parse_text(input), parse_text(response))

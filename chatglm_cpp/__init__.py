@@ -22,6 +22,7 @@ class Pipeline(_C.Pipeline):
         top_k: int = 0,
         top_p: float = 0.7,
         temperature: float = 0.95,
+        num_threads: int = 0,
     ) -> Iterator[str]:
         gen_config = _C.GenerationConfig(
             max_length=max_length,
@@ -30,6 +31,7 @@ class Pipeline(_C.Pipeline):
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
+            num_threads=num_threads,
         )
 
         input_ids = self.tokenizer.encode_history(history, max_context_length)
@@ -75,6 +77,7 @@ class Pipeline(_C.Pipeline):
         top_k: int = 0,
         top_p: float = 0.7,
         temperature: float = 0.95,
+        num_threads: int = 0,
     ) -> str:
         gen_config = _C.GenerationConfig(
             max_length=max_length,
@@ -83,6 +86,7 @@ class Pipeline(_C.Pipeline):
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
+            num_threads=num_threads,
         )
 
         input_ids = self.tokenizer.encode_history(history, max_context_length)

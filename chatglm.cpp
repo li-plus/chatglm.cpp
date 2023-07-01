@@ -958,6 +958,10 @@ Pipeline::Pipeline(const std::string &path) {
     // load model type
     ModelType model_type = (ModelType)loader.read_basic<int>();
     if (model_type == MODEL_TYPE_CHATGLM) {
+        // load version
+        int version = loader.read_basic<int>();
+        CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
+
         // load config
         ChatGLMConfig config = loader.read_basic<ChatGLMConfig>();
 
@@ -971,6 +975,10 @@ Pipeline::Pipeline(const std::string &path) {
         model = std::make_unique<ChatGLMForConditionalGeneration>(config);
         model->load(loader);
     } else if (model_type == MODEL_TYPE_CHATGLM2) {
+        // load version
+        int version = loader.read_basic<int>();
+        CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
+
         // load config
         ChatGLM2Config config = loader.read_basic<ChatGLM2Config>();
 

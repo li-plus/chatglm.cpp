@@ -130,7 +130,7 @@ class BaseConverter:
         # convert all weights to fp16
         with open(save_path, "wb") as f:
             f.write(b"ggml")  # magic
-            f.write(struct.pack("i", cls.MODEL_TYPE.value))
+            f.write(struct.pack("ii", cls.MODEL_TYPE.value, 1))  # model type & version
             cls.dump_config(f, model.config, ggml_type)
             cls.dump_tokenizer(f, tokenizer)
             cls.dump_model(f, model, ggml_type)
