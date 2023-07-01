@@ -682,11 +682,16 @@ void ChatGLMForConditionalGeneration::load(ModelLoader &loader) {
         << "corrupted model weights";
 
 #ifdef GGML_USE_CUBLAS
+    auto transform_tensor_to_cuda = [](ggml_tensor *tensor) {
+        tensor->backend = GGML_BACKEND_GPU;
+        ggml_cuda_transform_tensor(tensor->data, tensor);
+    };
+
     for (int i = 0; i < config.num_hidden_layers; i++) {
-        ggml_cuda_transform_tensor(model->transformer.layers[i].attention.query_key_value.weight);
-        ggml_cuda_transform_tensor(model->transformer.layers[i].attention.dense.weight);
-        ggml_cuda_transform_tensor(model->transformer.layers[i].mlp.dense_h_to_4h.weight);
-        ggml_cuda_transform_tensor(model->transformer.layers[i].mlp.dense_4h_to_h.weight);
+        transform_tensor_to_cuda(transformer.layers[i].attention.query_key_value.weight);
+        transform_tensor_to_cuda(transformer.layers[i].attention.dense.weight);
+        transform_tensor_to_cuda(transformer.layers[i].mlp.dense_h_to_4h.weight);
+        transform_tensor_to_cuda(transformer.layers[i].mlp.dense_4h_to_h.weight);
     }
 #endif
 }
@@ -923,12 +928,18 @@ void ChatGLM2ForConditionalGeneration::load(ModelLoader &loader) {
         << "corrupted model weights";
 
 #ifdef GGML_USE_CUBLAS
+    auto transform_tensor_to_cuda = [](ggml_tensor *tensor) {
+        tensor->backend = GGML_BACKEND_GPU;
+        ggml_cuda_transform_tensor(tensor->data, tensor);
+    };
+
     for (int i = 0; i < config.num_hidden_layers; i++) {
-        ggml_cuda_transform_tensor(transformer.layers[i].attention.query_key_value.weight);
-        ggml_cuda_transform_tensor(transformer.layers[i].attention.dense.weight);
-        ggml_cuda_transform_tensor(transformer.layers[i].mlp.dense_h_to_4h.weight);
-        ggml_cuda_transform_tensor(transformer.layers[i].mlp.dense_4h_to_h.weight);
+        transform_tensor_to_cuda(transformer.layers[i].attention.query_key_value.weight);
+        transform_tensor_to_cuda(transformer.layers[i].attention.dense.weight);
+        transform_tensor_to_cuda(transformer.layers[i].mlp.dense_h_to_4h.weight);
+        transform_tensor_to_cuda(transformer.layers[i].mlp.dense_4h_to_h.weight);
     }
+    transform_tensor_to_cuda(lm_head.weight);
 #endif
 }
 

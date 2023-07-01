@@ -496,7 +496,7 @@ class ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGeneratio
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
 
   public:
-    static constexpr size_t MEM_SIZE = 272ull * 1024 * 1024;
+    static constexpr size_t MEM_SIZE = 512ull * 1024 * 1024;
     static constexpr size_t SCRATCH_SIZE = 144ull * 1024 * 1024;
 
     ChatGLM2Config config;
