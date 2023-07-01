@@ -41,7 +41,7 @@ HERE = Path(__file__).resolve().parent
 version = re.search(r'__version__ = "(.*?)"', (HERE / "chatglm_cpp/__init__.py").read_text()).group(1)
 
 setup(
-    name="chatglm_cpp",
+    name="chatglm-cpp",
     version=version,
     author="Jiahao Li",
     author_email="liplus17@163.com",

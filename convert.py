@@ -1,5 +1,5 @@
 """
-Convert Hugging Face ChatGLM models to GGML format
+Convert Hugging Face ChatGLM/ChatGLM2 models to GGML format
 """
 import argparse
 import platform
@@ -23,21 +23,14 @@ if platform.system() == "Darwin":
     sys.modules["cpm_kernels"] = object()
 
 
-class GgmlType(Enum):
+class GGMLType(Enum):
     F32 = 0
     F16 = 1
     Q4_0 = 2
     Q8_0 = 8
 
 
-TORCH_TO_GGML_DTYPE = {
-    torch.float32: GgmlType.F32,
-    torch.float16: GgmlType.F16,
-    torch.int8: GgmlType.Q8_0,
-}
-
-
-class ModelArch(Enum):
+class ModelType(Enum):
     CHATGLM = 1
     CHATGLM2 = 2
 
@@ -68,7 +61,7 @@ def quantize_q4_0(tensor: torch.Tensor) -> torch.CharTensor:
     return tensor
 
 
-def dump_tensor(f, name: str, tensor: torch.Tensor, ggml_type: GgmlType):
+def dump_tensor(f, name: str, tensor: torch.Tensor, ggml_type: GGMLType):
     assert tensor.dtype == torch.float32
 
     # tensor name
@@ -79,13 +72,13 @@ def dump_tensor(f, name: str, tensor: torch.Tensor, ggml_type: GgmlType):
     f.write(struct.pack("i" * (2 + tensor.ndim), tensor.ndim, *tensor.shape, ggml_type.value))
 
     # tensor data
-    if ggml_type == GgmlType.F32:
+    if ggml_type == GGMLType.F32:
         tensor = tensor.float()
-    elif ggml_type == GgmlType.F16:
+    elif ggml_type == GGMLType.F16:
         tensor = tensor.half()
-    elif ggml_type == GgmlType.Q8_0:
+    elif ggml_type == GGMLType.Q8_0:
         tensor = quantize_q8_0(tensor)
-    elif ggml_type == GgmlType.Q4_0:
+    elif ggml_type == GGMLType.Q4_0:
         tensor = quantize_q4_0(tensor)
     else:
         raise NotImplementedError(f"Cannot dump tensor of dtype {tensor.dtype}")
@@ -123,7 +116,7 @@ def dump_state_dict(f, weight_names, state_dict, quantization_bit, ggml_type):
             # 1d weight: convert it to float32
             assert tensor.ndim == 1
             tensor = tensor.float()
-            tensor_ggml_type = GgmlType.F32
+            tensor_ggml_type = GGMLType.F32
 
         dump_tensor(f, name, tensor, tensor_ggml_type)
         tensor_info.append((name, tensor.shape, tensor_ggml_type.name))
@@ -137,16 +130,16 @@ class BaseConverter:
         # convert all weights to fp16
         with open(save_path, "wb") as f:
             f.write(b"ggml")  # magic
-            f.write(struct.pack("i", cls.MODEL_ARCH.value))
+            f.write(struct.pack("i", cls.MODEL_TYPE.value))
             cls.dump_config(f, model.config, ggml_type)
             cls.dump_tokenizer(f, tokenizer)
             cls.dump_model(f, model, ggml_type)
 
-        print(f"{cls.MODEL_ARCH.name} GGML model saved to {save_path}")
+        print(f"{cls.MODEL_TYPE.name} GGML model saved to {save_path}")
 
 
 class ChatGLMConverter(BaseConverter):
-    MODEL_ARCH = ModelArch.CHATGLM
+    MODEL_TYPE = ModelType.CHATGLM
 
     @staticmethod
     def dump_config(f, config, ggml_type):
@@ -155,17 +148,17 @@ class ChatGLMConverter(BaseConverter):
             config.inner_hidden_size == 4 * config.hidden_size
         ), "unimplemented: inner_hidden_size should be 4 times hidden_size"
         config_values = [
+            ggml_type.value,
             config.vocab_size,
             config.hidden_size,
             config.num_attention_heads,
             config.num_layers,
+            config.inner_hidden_size,
             config.max_sequence_length,
             config.bos_token_id,
             config.eos_token_id,
-            config.gmask_token_id,
-            config.mask_token_id,
             config.pad_token_id,
-            ggml_type.value,
+            config.sep_token_id if config.sep_token_id is not None else -1,
         ]
         f.write(struct.pack("i" * len(config_values), *config_values))
 
@@ -205,7 +198,7 @@ class ChatGLMConverter(BaseConverter):
 
 
 class ChatGLM2Converter(BaseConverter):
-    MODEL_ARCH = ModelArch.CHATGLM2
+    MODEL_TYPE = ModelType.CHATGLM2
 
     @staticmethod
     def dump_config(f, config, ggml_type):
@@ -223,15 +216,18 @@ class ChatGLM2Converter(BaseConverter):
         assert config.rmsnorm is True, "unimplemented: rmsnorm must be true"
 
         config_values = [
+            ggml_type.value,
             config.padded_vocab_size,
             config.hidden_size,
             config.num_attention_heads,
-            config.multi_query_group_num,
-            config.ffn_hidden_size,
             config.num_layers,
+            config.ffn_hidden_size,
             config.seq_length,
+            config.bos_token_id if config.bos_token_id is not None else -1,
             config.eos_token_id,
-            ggml_type.value,
+            config.pad_token_id,
+            config.sep_token_id if config.sep_token_id is not None else -1,
+            config.multi_query_group_num,
         ]
 
         f.write(struct.pack("i" * len(config_values), *config_values))
@@ -270,7 +266,7 @@ def main():
     parser.add_argument("-t", "--type", type=str, default="q4_0", choices=["f32", "f16", "q8_0", "q4_0"])
     args = parser.parse_args()
 
-    ggml_type = GgmlType[args.type.upper()]
+    ggml_type = GGMLType[args.type.upper()]
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
     model = AutoModel.from_pretrained(args.model_name_or_path, trust_remote_code=True)
     if args.lora_model_name_or_path is not None:

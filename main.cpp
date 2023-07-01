@@ -104,7 +104,7 @@ static Args parse_args(int argc, char **argv) {
 
 void chat(const Args &args) {
     chatglm::Pipeline pipeline(args.model_path);
-    std::string model_name = pipeline.model->name();
+    std::string model_name = pipeline.model->type_name();
 
     chatglm::TextStreamer streamer(pipeline.tokenizer.get());
     chatglm::GenerationConfig gen_config(args.max_length, args.max_context_length, args.temp > 0, args.top_k,

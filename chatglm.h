@@ -27,11 +27,29 @@ class LogMessageFatal {
 
 std::string to_string(ggml_tensor *tensor, bool with_data = true);
 
+struct BaseConfig {
+    // common attributes
+    ggml_type dtype;
+    int vocab_size;
+    int hidden_size;
+    int num_attention_heads;
+    int num_hidden_layers;
+    int intermediate_size;
+    // for sequence generation
+    int max_length;
+    // for tokenizer
+    int bos_token_id;
+    int eos_token_id;
+    int pad_token_id;
+    int sep_token_id;
+};
+
 class BaseTokenizer {
   public:
     virtual ~BaseTokenizer() = default;
     virtual std::vector<int> encode(const std::string &text) const = 0;
     virtual std::string decode(const std::vector<int> &ids) const = 0;
+    virtual std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const = 0;
 };
 
 class GGMLContext {
@@ -210,26 +228,25 @@ struct GenerationConfig {
           top_p(top_p), temperature(temperature), num_threads(num_threads) {}
 };
 
-enum ModelArch {
-    CHATGLM = 1,
-    CHATGLM2 = 2,
+enum ModelType {
+    MODEL_TYPE_CHATGLM = 1,
+    MODEL_TYPE_CHATGLM2 = 2,
 };
 
-std::string to_string(ModelArch arch);
+std::string to_string(ModelType model_type);
 
 class BaseModelForConditionalGeneration {
   public:
-    BaseModelForConditionalGeneration(ModelArch arch, int eos_token_id, int max_seq_len, size_t mem_size,
-                                      size_t scratch_size)
-        : arch_(arch), eos_token_id_(eos_token_id), max_seq_len_(max_seq_len), mem_size_(mem_size),
-          mem_buffer_(new char[mem_size]), scratch_size_(scratch_size), scratch_buffer_(new char[scratch_size]) {}
+    BaseModelForConditionalGeneration(ModelType model_type, BaseConfig config, size_t mem_size, size_t scratch_size)
+        : model_type_(model_type), config_(config), mem_size_(mem_size), mem_buffer_(new char[mem_size]),
+          scratch_size_(scratch_size), scratch_buffer_(new char[scratch_size]) {}
     virtual ~BaseModelForConditionalGeneration() = default;
 
-    virtual std::string build_prompt(const std::vector<std::string> &history) const = 0;
     virtual void load(ModelLoader &loader) = 0;
     virtual ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const = 0;
 
-    std::string name() const { return to_string(arch_); }
+    ModelType type() const { return model_type_; }
+    std::string type_name() const { return to_string(model_type_); }
 
     std::vector<int> generate(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
                               BaseStreamer *streamer = nullptr) const;
@@ -249,9 +266,8 @@ class BaseModelForConditionalGeneration {
     static void sampling_softmax_inplace(TokenIdScore *first, TokenIdScore *last);
 
   private:
-    ModelArch arch_;
-    int eos_token_id_;
-    int max_seq_len_;
+    ModelType model_type_;
+    BaseConfig config_;
     size_t mem_size_;
     std::unique_ptr<char[]> mem_buffer_; // BLAS buffer
     size_t scratch_size_;
@@ -260,28 +276,19 @@ class BaseModelForConditionalGeneration {
 
 // ===== ChatGLM-6B =====
 
-struct ChatGLMConfig {
-    int vocab_size;
-    int hidden_size;
-    int num_attention_heads;
-    int num_layers;
-    int max_sequence_length;
-    int bos_token_id;
-    int eos_token_id;
-    int gmask_token_id;
-    int mask_token_id;
-    int pad_token_id;
-    ggml_type dtype;
-};
+struct ChatGLMConfig : public BaseConfig {};
 
 class ChatGLMTokenizer : public BaseTokenizer {
   public:
-    ChatGLMTokenizer(std::string_view serialized_model_proto, int bos_token_id, int eos_token_id, int mask_token_id,
-                     int gmask_token_id, int pad_token_id);
+    ChatGLMTokenizer(std::string_view serialized_model_proto);
 
     std::vector<int> encode(const std::string &text) const override;
 
     std::string decode(const std::vector<int> &ids) const override;
+
+    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
+
+    static std::string build_prompt(const std::vector<std::string> &history);
 
   private:
     static std::string preprocess(const std::string &text);
@@ -312,7 +319,7 @@ class GLMMLP {
 
 class GLMSelfAttention {
   public:
-    // TODO: kvcache type
+    // TODO: kv cache type
     GLMSelfAttention() : num_attention_heads(0) {}
     GLMSelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int max_length)
         : query_key_value(ctx, hidden_size, 3 * hidden_size), dense(ctx, hidden_size, hidden_size),
@@ -334,10 +341,10 @@ class GLMSelfAttention {
 
 class GLMBlock {
   public:
-    GLMBlock() : num_layers(0) {}
-    GLMBlock(InitContext *ctx, int hidden_size, int num_attention_heads, int num_layers, int max_length)
+    GLMBlock() : num_hidden_layers(0) {}
+    GLMBlock(InitContext *ctx, int hidden_size, int num_attention_heads, int num_hidden_layers, int max_length)
         : input_layernorm(ctx, hidden_size), attention(ctx, hidden_size, num_attention_heads, max_length),
-          post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size), num_layers(num_layers) {}
+          post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size), num_hidden_layers(num_hidden_layers) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
 
@@ -346,7 +353,7 @@ class GLMBlock {
     GLMSelfAttention attention;
     LayerNorm post_attention_layernorm;
     GLMMLP mlp;
-    int num_layers;
+    int num_hidden_layers;
 };
 
 class ChatGLMModel {
@@ -369,8 +376,6 @@ class ChatGLMForConditionalGeneration : public BaseModelForConditionalGeneration
 
     void load(ModelLoader &loader) override;
 
-    std::string build_prompt(const std::vector<std::string> &history) const override;
-
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
 
   public:
@@ -388,16 +393,8 @@ class ChatGLMForConditionalGeneration : public BaseModelForConditionalGeneration
 
 // ===== ChatGLM2-6B =====
 
-struct ChatGLM2Config {
-    int vocab_size;
-    int hidden_size;
-    int num_attention_heads;
-    int multi_query_group_num;
-    int ffn_hidden_size;
-    int num_layers;
-    int seq_length;
-    int eos_token_id;
-    ggml_type dtype;
+struct ChatGLM2Config : public BaseConfig {
+    int num_kv_heads;
 };
 
 class ChatGLM2Tokenizer : public BaseTokenizer {
@@ -407,6 +404,10 @@ class ChatGLM2Tokenizer : public BaseTokenizer {
     std::vector<int> encode(const std::string &text) const override;
 
     std::string decode(const std::vector<int> &ids) const override;
+
+    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
+
+    static std::string build_prompt(const std::vector<std::string> &history);
 
     bool is_special_id(int id) const;
 
@@ -421,23 +422,21 @@ class ChatGLM2Tokenizer : public BaseTokenizer {
 
 class GLM2SelfAttention {
   public:
-    GLM2SelfAttention() : num_attention_heads(0), multi_query_group_num(0) {}
-    GLM2SelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int multi_query_group_num,
-                      int max_length)
-        : num_attention_heads(num_attention_heads), multi_query_group_num(multi_query_group_num),
-          query_key_value(ctx, hidden_size,
-                          hidden_size + 2 * (hidden_size / num_attention_heads) * multi_query_group_num),
+    GLM2SelfAttention() : num_attention_heads(0), num_kv_heads(0) {}
+    GLM2SelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int max_length)
+        : num_attention_heads(num_attention_heads), num_kv_heads(num_kv_heads),
+          query_key_value(ctx, hidden_size, hidden_size + 2 * (hidden_size / num_attention_heads) * num_kv_heads),
           dense(ctx, hidden_size, hidden_size, false),
           k_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F32, hidden_size / num_attention_heads, max_length,
-                                     multi_query_group_num)),
+                                     num_kv_heads)),
           v_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F32, max_length, hidden_size / num_attention_heads,
-                                     multi_query_group_num)) {}
+                                     num_kv_heads)) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const;
 
   public:
     int num_attention_heads;
-    int multi_query_group_num;
+    int num_kv_heads;
     Linear query_key_value;
     Linear dense;
     ggml_tensor *k_cache; // [mqa_n_head, maxlen, head_size]
@@ -446,9 +445,9 @@ class GLM2SelfAttention {
 
 class GLM2MLP {
   public:
-    GLM2MLP(InitContext *ctx, int hidden_size, int ffn_hidden_size)
-        : dense_h_to_4h(ctx, hidden_size, ffn_hidden_size * 2, false),
-          dense_4h_to_h(ctx, ffn_hidden_size, hidden_size, false) {}
+    GLM2MLP(InitContext *ctx, int hidden_size, int intermediate_size)
+        : dense_h_to_4h(ctx, hidden_size, intermediate_size * 2, false),
+          dense_4h_to_h(ctx, intermediate_size, hidden_size, false) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states) const;
 
@@ -460,11 +459,10 @@ class GLM2MLP {
 class GLM2Block {
   public:
     GLM2Block() = default;
-    GLM2Block(InitContext *ctx, int hidden_size, int num_attention_heads, int multi_query_group_num,
-              int ffn_hidden_size, int max_length)
-        : input_layernorm(ctx, hidden_size),
-          attention(ctx, hidden_size, num_attention_heads, multi_query_group_num, max_length),
-          post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size, ffn_hidden_size) {}
+    GLM2Block(InitContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int intermediate_size,
+              int max_length)
+        : input_layernorm(ctx, hidden_size), attention(ctx, hidden_size, num_attention_heads, num_kv_heads, max_length),
+          post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size, intermediate_size) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const;
 
@@ -492,8 +490,6 @@ class ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGeneratio
   public:
     ChatGLM2ForConditionalGeneration() = default;
     ChatGLM2ForConditionalGeneration(const ChatGLM2Config &config);
-
-    std::string build_prompt(const std::vector<std::string> &history) const override;
 
     void load(ModelLoader &loader) override;
 
