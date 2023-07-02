@@ -4,10 +4,10 @@ from typing import Iterator, List
 
 import chatglm_cpp._C as _C
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
-class ChatGLMPipeline(_C.ChatGLMPipeline):
+class Pipeline(_C.Pipeline):
     def __init__(self, model_path: os.PathLike) -> None:
         model_path = Path(model_path)
         super().__init__(str(model_path))
@@ -22,6 +22,7 @@ class ChatGLMPipeline(_C.ChatGLMPipeline):
         top_k: int = 0,
         top_p: float = 0.7,
         temperature: float = 0.95,
+        num_threads: int = 0,
     ) -> Iterator[str]:
         gen_config = _C.GenerationConfig(
             max_length=max_length,
@@ -30,11 +31,10 @@ class ChatGLMPipeline(_C.ChatGLMPipeline):
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
+            num_threads=num_threads,
         )
 
-        prompt = self.build_prompt(history)
-        input_ids = self.tokenizer.encode(prompt)
-        input_ids = input_ids[-max_context_length:]  # sliding window
+        input_ids = self.tokenizer.encode_history(history, max_context_length)
 
         output_ids = input_ids
         n_past = 0
@@ -77,6 +77,7 @@ class ChatGLMPipeline(_C.ChatGLMPipeline):
         top_k: int = 0,
         top_p: float = 0.7,
         temperature: float = 0.95,
+        num_threads: int = 0,
     ) -> str:
         gen_config = _C.GenerationConfig(
             max_length=max_length,
@@ -85,11 +86,10 @@ class ChatGLMPipeline(_C.ChatGLMPipeline):
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
+            num_threads=num_threads,
         )
 
-        prompt = self.build_prompt(history)
-        input_ids = self.tokenizer.encode(prompt)
-        input_ids = input_ids[-max_context_length:]  # sliding window
+        input_ids = self.tokenizer.encode_history(history, max_context_length)
 
         output_ids = input_ids
         n_past = 0

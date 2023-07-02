@@ -3,7 +3,7 @@
 [![CMake](https://github.com/li-plus/chatglm.cpp/actions/workflows/cmake.yml/badge.svg)](https://github.com/li-plus/chatglm.cpp/actions/workflows/cmake.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-A C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B). Run int4 model inference on your macBook in a minute.
+C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B) and [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B) for real-time chatting on your MacBook.
 
 ![demo](docs/demo.gif)
 
@@ -30,9 +30,12 @@ git submodule update --init --recursive
 
 **Quantize Model**
 
-Use `convert.py` to transform ChatGLM-6B to quantized GGML format. For example, to convert the fp16 ChatGLM-6B model to q4_0 (quantized int4) GGML model, run:
+Use `convert.py` to transform ChatGLM-6B or ChatGLM2-6B into quantized GGML format. For example, to convert the fp16 base model to q4_0 (quantized int4) GGML model, run:
 ```sh
+# For ChatGLM-6B
 python3 convert.py -i THUDM/chatglm-6b -t q4_0 -o chatglm-ggml.bin
+# For ChatGLM2-6B
+python3 convert.py -i THUDM/chatglm2-6b -t q4_0 -o chatglm2-ggml.bin
 ```
 
 For LoRA model, specify `-l <lora_model_name_or_path>` flag to merge your LoRA weights into the base model.
@@ -45,13 +48,15 @@ cmake -B build
 cmake --build build -j
 ```
 
-Now you may chat with the quantized ChatGLM model by running:
+Now you may chat with the quantized ChatGLM-6B model by running:
 ```sh
-./build/bin/main -m chatglm-ggml.bin -p 你好
+./build/bin/main -m chatglm-ggml.bin -p 你好                            # ChatGLM-6B
 # 你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。
+./build/bin/main -m chatglm2-ggml.bin -p 你好 --top_p 0.8 --temp 0.8    # ChatGLM2-6B
+# 你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。
 ```
 
-To run ChatGLM in interactive mode, add the `-i` flag:
+To run the model in interactive mode, add the `-i` flag. For example:
 ```sh
 ./build/bin/main -m chatglm-ggml.bin -i
 ```
@@ -95,7 +100,7 @@ pip install git+https://github.com/li-plus/chatglm.cpp.git@main
 pip install .
 ```
 
-Run the Python example to chat with the quantized ChatGLM model:
+Run the Python example to chat with the quantized model:
 ```sh
 python3 cli_chat.py -m chatglm-ggml.bin -i
 ```
@@ -105,17 +110,29 @@ You may also launch a web demo to chat in your browser:
 python3 web_demo.py -m chatglm-ggml.bin
 ```
 
+For ChatGLM2, change the model path to `chatglm2-ggml.bin` and everything works fine.
+
 ![web_demo](docs/web_demo.jpg)
 
 ## Performance
 
 Measured on a Linux server with Intel(R) Xeon(R) Platinum 8260 CPU @ 2.40GHz using 16 threads.
 
+ChatGLM-6B:
+
 |           | Q4_0  | Q8_0  | F16  | F32  |
 |-----------|-------|-------|------|------|
-| ms/token  | 92    | 130   | 217  | 399  |
+| ms/token  | 74    | 114   | 189  | 357  |
 | file size | 3.3GB | 6.2GB | 12GB | 23GB |
 | mem usage | 4.0GB | 6.9GB | 13GB | 24GB |
+
+ChatGLM2-6B:
+
+|           | Q4_0  | Q8_0  | F16  | F32  |
+|-----------|-------|-------|------|------|
+| ms/token  | 64    | 106   | 189  | 372  |
+| file size | 3.3GB | 6.2GB | 12GB | 24GB |
+| mem usage | 3.4GB | 6.2GB | 12GB | 23GB |
 
 ## Development
 
@@ -125,5 +142,5 @@ Measured on a Linux server with Intel(R) Xeon(R) Platinum 8260 CPU @ 2.40GHz usi
 
 ## Acknowledgements
 
-* This project is greatly inspired by [ggerganov](https://github.com/ggerganov)'s [llama.cpp](https://github.com/ggerganov/llama.cpp) and is based on his NN library [ggml](https://github.com/ggerganov/ggml).
-* Thank [THUDM](https://github.com/THUDM) for the amazing [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B) and for releasing the model sources and checkpoints.
+* This project is greatly inspired by [@ggerganov](https://github.com/ggerganov)'s [llama.cpp](https://github.com/ggerganov/llama.cpp) and is based on his NN library [ggml](https://github.com/ggerganov/ggml).
+* Thank [@THUDM](https://github.com/THUDM) for the amazing [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B) and [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B) and for releasing the model sources and checkpoints.

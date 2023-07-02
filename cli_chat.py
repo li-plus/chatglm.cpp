@@ -30,7 +30,7 @@ def main():
     parser.add_argument("-t", "--threads", default=0, type=int)
     args = parser.parse_args()
 
-    pipeline = chatglm_cpp.ChatGLMPipeline(args.model)
+    pipeline = chatglm_cpp.Pipeline(args.model)
 
     if not args.interactive:
         for piece in pipeline.stream_chat(
@@ -50,13 +50,13 @@ def main():
     history = []
     while True:
         try:
-            prompt = input("Prompt  > ")
+            prompt = input(f"{'Prompt':{len(pipeline.model.type_name)}} > ")
         except EOFError:
             break
         if not prompt:
             continue
         history.append(prompt)
-        print("ChatGLM > ", sep="", end="")
+        print(f"{pipeline.model.type_name} > ", sep="", end="")
         output = ""
         for piece in pipeline.stream_chat(
             history,

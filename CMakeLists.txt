@@ -7,7 +7,6 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin CACHE STRING "")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -Wall")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native")
 
 if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
@@ -78,6 +77,7 @@ set(PY_SOURCES
     ${PROJECT_SOURCE_DIR}/setup.py
     ${PROJECT_SOURCE_DIR}/cli_chat.py
     ${PROJECT_SOURCE_DIR}/web_demo.py
+    ${PROJECT_SOURCE_DIR}/test_convert.py
     ${PROJECT_SOURCE_DIR}/test_chatglm_cpp.py)
 add_custom_target(lint
     COMMAND clang-format -i ${CPP_SOURCES}
