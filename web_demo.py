@@ -21,8 +21,8 @@ def postprocess(self, y):
         return []
     for i, (message, response) in enumerate(y):
         y[i] = (
-            None if message is None else mdtex2html.convert((message)),
-            None if response is None else mdtex2html.convert(response),
+            None if message is None else ((message)),
+            None if response is None else (response),
         )
     return y
 
