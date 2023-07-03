@@ -77,8 +77,8 @@ set(PY_SOURCES
     ${PROJECT_SOURCE_DIR}/setup.py
     ${PROJECT_SOURCE_DIR}/examples/cli_chat.py
     ${PROJECT_SOURCE_DIR}/examples/web_demo.py
-    ${PROJECT_SOURCE_DIR}/test_convert.py
-    ${PROJECT_SOURCE_DIR}/test_chatglm_cpp.py)
+    ${PROJECT_SOURCE_DIR}/tests/test_convert.py
+    ${PROJECT_SOURCE_DIR}/tests/test_chatglm_cpp.py)
 add_custom_target(lint
     COMMAND clang-format -i ${CPP_SOURCES}
     COMMAND isort ${PY_SOURCES}
