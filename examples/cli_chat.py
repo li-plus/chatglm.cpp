@@ -3,7 +3,7 @@ from pathlib import Path
 
 import chatglm_cpp
 
-DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent.parent / "chatglm-ggml.bin"
+DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "chatglm-ggml.bin"
 
 BANNER = """
     ________          __  ________    __  ___                 

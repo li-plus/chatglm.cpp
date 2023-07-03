@@ -102,15 +102,15 @@ pip install .
 
 Run the Python example to chat with the quantized model:
 ```sh
-python3 cli_chat.py -m chatglm-ggml.bin -i
+cd examples && python3 cli_chat.py -m ../chatglm-ggml.bin -i
 ```
 
 You may also launch a web demo to chat in your browser:
 ```sh
-python3 web_demo.py -m chatglm-ggml.bin
+cd examples && python3 web_demo.py -m ../chatglm-ggml.bin
 ```
 
-For ChatGLM2, change the model path to `chatglm2-ggml.bin` and everything works fine.
+For ChatGLM2, change the model path to `../chatglm2-ggml.bin` and everything works fine.
 
 ![web_demo](docs/web_demo.jpg)
 
