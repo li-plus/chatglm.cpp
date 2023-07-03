@@ -75,8 +75,8 @@ set(PY_SOURCES
     ${PROJECT_SOURCE_DIR}/chatglm_cpp/__init__.py
     ${PROJECT_SOURCE_DIR}/convert.py
     ${PROJECT_SOURCE_DIR}/setup.py
-    ${PROJECT_SOURCE_DIR}/cli_chat.py
-    ${PROJECT_SOURCE_DIR}/web_demo.py
+    ${PROJECT_SOURCE_DIR}/examples/cli_chat.py
+    ${PROJECT_SOURCE_DIR}/examples/web_demo.py
     ${PROJECT_SOURCE_DIR}/test_convert.py
     ${PROJECT_SOURCE_DIR}/test_chatglm_cpp.py)
 add_custom_target(lint

@@ -1,13 +1,16 @@
 # Adapted from https://github.com/THUDM/ChatGLM-6B/blob/main/web_demo.py
 
 import argparse
+from pathlib import Path
 
 import chatglm_cpp
 import gradio as gr
 import mdtex2html
 
+DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "chatglm-ggml.bin"
+
 parser = argparse.ArgumentParser()
-parser.add_argument("-m", "--model", default="chatglm-ggml.bin", type=str)
+parser.add_argument("-m", "--model", default=DEFAULT_MODEL_PATH, type=Path)
 parser.add_argument("-t", "--threads", default=0, type=int)
 args = parser.parse_args()
 
