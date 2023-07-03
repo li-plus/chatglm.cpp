@@ -7,6 +7,10 @@ CHATGLM_MODEL_PATH = Path(__file__).resolve().parent / "chatglm-ggml.bin"
 CHATGLM2_MODEL_PATH = Path(__file__).resolve().parent / "chatglm2-ggml.bin"
 
 
+def test_chatglm_version():
+    print(chatglm_cpp.__version__)
+
+
 @pytest.mark.skipif(not CHATGLM_MODEL_PATH.exists(), reason="model file not found")
 def test_chatglm_pipeline():
     history = ["你好"]
