@@ -155,9 +155,9 @@ class ChatGLMConverter(BaseConverter):
             config.num_layers,
             config.inner_hidden_size,
             config.max_sequence_length,
-            config.bos_token_id,
-            config.eos_token_id,
-            config.pad_token_id,
+            config.bos_token_id if config.bos_token_id is not None else -1,
+            config.eos_token_id if config.eos_token_id is not None else -1,
+            config.pad_token_id if config.pad_token_id is not None else -1,
             config.sep_token_id if config.sep_token_id is not None else -1,
         ]
         f.write(struct.pack("i" * len(config_values), *config_values))
@@ -224,8 +224,8 @@ class ChatGLM2Converter(BaseConverter):
             config.ffn_hidden_size,
             config.seq_length,
             config.bos_token_id if config.bos_token_id is not None else -1,
-            config.eos_token_id,
-            config.pad_token_id,
+            config.eos_token_id if config.eos_token_id is not None else -1,
+            config.pad_token_id if config.pad_token_id is not None else -1,
             config.sep_token_id if config.sep_token_id is not None else -1,
             config.multi_query_group_num,
         ]
