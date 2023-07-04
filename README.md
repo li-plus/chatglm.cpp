@@ -38,7 +38,16 @@ python3 convert.py -i THUDM/chatglm-6b -t q4_0 -o chatglm-ggml.bin
 python3 convert.py -i THUDM/chatglm2-6b -t q4_0 -o chatglm2-ggml.bin
 ```
 
-For LoRA model, specify `-l <lora_model_name_or_path>` flag to merge your LoRA weights into the base model.
+You are free to try any of the below quantization types by specifying `-t <type>`:
+* `q4_0`: 4-bit integer quantization with fp16 scales.
+* `q4_1`: 4-bit integer quantization with fp16 scales and minimum values.
+* `q5_0`: 5-bit integer quantization with fp16 scales.
+* `q5_1`: 5-bit integer quantization with fp16 scales and minimum values.
+* `q8_0`: 8-bit integer quantization with fp16 scales.
+* `f16`: half precision floating point weights without quantization.
+* `f32`: single precision floating point weights without quantization.
+
+For LoRA model, add `-l <lora_model_name_or_path>` flag to merge your LoRA weights into the base model.
 
 **Build & Run**
 
@@ -120,19 +129,19 @@ Measured on a Linux server with Intel(R) Xeon(R) Platinum 8260 CPU @ 2.40GHz usi
 
 ChatGLM-6B:
 
-|           | Q4_0  | Q8_0  | F16  | F32  |
-|-----------|-------|-------|------|------|
-| ms/token  | 74    | 114   | 189  | 357  |
-| file size | 3.3GB | 6.2GB | 12GB | 23GB |
-| mem usage | 4.0GB | 6.9GB | 13GB | 24GB |
+|           | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   | F32   |
+|-----------|-------|-------|-------|-------|-------|-------|-------|
+| ms/token  | 74    | 77    | 86    | 89    | 114   | 189   | 357   |
+| file size | 3.3GB | 3.7GB | 4.0GB | 4.4GB | 6.2GB | 12GB  | 23GB  |
+| mem usage | 4.0GB | 4.4GB | 4.7GB | 5.1GB | 6.9GB | 13GB  | 24GB  |
 
 ChatGLM2-6B:
 
-|           | Q4_0  | Q8_0  | F16  | F32  |
-|-----------|-------|-------|------|------|
-| ms/token  | 64    | 106   | 189  | 372  |
-| file size | 3.3GB | 6.2GB | 12GB | 24GB |
-| mem usage | 3.4GB | 6.2GB | 12GB | 23GB |
+|           | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   | F32   |
+|-----------|-------|-------|-------|-------|-------|-------|-------|
+| ms/token  | 64    | 71    | 79    | 83    | 106   | 189   | 372   |
+| file size | 3.3GB | 3.7GB | 4.0GB | 4.4GB | 6.2GB | 12GB  | 24GB  |
+| mem usage | 3.4GB | 3.8GB | 4.1GB | 4.5GB | 6.2GB | 12GB  | 23GB  |
 
 ## Development
 

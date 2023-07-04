@@ -724,9 +724,45 @@ TEST_F(ChatGLMTest, quantize) {
         int64_t hist[16]{};
         ggml_quantize_q4_0((float *)src->data, q4_dst->data, ggml_nelements(src), src->ne[0], hist);
 
-        std::cout << "Q4: [";
+        std::cout << "Q4_0: [";
         for (size_t i = 0; i < ggml_nbytes(q4_dst); i++) {
             std::cout << (i > 0 ? ", " : "") << (int)((char *)q4_dst->data)[i];
+        }
+        std::cout << "]\n";
+    }
+    // q4_1
+    {
+        ggml_tensor *q4_dst = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_Q4_1, 128, 2);
+        int64_t hist[16]{};
+        ggml_quantize_q4_1((float *)src->data, q4_dst->data, ggml_nelements(src), src->ne[0], hist);
+
+        std::cout << "Q4_1: [";
+        for (size_t i = 0; i < ggml_nbytes(q4_dst); i++) {
+            std::cout << (i > 0 ? ", " : "") << (int)((char *)q4_dst->data)[i];
+        }
+        std::cout << "]\n";
+    }
+    // q5_0
+    {
+        ggml_tensor *q5_dst = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_Q5_0, 128, 2);
+        int64_t hist[16]{};
+        ggml_quantize_q5_0((float *)src->data, q5_dst->data, ggml_nelements(src), src->ne[0], hist);
+
+        std::cout << "Q5_0: [";
+        for (size_t i = 0; i < ggml_nbytes(q5_dst); i++) {
+            std::cout << (i > 0 ? ", " : "") << (int)((char *)q5_dst->data)[i];
+        }
+        std::cout << "]\n";
+    }
+    // q5_1
+    {
+        ggml_tensor *q5_dst = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_Q5_1, 128, 2);
+        int64_t hist[16]{};
+        ggml_quantize_q5_1((float *)src->data, q5_dst->data, ggml_nelements(src), src->ne[0], hist);
+
+        std::cout << "Q5_1: [";
+        for (size_t i = 0; i < ggml_nbytes(q5_dst); i++) {
+            std::cout << (i > 0 ? ", " : "") << (int)((char *)q5_dst->data)[i];
         }
         std::cout << "]\n";
     }
