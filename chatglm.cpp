@@ -109,6 +109,18 @@ std::string to_string(ggml_tensor *tensor, bool with_data) {
 
 // ===== streamer =====
 
+void StreamerGroup::put(const std::vector<int> &output_ids) {
+    for (auto &streamer : streamers_) {
+        streamer->put(output_ids);
+    }
+}
+
+void StreamerGroup::end() {
+    for (auto &streamer : streamers_) {
+        streamer->end();
+    }
+}
+
 void TextStreamer::put(const std::vector<int> &output_ids) {
     if (is_prompt_) {
         // skip prompt
@@ -139,15 +151,45 @@ void TextStreamer::put(const std::vector<int> &output_ids) {
         print_len_ = text.size();
     }
 
-    std::cout << printable_text << std::flush;
+    os_ << printable_text << std::flush;
 }
 
 void TextStreamer::end() {
     std::string text = tokenizer_->decode(token_cache_);
-    std::cout << text.substr(print_len_) << std::endl;
+    os_ << text.substr(print_len_) << std::endl;
     is_prompt_ = true;
     token_cache_.clear();
     print_len_ = 0;
+}
+
+void PerfStreamer::put(const std::vector<int> &output_ids) {
+    CHATGLM_CHECK(!output_ids.empty());
+    if (num_prompt_tokens_ == 0) {
+        // before prompt eval
+        start_us_ = ggml_time_us();
+        num_prompt_tokens_ = output_ids.size();
+    } else {
+        if (num_output_tokens_ == 0) {
+            // first new token
+            prompt_us_ = ggml_time_us();
+        }
+        num_output_tokens_ += output_ids.size();
+    }
+}
+
+void PerfStreamer::reset() {
+    start_us_ = prompt_us_ = end_us_ = 0;
+    num_prompt_tokens_ = num_output_tokens_ = 0;
+}
+
+std::string PerfStreamer::to_string() const {
+    std::ostringstream oss;
+    oss << "prompt time: " << prompt_total_time_us() / 1000.f << " ms / " << num_prompt_tokens() << " tokens ("
+        << prompt_token_time_us() / 1000.f << " ms/token)\n"
+        << "output time: " << output_total_time_us() / 1000.f << " ms / " << num_output_tokens() << " tokens ("
+        << output_token_time_us() / 1000.f << " ms/token)\n"
+        << "total time: " << (prompt_total_time_us() + output_total_time_us()) / 1000.f << " ms";
+    return oss.str();
 }
 
 #ifdef _POSIX_MAPPED_FILES

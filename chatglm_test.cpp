@@ -923,34 +923,6 @@ TEST(Pipeline, ChatGLM2) {
     }
 }
 
-struct PerfStreamer : public BaseStreamer {
-    int64_t start_ms;
-    int64_t ctx_ms;
-    int64_t end_ms;
-    int64_t num_ctx_tokens;
-    int64_t num_new_tokens;
-
-    PerfStreamer() : start_ms(ggml_time_ms()), ctx_ms(0), end_ms(0), num_ctx_tokens(0), num_new_tokens(0) {}
-
-    void put(const std::vector<int> &output_ids) override {
-        CHATGLM_CHECK(!output_ids.empty());
-        if (num_ctx_tokens == 0) {
-            num_ctx_tokens = output_ids.size();
-        } else {
-            if (num_new_tokens == 0) {
-                ctx_ms = ggml_time_ms();
-            }
-            num_new_tokens += output_ids.size();
-        }
-    }
-    void end() override { end_ms = ggml_time_ms(); }
-
-    int64_t ms_ctx_tokens() const { return ctx_ms - start_ms; }
-    int64_t ms_per_ctx_token() const { return ms_ctx_tokens() / num_ctx_tokens; }
-    int64_t ms_new_tokens() const { return end_ms - ctx_ms; }
-    int64_t ms_per_new_token() const { return ms_new_tokens() / num_new_tokens; }
-};
-
 static void run_benchmark(const fs::path &model_path) {
     if (!fs::exists(model_path)) {
         GTEST_SKIP() << "Skipping benchmark test (model " << model_path << " not found)";
@@ -978,13 +950,10 @@ static void run_benchmark(const fs::path &model_path) {
     int64_t gen_s = (ggml_time_ms() - start_ms) / 1000.f;
 
     std::cout << "======== benchmark results for " << model_path.filename() << " ========\n"
-              << "Using #threads: " << gen_config.num_threads << "\n"
-              << "Model loaded within: " << load_model_ms << " ms\n"
-              << "Generation finished within: " << gen_s << " s\n"
-              << "Per ctx token latency: " << streamer.ms_per_ctx_token() << " ms/token (" << streamer.ms_ctx_tokens()
-              << " ms / " << streamer.num_ctx_tokens << " tokens)\n"
-              << "Per new token latency: " << streamer.ms_per_new_token() << " ms/token (" << streamer.ms_new_tokens()
-              << " ms / " << streamer.num_new_tokens << " tokens)\n"
+              << "using #threads: " << gen_config.num_threads << "\n"
+              << "model loaded within: " << load_model_ms << " ms\n"
+              << "generation finished within: " << gen_s << " s\n"
+              << streamer.to_string() << "\n"
               << "===========================================================\n";
 }
 
