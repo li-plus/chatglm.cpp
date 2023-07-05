@@ -5,7 +5,8 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib CACHE STRING "")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib CACHE STRING "")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin CACHE STRING "")
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
+
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -Wall")
 
 if (NOT CMAKE_BUILD_TYPE)
@@ -83,3 +84,12 @@ add_custom_target(lint
     COMMAND clang-format -i ${CPP_SOURCES}
     COMMAND isort ${PY_SOURCES}
     COMMAND black ${PY_SOURCES} --line-length 120)
+
+if (MSVC)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
+    add_definitions("/wd4267 /wd4244 /wd4305 /Zc:strictStrings /utf-8")
+    target_sources(main
+      PRIVATE third_party/getopt/getopt_long.c)
+    target_include_directories(main
+      PUBLIC third_party/getopt/)
+endif()

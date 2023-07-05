@@ -3,6 +3,12 @@
 #include <iomanip>
 #include <iostream>
 
+#if defined(_WIN32)
+    #include <fcntl.h>
+    #include <io.h>
+    #include <windows.h>
+#endif
+
 struct Args {
     std::string model_path = "chatglm-ggml.bin";
     std::string prompt = "你好";
@@ -102,6 +108,40 @@ static Args parse_args(int argc, char **argv) {
     return args;
 }
 
+#if defined(_WIN32)
+static void append_utf8(char32_t ch, std::string &out) {
+    if (ch <= 0x7F) {
+        out.push_back(static_cast<unsigned char>(ch));
+    } else if (ch <= 0x7FF) {
+        out.push_back(static_cast<unsigned char>(0xC0 | ((ch >> 6) & 0x1F)));
+        out.push_back(static_cast<unsigned char>(0x80 | (ch & 0x3F)));
+    } else if (ch <= 0xFFFF) {
+        out.push_back(static_cast<unsigned char>(0xE0 | ((ch >> 12) & 0x0F)));
+        out.push_back(static_cast<unsigned char>(0x80 | ((ch >> 6) & 0x3F)));
+        out.push_back(static_cast<unsigned char>(0x80 | (ch & 0x3F)));
+    } else if (ch <= 0x10FFFF) {
+        out.push_back(static_cast<unsigned char>(0xF0 | ((ch >> 18) & 0x07)));
+        out.push_back(static_cast<unsigned char>(0x80 | ((ch >> 12) & 0x3F)));
+        out.push_back(static_cast<unsigned char>(0x80 | ((ch >> 6) & 0x3F)));
+        out.push_back(static_cast<unsigned char>(0x80 | (ch & 0x3F)));
+    } else {
+        // Invalid Unicode code point
+    }
+}
+
+static bool get_utf8_line(std::string& line) {
+    std::wstring prompt;
+    std::wcin >> prompt;
+    for (auto wc : prompt)
+        append_utf8(wc, line);
+    return true;
+}
+#else
+static bool get_utf8_line(std::string& line) {
+    return !!std::getline(std::cin, line);
+}
+#endif
+
 void chat(const Args &args) {
     chatglm::Pipeline pipeline(args.model_path);
     std::string model_name = pipeline.model->type_name();
@@ -109,6 +149,10 @@ void chat(const Args &args) {
     chatglm::TextStreamer streamer(pipeline.tokenizer.get());
     chatglm::GenerationConfig gen_config(args.max_length, args.max_context_length, args.temp > 0, args.top_k,
                                          args.top_p, args.temp, args.num_threads);
+
+#if defined(_WIN32)
+    _setmode(_fileno(stdin), _O_WTEXT);
+#endif
 
     if (args.interactive) {
         std::cout << R"(    ________          __  ________    __  ___                 )" << '\n'
@@ -123,7 +167,7 @@ void chat(const Args &args) {
             std::cout << std::setw(model_name.size()) << std::left << "Prompt"
                       << " > " << std::flush;
             std::string prompt;
-            if (!std::getline(std::cin, prompt)) {
+            if (!get_utf8_line(prompt)) {
                 break;
             }
             if (prompt.empty()) {

@@ -11,10 +11,32 @@
 #include <random>
 #include <regex>
 #include <string>
-#include <sys/mman.h>
+#include <functional>
+
 #include <sys/stat.h>
 #include <thread>
-#include <unistd.h>
+
+#ifdef __has_include
+    #if __has_include(<unistd.h>)
+        #include <unistd.h>
+        #if defined(_POSIX_MAPPED_FILES)
+            #include <sys/mman.h>
+        #endif
+        #if defined(_POSIX_MEMLOCK_RANGE)
+            #include <sys/resource.h>
+        #endif
+    #endif
+#endif
+
+#if defined(_WIN32)
+    #define WIN32_LEAN_AND_MEAN
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #include <windows.h>
+    #include <io.h>
+    #include <stdio.h>
+#endif
 
 #ifdef GGML_USE_CUBLAS
 #include <ggml-cuda.h>
@@ -129,6 +151,7 @@ void TextStreamer::end() {
     print_len_ = 0;
 }
 
+#ifdef _POSIX_MAPPED_FILES
 MappedFile::MappedFile(const std::string &path) {
     int fd = open(path.c_str(), O_RDONLY);
     CHATGLM_CHECK(fd > 0) << "cannot open file " << path << ": " << strerror(errno);
@@ -144,6 +167,33 @@ MappedFile::MappedFile(const std::string &path) {
 }
 
 MappedFile::~MappedFile() { CHATGLM_CHECK(munmap(data, size) == 0) << strerror(errno); }
+#elif defined(_WIN32)
+MappedFile::MappedFile(const std::string &path) {
+
+    int fd = open(path.c_str(), O_RDONLY);
+    CHATGLM_CHECK(fd > 0) << "cannot open file " << path << ": " << strerror(errno);
+
+    struct _stat64 sb;
+    CHATGLM_CHECK(_fstat64(fd, &sb) == 0) << strerror(errno);
+    size = sb.st_size;
+
+    HANDLE hFile = (HANDLE) _get_osfhandle(fd);
+
+    HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+    CHATGLM_CHECK(hMapping != NULL) << strerror(errno);
+
+    data = (char *)MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
+    CloseHandle(hMapping);
+
+    CHATGLM_CHECK(data != NULL) << strerror(errno);
+
+    CHATGLM_CHECK(close(fd) == 0) << strerror(errno);
+}
+
+MappedFile::~MappedFile() {
+    CHATGLM_CHECK(UnmapViewOfFile(data)) << strerror(errno);
+}
+#endif
 
 void ModelLoader::seek(int64_t offset, int whence) {
     if (whence == SEEK_SET) {
