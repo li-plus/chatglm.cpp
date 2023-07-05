@@ -56,7 +56,7 @@ class GGMLContext {
   public:
     GGMLContext() : gctx_(nullptr) {}
 
-    GGMLContext(ggml_init_params params) : gctx_(ggml_init(params)) {
+    GGMLContext(size_t mem_size, void *mem_buffer, bool no_alloc) : gctx_(ggml_init({mem_size, mem_buffer, no_alloc})) {
         CHATGLM_CHECK(gctx_) << "failed to init ggml context";
     }
     // copy constructor
@@ -257,6 +257,9 @@ class BaseModelForConditionalGeneration {
     struct TokenIdScore {
         int id;
         float score;
+
+        TokenIdScore() = default;
+        TokenIdScore(int id, float score) : id(id), score(score) {}
 
         bool operator<(const TokenIdScore &other) const { return score < other.score; }
         bool operator>(const TokenIdScore &other) const { return score > other.score; }
