@@ -5,7 +5,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib CACHE STRING "")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib CACHE STRING "")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin CACHE STRING "")
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -Wall")
 
@@ -28,6 +28,14 @@ endif ()
 if (GGML_PERF)
     add_compile_definitions(GGML_PERF)
 endif ()
+
+set(CPP_SOURCES
+    ${PROJECT_SOURCE_DIR}/chatglm.h
+    ${PROJECT_SOURCE_DIR}/chatglm.cpp
+    ${PROJECT_SOURCE_DIR}/chatglm_test.cpp
+    ${PROJECT_SOURCE_DIR}/chatglm_pybind.cpp)
+
+set_source_files_properties(${CPP_SOURCES} PROPERTIES COMPILE_FLAGS "-pedantic-errors")
 
 add_library(chatglm STATIC chatglm.cpp)
 target_link_libraries(chatglm PRIVATE ggml sentencepiece-static)
@@ -67,11 +75,6 @@ if (CHATGLM_ENABLE_PYBIND)
 endif ()
 
 # lint
-set(CPP_SOURCES
-    ${PROJECT_SOURCE_DIR}/chatglm.h
-    ${PROJECT_SOURCE_DIR}/chatglm.cpp
-    ${PROJECT_SOURCE_DIR}/chatglm_test.cpp
-    ${PROJECT_SOURCE_DIR}/chatglm_pybind.cpp)
 set(PY_SOURCES
     ${PROJECT_SOURCE_DIR}/chatglm_cpp/__init__.py
     ${PROJECT_SOURCE_DIR}/convert.py
@@ -88,8 +91,4 @@ add_custom_target(lint
 if (MSVC)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
     add_definitions("/wd4267 /wd4244 /wd4305 /Zc:strictStrings /utf-8")
-    target_sources(main
-      PRIVATE third_party/getopt/getopt_long.c)
-    target_include_directories(main
-      PUBLIC third_party/getopt/)
-endif()
+endif ()

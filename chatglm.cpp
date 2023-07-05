@@ -5,37 +5,36 @@
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <locale>
 #include <random>
 #include <regex>
 #include <string>
-#include <functional>
-
 #include <sys/stat.h>
 #include <thread>
 
 #ifdef __has_include
-    #if __has_include(<unistd.h>)
-        #include <unistd.h>
-        #if defined(_POSIX_MAPPED_FILES)
-            #include <sys/mman.h>
-        #endif
-        #if defined(_POSIX_MEMLOCK_RANGE)
-            #include <sys/resource.h>
-        #endif
-    #endif
+#if __has_include(<unistd.h>)
+#include <unistd.h>
+#if defined(_POSIX_MAPPED_FILES)
+#include <sys/mman.h>
+#endif
+#if defined(_POSIX_MEMLOCK_RANGE)
+#include <sys/resource.h>
+#endif
+#endif
 #endif
 
 #if defined(_WIN32)
-    #define WIN32_LEAN_AND_MEAN
-    #ifndef NOMINMAX
-        #define NOMINMAX
-    #endif
-    #include <windows.h>
-    #include <io.h>
-    #include <stdio.h>
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <io.h>
+#include <stdio.h>
+#include <windows.h>
 #endif
 
 #ifdef GGML_USE_CUBLAS
@@ -177,7 +176,7 @@ MappedFile::MappedFile(const std::string &path) {
     CHATGLM_CHECK(_fstat64(fd, &sb) == 0) << strerror(errno);
     size = sb.st_size;
 
-    HANDLE hFile = (HANDLE) _get_osfhandle(fd);
+    HANDLE hFile = (HANDLE)_get_osfhandle(fd);
 
     HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
     CHATGLM_CHECK(hMapping != NULL) << strerror(errno);
@@ -190,9 +189,7 @@ MappedFile::MappedFile(const std::string &path) {
     CHATGLM_CHECK(close(fd) == 0) << strerror(errno);
 }
 
-MappedFile::~MappedFile() {
-    CHATGLM_CHECK(UnmapViewOfFile(data)) << strerror(errno);
-}
+MappedFile::~MappedFile() { CHATGLM_CHECK(UnmapViewOfFile(data)) << strerror(errno); }
 #endif
 
 void ModelLoader::seek(int64_t offset, int whence) {
@@ -443,11 +440,11 @@ int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int
                                                            const GenerationConfig &gen_config, int n_past,
                                                            int n_ctx) const {
     ForwardContext ctx;
-    ctx.gctx = GGMLContext({.mem_size = mem_size_, .mem_buffer = mem_buffer_.get(), .no_alloc = false});
+    ctx.gctx = GGMLContext(mem_size_, mem_buffer_.get(), false);
     int n_threads = gen_config.num_threads > 0 ? gen_config.num_threads : get_num_physical_cores();
     ctx.gf = {};
     ctx.gf.n_threads = input_ids.size() >= 32 && ggml_cpu_has_blas() && !ggml_cpu_has_gpublas() ? 1 : n_threads;
-    ctx.scratch = {.offs = 0, .size = scratch_size_, .data = scratch_buffer_.get()};
+    ctx.scratch = {0, scratch_size_, scratch_buffer_.get()};
 
     ggml_tensor *input_ids_tensor = ggml_new_tensor_1d(ctx.gctx.get(), GGML_TYPE_I32, input_ids.size());
     memcpy(input_ids_tensor->data, input_ids.data(), ggml_nbytes(input_ids_tensor));
@@ -474,7 +471,7 @@ int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int
 
         std::vector<TokenIdScore> token_scores(vocab_size);
         for (int i = 0; i < vocab_size; i++) {
-            token_scores[i] = {.id = i, .score = next_token_logits[i]};
+            token_scores[i] = TokenIdScore(i, next_token_logits[i]);
         }
 
         // top_k sampling
@@ -676,7 +673,8 @@ ggml_tensor *ChatGLMModel::forward(ForwardContext *ctx, ggml_tensor *input_ids, 
         ggml_set_scratch(ctx->gctx.get(), ctx->scratch);
         hidden_states = layer.forward(ctx, hidden_states, n_past, n_ctx);
     }
-    ggml_set_scratch(ctx->gctx.get(), {.offs = 0, .size = 0, .data = nullptr});
+    ggml_scratch empty_scratch = {0, 0, nullptr};
+    ggml_set_scratch(ctx->gctx.get(), empty_scratch);
     hidden_states = final_layernorm.forward(ctx, hidden_states);
     return hidden_states;
 }
@@ -686,7 +684,7 @@ ChatGLMForConditionalGeneration::ChatGLMForConditionalGeneration(const ChatGLMCo
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
     const size_t num_tensors = 3 + config.num_hidden_layers * 14;
     const size_t ctx_size = num_tensors * tensor_ovhd;
-    w_ctx_.gctx = GGMLContext({.mem_size = ctx_size, .mem_buffer = nullptr, .no_alloc = true});
+    w_ctx_.gctx = GGMLContext(ctx_size, nullptr, true);
     w_ctx_.dtype = config.dtype;
 
     transformer = ChatGLMModel(&w_ctx_, config);
@@ -926,7 +924,8 @@ ggml_tensor *ChatGLM2Model::forward(ForwardContext *ctx, ggml_tensor *input_ids,
         ggml_set_scratch(ctx->gctx.get(), ctx->scratch);
         hidden_states = layer.forward(ctx, hidden_states, n_past);
     }
-    ggml_set_scratch(ctx->gctx.get(), {.offs = 0, .size = 0, .data = nullptr});
+    ggml_scratch empty_scratch = {0, 0, nullptr};
+    ggml_set_scratch(ctx->gctx.get(), empty_scratch);
     hidden_states = final_layernorm.forward(ctx, hidden_states);
     return hidden_states;
 }
@@ -936,7 +935,7 @@ ChatGLM2ForConditionalGeneration::ChatGLM2ForConditionalGeneration(const ChatGLM
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
     const size_t num_tensors = 3 + config.num_hidden_layers * 9;
     const size_t ctx_size = num_tensors * tensor_ovhd;
-    w_ctx_.gctx = GGMLContext({.mem_size = ctx_size, .mem_buffer = nullptr, .no_alloc = true});
+    w_ctx_.gctx = GGMLContext(ctx_size, nullptr, true);
     w_ctx_.dtype = config.dtype;
 
     transformer = ChatGLM2Model(&w_ctx_, config);

@@ -37,7 +37,7 @@ class ChatGLMTest : public ::testing::Test {
         scratch_buf.resize(1024 * 1024);
 
         ctx.gctx = GGMLContext({1024 * 1024, nullptr, false});
-        ctx.scratch = {.offs = 0, .size = scratch_buf.size(), .data = scratch_buf.data()};
+        ctx.scratch = {0, scratch_buf.size(), scratch_buf.data()};
         ctx.gf = {};
         ctx.gf.n_threads = 1;
     }
@@ -785,7 +785,7 @@ TEST(Pipeline, ChatGLM) {
     if (!fs::exists(model_path)) {
         GTEST_SKIP() << "Skipping ChatGLM e2e test (ggml model not found)";
     }
-    Pipeline pipeline(model_path);
+    Pipeline pipeline(model_path.string());
     EXPECT_TRUE(dynamic_cast<ChatGLMForConditionalGeneration *>(pipeline.model.get()));
 
     // ===== tokenization =====
@@ -855,7 +855,7 @@ TEST(Pipeline, ChatGLM2) {
     if (!fs::exists(model_path)) {
         GTEST_SKIP() << "Skipping ChatGLM2 e2e test (ggml model not found)";
     }
-    Pipeline pipeline(model_path);
+    Pipeline pipeline(model_path.string());
     EXPECT_TRUE(dynamic_cast<ChatGLM2ForConditionalGeneration *>(pipeline.model.get()));
 
     // ===== tokenization =====
@@ -958,7 +958,7 @@ static void run_benchmark(const fs::path &model_path) {
 
     ggml_time_init();
     int64_t start_ms = ggml_time_ms();
-    Pipeline pipeline(model_path);
+    Pipeline pipeline(model_path.string());
     int64_t load_model_ms = ggml_time_ms() - start_ms;
 
     start_ms = ggml_time_ms();

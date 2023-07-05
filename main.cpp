@@ -1,12 +1,11 @@
 #include "chatglm.h"
-#include <getopt.h>
 #include <iomanip>
 #include <iostream>
 
 #if defined(_WIN32)
-    #include <fcntl.h>
-    #include <io.h>
-    #include <windows.h>
+#include <fcntl.h>
+#include <io.h>
+#include <windows.h>
 #endif
 
 struct Args {
@@ -21,7 +20,7 @@ struct Args {
     int num_threads = 0;
 };
 
-void usage(char *prog) {
+void usage(const char *prog) {
     std::cout << "Usage: " << prog << " [options]\n"
               << "\n"
               << "options:\n"
@@ -39,70 +38,37 @@ void usage(char *prog) {
 }
 
 static Args parse_args(int argc, char **argv) {
-    // reference: https://www.gnu.org/software/libc/manual/html_node/Getopt-Long-Option-Example.html
     Args args;
 
-    struct option long_options[] = {{"help", no_argument, 0, 'h'},
-                                    {"model", required_argument, 0, 'm'},
-                                    {"prompt", required_argument, 0, 'p'},
-                                    {"interactive", no_argument, 0, 'i'},
-                                    {"max_length", required_argument, 0, 'l'},
-                                    {"max_context_length", required_argument, 0, 'c'},
-                                    {"top_k", required_argument, 0, '0'},
-                                    {"top_p", required_argument, 0, '1'},
-                                    {"temp", required_argument, 0, '2'},
-                                    {"threads", required_argument, 0, 't'},
-                                    {0, 0, 0, 0}};
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
 
-    int c;
-    while ((c = getopt_long(argc, argv, "hm:p:il:c:0:1:2:t:", long_options, nullptr)) != -1) {
-        switch (c) {
-        case 'h':
+        if (arg == "-h" || arg == "--help") {
             usage(argv[0]);
             exit(EXIT_SUCCESS);
-        case 'm':
-            args.model_path = optarg;
-            break;
-        case 'p':
-            args.prompt = optarg;
-            break;
-        case 'i':
+        } else if (arg == "-m" || arg == "--model") {
+            args.model_path = argv[++i];
+        } else if (arg == "-p" || arg == "--prompt") {
+            args.prompt = argv[++i];
+        } else if (arg == "-i" || arg == "--interactive") {
             args.interactive = true;
-            break;
-        case 'l':
-            args.max_length = std::stoi(optarg);
-            break;
-        case 'c':
-            args.max_context_length = std::stoi(optarg);
-            break;
-        case '0':
-            args.top_k = std::stoi(optarg);
-            break;
-        case '1':
-            args.top_p = std::stof(optarg);
-            break;
-        case '2':
-            args.temp = std::stof(optarg);
-            break;
-        case 't':
-            args.num_threads = std::stoi(optarg);
-            break;
-        case '?':
+        } else if (arg == "-l" || arg == "--max_length") {
+            args.max_length = std::stoi(argv[++i]);
+        } else if (arg == "-c" || arg == "--max_context_length") {
+            args.max_context_length = std::stoi(argv[++i]);
+        } else if (arg == "--top_k") {
+            args.top_k = std::stoi(argv[++i]);
+        } else if (arg == "--top_p") {
+            args.top_p = std::stof(argv[++i]);
+        } else if (arg == "--temp") {
+            args.temp = std::stof(argv[++i]);
+        } else if (arg == "-t" || arg == "--threads") {
+            args.num_threads = std::stoi(argv[++i]);
+        } else {
+            std::cerr << "Unknown argument: " << arg << std::endl;
             usage(argv[0]);
             exit(EXIT_FAILURE);
-        default:
-            abort();
         }
-    }
-
-    if (optind < argc) {
-        std::cerr << "Unknown arguments:";
-        for (int i = optind; i < argc; i++) {
-            std::cerr << " " << argv[i];
-        }
-        std::cerr << std::endl;
-        usage(argv[0]);
-        exit(EXIT_FAILURE);
     }
 
     return args;
@@ -129,7 +95,7 @@ static void append_utf8(char32_t ch, std::string &out) {
     }
 }
 
-static bool get_utf8_line(std::string& line) {
+static bool get_utf8_line(std::string &line) {
     std::wstring prompt;
     std::wcin >> prompt;
     for (auto wc : prompt)
@@ -137,9 +103,7 @@ static bool get_utf8_line(std::string& line) {
     return true;
 }
 #else
-static bool get_utf8_line(std::string& line) {
-    return !!std::getline(std::cin, line);
-}
+static bool get_utf8_line(std::string &line) { return !!std::getline(std::cin, line); }
 #endif
 
 void chat(const Args &args) {
