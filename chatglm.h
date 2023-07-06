@@ -162,18 +162,55 @@ class BaseStreamer {
     virtual void end() = 0;
 };
 
-// reference: https://github.com/huggingface/transformers/blob/main/src/transformers/generation/streamers.py
-class TextStreamer : public BaseStreamer {
+class StreamerGroup : public BaseStreamer {
   public:
-    TextStreamer(BaseTokenizer *tokenizer) : tokenizer_(tokenizer), is_prompt_(true), print_len_(0) {}
+    StreamerGroup(std::vector<std::shared_ptr<BaseStreamer>> streamers) : streamers_(std::move(streamers)) {}
     void put(const std::vector<int> &output_ids) override;
     void end() override;
 
   private:
+    std::vector<std::shared_ptr<BaseStreamer>> streamers_;
+};
+
+// reference: https://github.com/huggingface/transformers/blob/main/src/transformers/generation/streamers.py
+class TextStreamer : public BaseStreamer {
+  public:
+    TextStreamer(std::ostream &os, BaseTokenizer *tokenizer)
+        : os_(os), tokenizer_(tokenizer), is_prompt_(true), print_len_(0) {}
+    void put(const std::vector<int> &output_ids) override;
+    void end() override;
+
+  private:
+    std::ostream &os_;
     BaseTokenizer *tokenizer_;
     bool is_prompt_;
     std::vector<int> token_cache_;
     int print_len_;
+};
+
+class PerfStreamer : public BaseStreamer {
+  public:
+    PerfStreamer() : start_us_(0), prompt_us_(0), end_us_(0), num_prompt_tokens_(0), num_output_tokens_(0) {}
+
+    void put(const std::vector<int> &output_ids) override;
+    void end() override { end_us_ = ggml_time_us(); }
+
+    void reset();
+    std::string to_string() const;
+
+    int64_t num_prompt_tokens() const { return num_prompt_tokens_; }
+    int64_t prompt_total_time_us() const { return prompt_us_ - start_us_; }
+    int64_t prompt_token_time_us() const { return prompt_total_time_us() / num_prompt_tokens(); }
+    int64_t num_output_tokens() const { return num_output_tokens_; }
+    int64_t output_total_time_us() const { return end_us_ - prompt_us_; }
+    int64_t output_token_time_us() const { return output_total_time_us() / num_output_tokens(); }
+
+  private:
+    int64_t start_us_;
+    int64_t prompt_us_;
+    int64_t end_us_;
+    int64_t num_prompt_tokens_;
+    int64_t num_output_tokens_;
 };
 
 class MappedFile {
