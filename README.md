@@ -52,6 +52,13 @@ For LoRA model, add `-l <lora_model_name_or_path>` flag to merge your LoRA weigh
 
 **Build & Run**
 
+- Docker
+```bash
+docker run -it --rm -v [model path]:/opt/ chulinx/chatglm /chatglm -m /opt/chatglm2-ggml.bin -p "你好啊"
+你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。
+```
+- Compile 
+
 Compile the project using CMake:
 ```sh
 cmake -B build
