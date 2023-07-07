@@ -19,15 +19,17 @@ BANNER = """
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-m", "--model", default=DEFAULT_MODEL_PATH, type=Path)
-    parser.add_argument("-p", "--prompt", default="你好", type=str)
-    parser.add_argument("-i", "--interactive", action="store_true")
-    parser.add_argument("-l", "--max_length", default=2048, type=int)
-    parser.add_argument("-c", "--max_context_length", default=512, type=int)
-    parser.add_argument("--top_k", default=0, type=int)
-    parser.add_argument("--top_p", default=0.7, type=float)
-    parser.add_argument("--temp", default=0.95, type=float)
-    parser.add_argument("-t", "--threads", default=0, type=int)
+    parser.add_argument("-m", "--model", default=DEFAULT_MODEL_PATH, type=Path, help="model path")
+    parser.add_argument("-p", "--prompt", default="你好", type=str, help="prompt to start generation with")
+    parser.add_argument("-i", "--interactive", action="store_true", help="run in interactive mode")
+    parser.add_argument(
+        "-l", "--max_length", default=2048, type=int, help="max total length including prompt and output"
+    )
+    parser.add_argument("-c", "--max_context_length", default=512, type=int, help="max context length")
+    parser.add_argument("--top_k", default=0, type=int, help="top-k sampling")
+    parser.add_argument("--top_p", default=0.7, type=float, help="top-p sampling")
+    parser.add_argument("--temp", default=0.95, type=float, help="temperature")
+    parser.add_argument("-t", "--threads", default=0, type=int, help="number of threads for inference")
     args = parser.parse_args()
 
     pipeline = chatglm_cpp.Pipeline(args.model)

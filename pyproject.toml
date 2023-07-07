@@ -1,0 +1,32 @@
+[build-system]
+requires = [
+    "setuptools>=42",
+    "cmake>=3.12",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chatglm-cpp"
+authors = [
+    {name = "Jiahao Li", email = "liplus17@163.com"},
+]
+maintainers = [
+    {name = "Jiahao Li", email = "liplus17@163.com"},
+]
+description = "C++ implementation of ChatGLM-6B & ChatGLM2-6B"
+readme = "README.md"
+requires-python = ">=3.7"
+keywords = ["ChatGLM", "ChatGLM2", "Large Language Model"]
+license = {text = "MIT License"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/li-plus/chatglm.cpp"
+Repository = "https://github.com/li-plus/chatglm.cpp.git"
