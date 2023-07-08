@@ -1,0 +1,15 @@
+global-include CMakeLists.txt *.cmake README.md LICENSE
+include *.cpp *.h
+
+# ggml
+graft third_party/ggml/include
+graft third_party/ggml/src
+
+# pybind11
+graft third_party/pybind11/include
+graft third_party/pybind11/tools
+
+# sentencepiece
+graft third_party/sentencepiece/src
+graft third_party/sentencepiece/third_party
+include third_party/sentencepiece/*
