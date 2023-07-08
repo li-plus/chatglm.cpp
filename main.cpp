@@ -130,15 +130,6 @@ void chat(const Args &args) {
     _setmode(_fileno(stdin), _O_WTEXT);
 #endif
 
-    if (args.interactive) {
-        std::cout << R"(    ________          __  ________    __  ___                 )" << '\n'
-                  << R"(   / ____/ /_  ____ _/ /_/ ____/ /   /  |/  /_________  ____  )" << '\n'
-                  << R"(  / /   / __ \/ __ `/ __/ / __/ /   / /|_/ // ___/ __ \/ __ \ )" << '\n'
-                  << R"( / /___/ / / / /_/ / /_/ /_/ / /___/ /  / // /__/ /_/ / /_/ / )" << '\n'
-                  << R"( \____/_/ /_/\__,_/\__/\____/_____/_/  /_(_)___/ .___/ .___/  )" << '\n'
-                  << R"(                                              /_/   /_/       )" << '\n';
-    }
-
     if (args.verbose) {
         std::cout << "system info: | "
                   << "AVX = " << ggml_cpu_has_avx() << " | "
@@ -171,15 +162,31 @@ void chat(const Args &args) {
     }
 
     if (args.interactive) {
+        std::cout << R"(    ________          __  ________    __  ___                 )" << '\n'
+                  << R"(   / ____/ /_  ____ _/ /_/ ____/ /   /  |/  /_________  ____  )" << '\n'
+                  << R"(  / /   / __ \/ __ `/ __/ / __/ /   / /|_/ // ___/ __ \/ __ \ )" << '\n'
+                  << R"( / /___/ / / / /_/ / /_/ /_/ / /___/ /  / // /__/ /_/ / /_/ / )" << '\n'
+                  << R"( \____/_/ /_/\__,_/\__/\____/_____/_/  /_(_)___/ .___/ .___/  )" << '\n'
+                  << R"(                                              /_/   /_/       )" << '\n'
+                  << '\n';
+
+        std::cout
+            << "Welcome to ChatGLM.cpp! Ask whatever you want. Type 'clear' to clear context. Type 'stop' to exit.\n"
+            << "\n";
+
         std::vector<std::string> history;
         while (1) {
             std::cout << std::setw(model_name.size()) << std::left << "Prompt"
                       << " > " << std::flush;
             std::string prompt;
-            if (!get_utf8_line(prompt)) {
+            if (!get_utf8_line(prompt) || prompt == "stop") {
                 break;
             }
             if (prompt.empty()) {
+                continue;
+            }
+            if (prompt == "clear") {
+                history.clear();
                 continue;
             }
             history.emplace_back(std::move(prompt));

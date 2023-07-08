@@ -15,6 +15,7 @@ BANNER = """
 """.strip(
     "\n"
 )
+WELCOME_MESSAGE = "Welcome to ChatGLM.cpp! Ask whatever you want. Type 'clear' to clear context. Type 'stop' to exit."
 
 
 def main():
@@ -49,6 +50,9 @@ def main():
         return
 
     print(BANNER)
+    print()
+    print(WELCOME_MESSAGE)
+    print()
     history = []
     while True:
         try:
@@ -56,6 +60,11 @@ def main():
         except EOFError:
             break
         if not prompt:
+            continue
+        if prompt == "stop":
+            break
+        if prompt == "clear":
+            history = []
             continue
         history.append(prompt)
         print(f"{pipeline.model.type_name} > ", sep="", end="")
