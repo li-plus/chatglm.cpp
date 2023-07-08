@@ -4,7 +4,7 @@ from typing import Iterator, List
 
 import chatglm_cpp._C as _C
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 
 class Pipeline(_C.Pipeline):

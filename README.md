@@ -2,6 +2,7 @@
 
 [![CMake](https://github.com/li-plus/chatglm.cpp/actions/workflows/cmake.yml/badge.svg)](https://github.com/li-plus/chatglm.cpp/actions/workflows/cmake.yml)
 [![Python package](https://github.com/li-plus/chatglm.cpp/actions/workflows/python-package.yml/badge.svg)](https://github.com/li-plus/chatglm.cpp/actions/workflows/python-package.yml)
+[![PyPI](https://img.shields.io/pypi/v/chatglm-cpp)](https://pypi.org/project/chatglm-cpp/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B) and [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B) for real-time chatting on your MacBook.
@@ -51,13 +52,6 @@ You are free to try any of the below quantization types by specifying `-t <type>
 For LoRA model, add `-l <lora_model_name_or_path>` flag to merge your LoRA weights into the base model.
 
 **Build & Run**
-
-- Docker
-```bash
-docker run -it --rm -v [model path]:/opt/ chulinx/chatglm /chatglm -m /opt/chatglm2-ggml.bin -p "你好啊"
-你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。
-```
-- Compile 
 
 Compile the project using CMake:
 ```sh
@@ -109,11 +103,18 @@ Note that the current GGML CUDA implementation is really slow. The community is 
 
 ## Python Binding
 
-To install the Python binding from source, run:
+The Python binding provides high-level `chat` and `stream_chat` interface similar to the original Hugging Face ChatGLM(2)-6B.
+
+Install from PyPI (recommended): will trigger compilation on your platform.
+```sh
+pip install -U chatglm-cpp
+```
+
+You may also install from source:
 ```sh
 # install from the latest source hosted on GitHub
 pip install git+https://github.com/li-plus/chatglm.cpp.git@main
-# or install from your local source
+# or install from your local source after git cloning the repo
 pip install .
 ```
 
@@ -130,6 +131,13 @@ cd examples && python3 web_demo.py -m ../chatglm-ggml.bin
 For ChatGLM2, change the model path to `../chatglm2-ggml.bin` and everything works fine.
 
 ![web_demo](docs/web_demo.jpg)
+
+## Using Docker
+
+```sh
+docker run -it --rm -v [model path]:/opt/ chulinx/chatglm /chatglm -m /opt/chatglm2-ggml.bin -p "你好啊"
+你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。
+```
 
 ## Performance
 
