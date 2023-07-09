@@ -38,7 +38,7 @@ set(CPP_SOURCES
 set_source_files_properties(${CPP_SOURCES} PROPERTIES COMPILE_FLAGS "-pedantic-errors")
 
 add_library(chatglm STATIC chatglm.cpp)
-target_link_libraries(chatglm PRIVATE ggml sentencepiece-static)
+target_link_libraries(chatglm PUBLIC ggml sentencepiece-static)
 
 add_executable(main main.cpp)
 target_link_libraries(main PRIVATE chatglm)

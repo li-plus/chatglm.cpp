@@ -2,6 +2,11 @@
 #include <filesystem>
 #include <gtest/gtest.h>
 
+#ifdef GGML_USE_CUBLAS
+#include <cuda_runtime.h>
+#include <ggml-cuda.h>
+#endif
+
 namespace chatglm {
 
 namespace fs = std::filesystem;
@@ -21,6 +26,55 @@ static inline char *map_tensor_data(char *ptr, ggml_tensor *tensor) {
     return ptr + ggml_nbytes(tensor);
 }
 
+static inline float random() { return rand() / (float)RAND_MAX; }
+
+static void random_fill(ggml_tensor *tensor) {
+    int64_t numel = ggml_nelements(tensor);
+    if (tensor->type == GGML_TYPE_F32) {
+        for (int64_t i = 0; i < numel; i++) {
+            ((float *)tensor->data)[i] = random();
+        }
+    } else if (tensor->type == GGML_TYPE_F16) {
+        for (int64_t i = 0; i < numel; i++) {
+            ((ggml_fp16_t *)tensor->data)[i] = ggml_fp32_to_fp16(random());
+        }
+    } else {
+        CHATGLM_THROW << "unsupported dtype " << tensor->type;
+    }
+}
+
+// return elapsed time in milliseconds
+static inline float timeit(std::function<void()> fn, int warmup, int active) {
+    float elapsed_ms;
+    for (int i = 0; i < warmup; i++) {
+        fn();
+    }
+
+#ifdef GGML_USE_CUBLAS
+    cudaEvent_t start, stop;
+    CHATGLM_CHECK_CUDA(cudaEventCreate(&start));
+    CHATGLM_CHECK_CUDA(cudaEventCreate(&stop));
+    CHATGLM_CHECK_CUDA(cudaEventRecord(start));
+    for (int i = 0; i < active; i++) {
+        fn();
+    }
+    CHATGLM_CHECK_CUDA(cudaEventRecord(stop));
+    CHATGLM_CHECK_CUDA(cudaEventSynchronize(stop));
+    CHATGLM_CHECK_CUDA(cudaEventElapsedTime(&elapsed_ms, start, stop));
+    CHATGLM_CHECK_CUDA(cudaEventDestroy(start));
+    CHATGLM_CHECK_CUDA(cudaEventDestroy(stop));
+#else
+    int64_t start_us = ggml_time_us();
+    for (int i = 0; i < active; i++) {
+        fn();
+    }
+    int64_t end_us = ggml_time_us();
+    elapsed_ms = (end_us - start_us) / 1000.f;
+#endif
+
+    return elapsed_ms / active;
+}
+
 class ChatGLMTest : public ::testing::Test {
   protected:
     InitContext ictx;
@@ -29,11 +83,11 @@ class ChatGLMTest : public ::testing::Test {
 
     void SetUp() override {
         ictx.dtype = GGML_TYPE_F32;
-        ictx.gctx = GGMLContext({1024 * 1024, nullptr, false});
+        ictx.gctx = GGMLContext({64 * 1024 * 1024, nullptr, false});
 
         scratch_buf.resize(1024 * 1024);
 
-        ctx.gctx = GGMLContext({1024 * 1024, nullptr, false});
+        ctx.gctx = GGMLContext({64 * 1024 * 1024, nullptr, false});
         ctx.scratch = {0, scratch_buf.size(), scratch_buf.data()};
 
         reset_cgraph();
@@ -78,6 +132,7 @@ TEST_F(ChatGLMTest, Linear) {
     ptr = map_tensor_data(ptr, b);
     ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 32, 2);
     ptr = map_tensor_data(ptr, x);
+    tensor_to_device(x);
     ggml_tensor *ref = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 16, 2);
     ptr = map_tensor_data(ptr, ref);
     ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
@@ -88,13 +143,20 @@ TEST_F(ChatGLMTest, Linear) {
         Linear model(&ictx, 32, 16);
         model.weight->data = w->data;
         model.bias->data = b->data;
+        tensor_to_device(model.weight);
+        tensor_to_device(model.bias);
 
         ggml_tensor *out = model.forward(&ctx, x);
+        EXPECT_EQ(out->backend, x->backend);
+        out->backend = GGML_BACKEND_CPU;
 
         ggml_build_forward_expand(&ctx.gf, out);
         ggml_graph_compute(ctx.gctx.get(), &ctx.gf);
 
         expect_all_close(ref, out);
+
+        tensor_to_cpu(model.weight);
+        tensor_to_cpu(model.bias);
     }
     // fp16
     {
@@ -104,15 +166,51 @@ TEST_F(ChatGLMTest, Linear) {
         Linear model(&ictx, 32, 16);
         ggml_fp32_to_fp16_row((float *)w->data, (ggml_fp16_t *)model.weight->data, ggml_nelements(model.weight));
         model.bias->data = b->data;
+        tensor_to_device(model.weight);
+        tensor_to_device(model.bias);
 
         ggml_tensor *out = model.forward(&ctx, x);
+        EXPECT_EQ(out->backend, x->backend);
+        out->backend = GGML_BACKEND_CPU;
 
         ggml_build_forward_expand(&ctx.gf, out);
         ggml_graph_compute(ctx.gctx.get(), &ctx.gf);
 
         EXPECT_EQ(out->type, GGML_TYPE_F32);
         expect_all_close(ref, out, 5e-3);
+
+        tensor_to_cpu(model.weight);
+        tensor_to_cpu(model.bias);
     }
+    tensor_to_cpu(x);
+}
+
+TEST_F(ChatGLMTest, BenchmarkLinear) {
+    constexpr int M = 64, N = 1024, K = 1024 * 3;
+    ictx.dtype = GGML_TYPE_F32;
+    Linear m(&ictx, K, N);
+    random_fill(m.weight);
+    random_fill(m.bias);
+    tensor_to_device(m.weight);
+    tensor_to_device(m.bias);
+
+#ifndef GGML_USE_CUBLAS
+    ctx.gf.n_threads = 16;
+#endif
+
+    ggml_tensor *x = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, K, M);
+    random_fill(x);
+    tensor_to_device(x);
+
+    ggml_tensor *y = m.forward(&ctx, x);
+    ggml_build_forward_expand(&ctx.gf, y);
+
+    auto fn = [this] { ggml_graph_compute(ctx.gctx.get(), &ctx.gf); };
+    std::cout << "BenchmarkLinear: " << timeit(fn, 10, 100) << " ms\n";
+
+    tensor_to_cpu(m.weight);
+    tensor_to_cpu(m.bias);
+    tensor_to_cpu(x);
 }
 
 TEST_F(ChatGLMTest, LayerNorm) {
@@ -134,10 +232,17 @@ TEST_F(ChatGLMTest, LayerNorm) {
     ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
 
     ggml_tensor *out = model.forward(&ctx, x);
+    EXPECT_EQ(out->backend, x->backend);
+    out->backend = GGML_BACKEND_CPU;
+
     ggml_build_forward_expand(&ctx.gf, out);
     ggml_graph_compute(ctx.gctx.get(), &ctx.gf);
 
     expect_all_close(ref, out);
+
+    tensor_to_cpu(model.weight);
+    tensor_to_cpu(model.bias);
+    tensor_to_cpu(x);
 }
 
 TEST_F(ChatGLMTest, RMSNorm) {
@@ -157,12 +262,20 @@ TEST_F(ChatGLMTest, RMSNorm) {
 
     ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
 
+    tensor_to_device(model.weight);
+    tensor_to_device(x);
+
     ggml_tensor *out = model.forward(&ctx, x);
+    EXPECT_EQ(out->backend, x->backend);
+    out->backend = GGML_BACKEND_CPU;
 
     ggml_build_forward_expand(&ctx.gf, out);
     ggml_graph_compute(ctx.gctx.get(), &ctx.gf);
 
     expect_all_close(ref, out);
+
+    tensor_to_cpu(model.weight);
+    tensor_to_cpu(x);
 }
 
 TEST_F(ChatGLMTest, GLMBlock) {

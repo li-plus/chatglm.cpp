@@ -25,7 +25,19 @@ class LogMessageFatal {
     if (!(cond))                                                                                                       \
     CHATGLM_THROW << "check failed (" #cond ") "
 
+#define CHATGLM_CHECK_CUDA(call)                                                                                       \
+    do {                                                                                                               \
+        cudaError_t error = (call);                                                                                    \
+        CHATGLM_CHECK(error == cudaSuccess) << "CUDA error: " << cudaGetErrorString(error);                            \
+    } while (0)
+
 std::string to_string(ggml_tensor *tensor, bool with_data = true);
+
+void tensor_assign_buffers(ggml_tensor *tensor, bool scratch = true, bool force_inplace = false);
+
+void tensor_to_device(ggml_tensor *tensor);
+
+void tensor_to_cpu(ggml_tensor *tensor);
 
 struct BaseConfig {
     // common attributes

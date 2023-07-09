@@ -107,6 +107,42 @@ std::string to_string(ggml_tensor *tensor, bool with_data) {
     return oss.str();
 }
 
+void tensor_assign_buffers(ggml_tensor *tensor, bool scratch, bool force_inplace) {
+#ifdef GGML_USE_CUBLAS
+    if (scratch) {
+        CHATGLM_CHECK(!force_inplace);
+        ggml_cuda_assign_buffers(tensor);
+    } else {
+        if (force_inplace) {
+            ggml_cuda_assign_buffers_force_inplace(tensor);
+        } else {
+            // BE CAREFUL TO USE THIS!
+            ggml_cuda_assign_buffers_no_scratch(tensor);
+        }
+    }
+#endif
+}
+
+void tensor_to_device(ggml_tensor *tensor) {
+#ifdef GGML_USE_CUBLAS
+    if (tensor->backend == GGML_BACKEND_GPU || tensor->backend == GGML_BACKEND_GPU_SPLIT) {
+        return;
+    }
+    tensor->backend = GGML_BACKEND_GPU;
+    ggml_cuda_transform_tensor(tensor->data, tensor);
+#endif
+}
+
+void tensor_to_cpu(ggml_tensor *tensor) {
+#ifdef GGML_USE_CUBLAS
+    if (tensor->backend == GGML_BACKEND_CPU) {
+        return;
+    }
+    ggml_cuda_free_data(tensor);
+    tensor->backend = GGML_BACKEND_CPU;
+#endif
+}
+
 // ===== streamer =====
 
 void StreamerGroup::put(const std::vector<int> &output_ids) {
@@ -300,9 +336,10 @@ ggml_tensor *Embedding::forward(ForwardContext *ctx, ggml_tensor *input) const {
 ggml_tensor *Linear::forward(ForwardContext *ctx, ggml_tensor *input) const {
     // input: [seqlen, in_features]
     ggml_tensor *output = ggml_mul_mat(ctx->gctx.get(), weight, input); // [seqlen, out_features]
+    tensor_assign_buffers(output);
     if (bias) {
-        ggml_tensor *bcast_bias = ggml_view_2d(ctx->gctx.get(), bias, output->ne[0], output->ne[1], 0, 0);
-        output = ggml_add_inplace(ctx->gctx.get(), output, bcast_bias);
+        output = ggml_add_inplace(ctx->gctx.get(), output, bias);
+        tensor_assign_buffers(output, false, true);
     }
     return output;
 }
@@ -310,15 +347,19 @@ ggml_tensor *Linear::forward(ForwardContext *ctx, ggml_tensor *input) const {
 ggml_tensor *LayerNorm::forward(ForwardContext *ctx, ggml_tensor *input) const {
     // input: [seqlen, normalized_shape]
     ggml_tensor *output = ggml_norm_inplace(ctx->gctx.get(), input);
+    tensor_assign_buffers(output, false, true);
     output = ggml_mul_inplace(ctx->gctx.get(), output, weight);
-    ggml_tensor *bcast_bias = ggml_view_2d(ctx->gctx.get(), bias, output->ne[0], output->ne[1], 0, 0);
-    output = ggml_add_inplace(ctx->gctx.get(), output, bcast_bias);
+    tensor_assign_buffers(output, false, true);
+    output = ggml_add_inplace(ctx->gctx.get(), output, bias);
+    tensor_assign_buffers(output, false, true);
     return output;
 }
 
 ggml_tensor *RMSNorm::forward(ForwardContext *ctx, ggml_tensor *input) const {
     ggml_tensor *output = ggml_rms_norm_inplace(ctx->gctx.get(), input);
+    tensor_assign_buffers(output, false, true);
     output = ggml_mul_inplace(ctx->gctx.get(), output, weight);
+    tensor_assign_buffers(output, false, true);
     return output;
 }
 
@@ -771,19 +812,12 @@ void ChatGLMForConditionalGeneration::load(ModelLoader &loader) {
     CHATGLM_CHECK(ggml_used_mem(w_ctx_.gctx.get()) == ggml_get_mem_size(w_ctx_.gctx.get()))
         << "corrupted model weights";
 
-#ifdef GGML_USE_CUBLAS
-    auto transform_tensor_to_cuda = [](ggml_tensor *tensor) {
-        tensor->backend = GGML_BACKEND_GPU;
-        ggml_cuda_transform_tensor(tensor->data, tensor);
-    };
-
     for (int i = 0; i < config.num_hidden_layers; i++) {
-        transform_tensor_to_cuda(transformer.layers[i].attention.query_key_value.weight);
-        transform_tensor_to_cuda(transformer.layers[i].attention.dense.weight);
-        transform_tensor_to_cuda(transformer.layers[i].mlp.dense_h_to_4h.weight);
-        transform_tensor_to_cuda(transformer.layers[i].mlp.dense_4h_to_h.weight);
+        tensor_to_device(transformer.layers[i].attention.query_key_value.weight);
+        tensor_to_device(transformer.layers[i].attention.dense.weight);
+        tensor_to_device(transformer.layers[i].mlp.dense_h_to_4h.weight);
+        tensor_to_device(transformer.layers[i].mlp.dense_4h_to_h.weight);
     }
-#endif
 }
 
 ggml_tensor *ChatGLMForConditionalGeneration::forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past,
@@ -1018,20 +1052,13 @@ void ChatGLM2ForConditionalGeneration::load(ModelLoader &loader) {
     CHATGLM_CHECK(ggml_used_mem(w_ctx_.gctx.get()) == ggml_get_mem_size(w_ctx_.gctx.get()))
         << "corrupted model weights";
 
-#ifdef GGML_USE_CUBLAS
-    auto transform_tensor_to_cuda = [](ggml_tensor *tensor) {
-        tensor->backend = GGML_BACKEND_GPU;
-        ggml_cuda_transform_tensor(tensor->data, tensor);
-    };
-
     for (int i = 0; i < config.num_hidden_layers; i++) {
-        transform_tensor_to_cuda(transformer.layers[i].attention.query_key_value.weight);
-        transform_tensor_to_cuda(transformer.layers[i].attention.dense.weight);
-        transform_tensor_to_cuda(transformer.layers[i].mlp.dense_h_to_4h.weight);
-        transform_tensor_to_cuda(transformer.layers[i].mlp.dense_4h_to_h.weight);
+        tensor_to_device(transformer.layers[i].attention.query_key_value.weight);
+        tensor_to_device(transformer.layers[i].attention.dense.weight);
+        tensor_to_device(transformer.layers[i].mlp.dense_h_to_4h.weight);
+        tensor_to_device(transformer.layers[i].mlp.dense_4h_to_h.weight);
     }
-    transform_tensor_to_cuda(lm_head.weight);
-#endif
+    tensor_to_device(lm_head.weight);
 }
 
 ggml_tensor *ChatGLM2ForConditionalGeneration::forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past,
