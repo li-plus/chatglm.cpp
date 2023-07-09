@@ -21,8 +21,12 @@ static inline void expect_all_close(ggml_tensor *a, ggml_tensor *b, float atol =
     }
 }
 
-static inline char *map_tensor_data(char *ptr, ggml_tensor *tensor) {
-    tensor->data = ptr;
+static inline char *map_tensor_data(char *ptr, ggml_tensor *tensor, bool copy = false) {
+    if (!copy) {
+        tensor->data = ptr;
+    } else {
+        memcpy(tensor->data, ptr, ggml_nbytes(tensor));
+    }
     return ptr + ggml_nbytes(tensor);
 }
 
@@ -245,6 +249,35 @@ TEST_F(ChatGLMTest, LayerNorm) {
     tensor_to_cpu(x);
 }
 
+TEST_F(ChatGLMTest, BenchmarkLayerNorm) {
+    constexpr int seq_len = 64;
+    constexpr int hidden = 1024;
+
+    LayerNorm m(&ictx, hidden);
+    random_fill(m.weight);
+    random_fill(m.bias);
+    tensor_to_device(m.weight);
+    tensor_to_device(m.bias);
+
+#ifndef GGML_USE_CUBLAS
+    ctx.gf.n_threads = 16;
+#endif
+
+    ggml_tensor *x = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden, seq_len);
+    random_fill(x);
+    tensor_to_device(x);
+
+    ggml_tensor *y = m.forward(&ctx, x);
+    ggml_build_forward_expand(&ctx.gf, y);
+
+    auto fn = [this] { ggml_graph_compute(ctx.gctx.get(), &ctx.gf); };
+    std::cout << "BenchmarkLayerNorm: " << timeit(fn, 0, 1) << " ms\n";
+
+    tensor_to_cpu(m.weight);
+    tensor_to_cpu(m.bias);
+    tensor_to_cpu(x);
+}
+
 TEST_F(ChatGLMTest, RMSNorm) {
     fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/rms_norm.data";
     MappedFile mapped_file(test_path.string());
@@ -304,22 +337,19 @@ TEST_F(ChatGLMTest, GLMBlock) {
     ptr = map_tensor_data(ptr, model.mlp.dense_4h_to_h.bias);
 
     ggml_tensor *x1 = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
-    ptr = map_tensor_data(ptr, x1);
-    x1 = ggml_dup(ictx.gctx.get(), x1);
+    ptr = map_tensor_data(ptr, x1, true);
 
     ggml_tensor *ref_y1 = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
     ptr = map_tensor_data(ptr, ref_y1);
 
     ggml_tensor *x2 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
-    ptr = map_tensor_data(ptr, x2);
-    x2 = ggml_dup(ictx.gctx.get(), x2);
+    ptr = map_tensor_data(ptr, x2, true);
 
     ggml_tensor *ref_y2 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
     ptr = map_tensor_data(ptr, ref_y2);
 
     ggml_tensor *x3 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
-    ptr = map_tensor_data(ptr, x3);
-    x3 = ggml_dup(ictx.gctx.get(), x3);
+    ptr = map_tensor_data(ptr, x3, true);
 
     ggml_tensor *ref_y3 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
     ptr = map_tensor_data(ptr, ref_y3);
@@ -377,22 +407,19 @@ TEST_F(ChatGLMTest, GLM2Block) {
     ptr = map_tensor_data(ptr, model.mlp.dense_4h_to_h.weight);
 
     ggml_tensor *x1 = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
-    ptr = map_tensor_data(ptr, x1);
-    x1 = ggml_dup(ictx.gctx.get(), x1);
+    ptr = map_tensor_data(ptr, x1, true);
 
     ggml_tensor *ref_y1 = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
     ptr = map_tensor_data(ptr, ref_y1);
 
     ggml_tensor *x2 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
-    ptr = map_tensor_data(ptr, x2);
-    x2 = ggml_dup(ictx.gctx.get(), x2);
+    ptr = map_tensor_data(ptr, x2, true);
 
     ggml_tensor *ref_y2 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
     ptr = map_tensor_data(ptr, ref_y2);
 
     ggml_tensor *x3 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
-    ptr = map_tensor_data(ptr, x3);
-    x3 = ggml_dup(ictx.gctx.get(), x3);
+    ptr = map_tensor_data(ptr, x3, true);
 
     ggml_tensor *ref_y3 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
     ptr = map_tensor_data(ptr, ref_y3);
