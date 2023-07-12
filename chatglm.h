@@ -282,6 +282,8 @@ enum ModelType {
     MODEL_TYPE_CHATGLM2 = 2,
 };
 
+int get_num_physical_cores();
+
 std::string to_string(ModelType model_type);
 
 class BaseModelForConditionalGeneration {
