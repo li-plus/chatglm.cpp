@@ -375,13 +375,7 @@ class GLMSelfAttention {
   public:
     // TODO: kv cache type
     GLMSelfAttention() : num_attention_heads(0) {}
-    GLMSelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int max_length)
-        : query_key_value(ctx, hidden_size, 3 * hidden_size), dense(ctx, hidden_size, hidden_size),
-          num_attention_heads(num_attention_heads),
-          k_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
-                                     num_attention_heads)),
-          v_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
-                                     num_attention_heads)) {}
+    GLMSelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int max_length);
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
 

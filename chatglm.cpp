@@ -339,7 +339,7 @@ ggml_tensor *Linear::forward(ForwardContext *ctx, ggml_tensor *input) const {
     tensor_assign_buffers(output);
     if (bias) {
         output = ggml_add_inplace(ctx->gctx.get(), output, bias);
-        tensor_assign_buffers(output, false, true);
+        tensor_assign_buffers(output);
     }
     return output;
 }
@@ -347,19 +347,19 @@ ggml_tensor *Linear::forward(ForwardContext *ctx, ggml_tensor *input) const {
 ggml_tensor *LayerNorm::forward(ForwardContext *ctx, ggml_tensor *input) const {
     // input: [seqlen, normalized_shape]
     ggml_tensor *output = ggml_norm_inplace(ctx->gctx.get(), input);
-    tensor_assign_buffers(output, false, true);
+    tensor_assign_buffers(output);
     output = ggml_mul_inplace(ctx->gctx.get(), output, weight);
-    tensor_assign_buffers(output, false, true);
+    tensor_assign_buffers(output);
     output = ggml_add_inplace(ctx->gctx.get(), output, bias);
-    tensor_assign_buffers(output, false, true);
+    tensor_assign_buffers(output);
     return output;
 }
 
 ggml_tensor *RMSNorm::forward(ForwardContext *ctx, ggml_tensor *input) const {
     ggml_tensor *output = ggml_rms_norm_inplace(ctx->gctx.get(), input);
-    tensor_assign_buffers(output, false, true);
+    tensor_assign_buffers(output);
     output = ggml_mul_inplace(ctx->gctx.get(), output, weight);
-    tensor_assign_buffers(output, false, true);
+    tensor_assign_buffers(output);
     return output;
 }
 
@@ -661,9 +661,20 @@ std::vector<int> BaseModelForConditionalGeneration::generate(const std::vector<i
 ggml_tensor *GLMMLP::forward(ForwardContext *ctx, ggml_tensor *hidden_states) const {
     ggml_tensor *output = dense_h_to_4h.forward(ctx, hidden_states);
     output = ggml_gelu_inplace(ctx->gctx.get(), output);
-    tensor_assign_buffers(output, false, true);
+    tensor_assign_buffers(output);
     output = dense_4h_to_h.forward(ctx, output);
     return output;
+}
+
+GLMSelfAttention::GLMSelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int max_length)
+    : query_key_value(ctx, hidden_size, 3 * hidden_size), dense(ctx, hidden_size, hidden_size),
+      num_attention_heads(num_attention_heads),
+      k_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
+                                 num_attention_heads)),
+      v_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
+                                 num_attention_heads)) {
+    tensor_to_device(k_cache);
+    tensor_to_device(v_cache);
 }
 
 ggml_tensor *GLMSelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
@@ -676,38 +687,68 @@ ggml_tensor *GLMSelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_
 
     ggml_tensor *query_layer = ggml_view_3d(ctx->gctx.get(), qkv, head_size, num_attention_heads, qlen,
                                             3 * head_size * ggml_element_size(qkv), qkv->nb[1], 0);
-    // TODO: MODE!!!!!!! 4!!!
-    query_layer =
-        ggml_rope_inplace(ctx->gctx.get(), query_layer, n_past, rope_dim, 0, n_ctx); // [qlen, heads, head_size]
-    tensor_assign_buffers(query_layer, false, true);
-    query_layer = ggml_permute(ctx->gctx.get(), query_layer, 0, 2, 1, 3); // [heads, qlen, head_size]
-
     ggml_tensor *key_layer =
         ggml_view_3d(ctx->gctx.get(), qkv, head_size, num_attention_heads, qlen, 3 * head_size * ggml_element_size(qkv),
                      qkv->nb[1], head_size * ggml_element_size(qkv));
-    key_layer = ggml_rope_inplace(ctx->gctx.get(), key_layer, n_past, rope_dim, 0, n_ctx); // [qlen, heads, head_size]
-    tensor_assign_buffers(key_layer, false, true);
-    key_layer = ggml_permute(ctx->gctx.get(), key_layer, 0, 2, 1, 3); // [heads, qlen, head_size]
-
     ggml_tensor *value_layer = ggml_view_3d(ctx->gctx.get(), qkv, head_size, num_attention_heads, qlen,
                                             3 * head_size * ggml_element_size(qkv), qkv->nb[1],
                                             2 * head_size * ggml_element_size(qkv)); // [qlen, heads, head_size]
-    value_layer = ggml_permute(ctx->gctx.get(), value_layer, 1, 2, 0, 3);            // [heads, head_size, qlen]
+
+#ifdef GGML_USE_CUBLAS
+    // dst for inplace ops should be contiguous for cuda
+    query_layer = ggml_cont(ctx->gctx.get(), query_layer);
+    tensor_assign_buffers(query_layer);
+    key_layer = ggml_cont(ctx->gctx.get(), key_layer);
+    tensor_assign_buffers(key_layer);
+#endif
+
+    query_layer =
+        ggml_rope_inplace(ctx->gctx.get(), query_layer, n_past, rope_dim, 4, n_ctx); // [qlen, heads, head_size]
+    tensor_assign_buffers(query_layer);
+    query_layer = ggml_permute(ctx->gctx.get(), query_layer, 0, 2, 1, 3); // [heads, qlen, head_size]
+    tensor_assign_buffers(query_layer, false, true);
+
+    key_layer = ggml_rope_inplace(ctx->gctx.get(), key_layer, n_past, rope_dim, 4, n_ctx); // [qlen, heads, head_size]
+    tensor_assign_buffers(key_layer);
+    key_layer = ggml_permute(ctx->gctx.get(), key_layer, 0, 2, 1, 3); // [heads, qlen, head_size]
+    tensor_assign_buffers(key_layer, false, true);
+
+    value_layer = ggml_permute(ctx->gctx.get(), value_layer, 1, 2, 0, 3); // [heads, head_size, qlen]
+    tensor_assign_buffers(value_layer, false, true);
 
     // store key & value to cache
     ggml_tensor *k_cache_view =
         ggml_view_3d(ctx->gctx.get(), k_cache, head_size, qlen, num_attention_heads, k_cache->nb[1], k_cache->nb[2],
                      n_past * head_size * ggml_element_size(k_cache)); // [heads, qlen, head_size]
+    tensor_assign_buffers(k_cache_view);
     ggml_build_forward_expand(&ctx->gf, ggml_cpy(ctx->gctx.get(), key_layer, k_cache_view));
+
+    // {
+    //     auto zeros = ggml_new_tensor(ctx->gctx.get(), k_cache_view->type, k_cache_view->n_dims, k_cache_view->ne);
+    //     ggml_set_f32(zeros, 0);
+    //     tensor_to_device(zeros);
+    //     auto out = ggml_add(ctx->gctx.get(), k_cache_view, zeros);
+    //     tensor_assign_buffers(out);
+    //     return out;
+    // }
+
     ggml_tensor *v_cache_view =
         ggml_view_3d(ctx->gctx.get(), v_cache, qlen, head_size, num_attention_heads, v_cache->nb[1], v_cache->nb[2],
                      n_past * ggml_element_size(v_cache)); // [heads, head_size, qlen]
+    tensor_assign_buffers(v_cache_view);
     ggml_build_forward_expand(&ctx->gf, ggml_cpy(ctx->gctx.get(), value_layer, v_cache_view));
 
     key_layer = ggml_view_3d(ctx->gctx.get(), k_cache, head_size, n_past + qlen, num_attention_heads, k_cache->nb[1],
                              k_cache->nb[2], 0); // [heads, klen, head_size]
+    tensor_assign_buffers(key_layer);
     value_layer = ggml_view_3d(ctx->gctx.get(), v_cache, n_past + qlen, head_size, num_attention_heads, v_cache->nb[1],
                                v_cache->nb[2], 0); // [heads, head_size, klen]
+    tensor_assign_buffers(value_layer);
+
+#ifdef GGML_USE_CUBLAS
+    query_layer = ggml_cont(ctx->gctx.get(), query_layer);
+    tensor_assign_buffers(query_layer);
+#endif
 
     ggml_tensor *attn_scores = ggml_mul_mat(ctx->gctx.get(), key_layer, query_layer); // [heads, qlen, klen]
     tensor_assign_buffers(attn_scores);
@@ -715,24 +756,24 @@ ggml_tensor *GLMSelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_
         // build attention mask for context input
         ggml_tensor *inf = ggml_new_tensor_3d(ctx->gctx.get(), attn_scores->type, 1, qlen - 1, num_attention_heads);
         ggml_set_f32(inf, -INFINITY);
-        tensor_to_device(inf);
+        tensor_to_device(inf); // TODO: optimize
         ggml_tensor *masked_attn_scores = ggml_view_3d(
             ctx->gctx.get(), attn_scores, 1, qlen - 1, num_attention_heads, qlen * ggml_element_size(attn_scores),
             qlen * qlen * ggml_element_size(attn_scores), (qlen - 1) * ggml_element_size(attn_scores));
-        tensor_assign_buffers(masked_attn_scores, false, true);
+        tensor_assign_buffers(masked_attn_scores);
         ggml_build_forward_expand(&ctx->gf, ggml_cpy(ctx->gctx.get(), inf, masked_attn_scores));
     }
     attn_scores =
         ggml_scale_inplace(ctx->gctx.get(), attn_scores, ggml_new_f32(ctx->gctx.get(), 1.f / std::sqrt(head_size)));
-    tensor_assign_buffers(attn_scores, false, true);
+    tensor_assign_buffers(attn_scores);
     ggml_tensor *attn_probs = ggml_soft_max_inplace(ctx->gctx.get(), attn_scores); // [heads, qlen, klen]
-    tensor_assign_buffers(attn_probs, false, true);
+    tensor_assign_buffers(attn_probs);
 
     ggml_tensor *context_layer = ggml_mul_mat(ctx->gctx.get(), value_layer, attn_probs); // [heads, qlen, head_size]
     tensor_assign_buffers(context_layer);
-    context_layer = ggml_reshape_2d(
-        ctx->gctx.get(), ggml_cont(ctx->gctx.get(), ggml_permute(ctx->gctx.get(), context_layer, 0, 2, 1, 3)),
-        hidden_size, qlen);
+    context_layer = ggml_cont(ctx->gctx.get(), ggml_permute(ctx->gctx.get(), context_layer, 0, 2, 1, 3));
+    tensor_assign_buffers(context_layer);
+    context_layer = ggml_reshape_2d(ctx->gctx.get(), context_layer, hidden_size, qlen);
     tensor_assign_buffers(context_layer);
 
     ggml_tensor *attn_output = dense.forward(ctx, context_layer);
@@ -741,23 +782,22 @@ ggml_tensor *GLMSelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_
 
 ggml_tensor *GLMBlock::forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
     ggml_tensor *alpha = ggml_new_f32(ctx->gctx.get(), std::sqrt(2.f * num_hidden_layers));
-    tensor_assign_buffers(alpha);
 
     ggml_tensor *attn_input = input_layernorm.forward(ctx, hidden_states);
     ggml_tensor *attn_output = attention.forward(ctx, attn_input, n_past, n_ctx);
     ggml_build_forward_expand(&ctx->gf, attn_output);
     attn_input = ggml_scale_inplace(ctx->gctx.get(), attn_input, alpha);
-    tensor_assign_buffers(attn_input, false, true);
+    tensor_assign_buffers(attn_input);
     hidden_states = ggml_add_inplace(ctx->gctx.get(), attn_input, attn_output);
-    tensor_assign_buffers(hidden_states, false, true);
+    tensor_assign_buffers(hidden_states);
 
     ggml_tensor *mlp_input = post_attention_layernorm.forward(ctx, hidden_states);
     ggml_tensor *mlp_output = mlp.forward(ctx, mlp_input);
     ggml_build_forward_expand(&ctx->gf, mlp_output);
     mlp_input = ggml_scale_inplace(ctx->gctx.get(), mlp_input, alpha);
-    tensor_assign_buffers(mlp_input, false, true);
+    tensor_assign_buffers(mlp_input);
     ggml_tensor *output = ggml_add_inplace(ctx->gctx.get(), mlp_input, mlp_output);
-    tensor_assign_buffers(output, false, true);
+    tensor_assign_buffers(output);
 
     return output;
 }
@@ -808,37 +848,39 @@ ChatGLMForConditionalGeneration::ChatGLMForConditionalGeneration(const ChatGLMCo
 }
 
 void ChatGLMForConditionalGeneration::load(ModelLoader &loader) {
-    loader.read_tensor("transformer.word_embeddings.weight", transformer.word_embeddings.weight);
+    std::unordered_map<std::string, ggml_tensor *> state_dict{
+        {"transformer.word_embeddings.weight", transformer.word_embeddings.weight}};
     for (int i = 0; i < config.num_hidden_layers; i++) {
         std::string layer_prefix = "transformer.layers." + std::to_string(i) + '.';
-        loader.read_tensor(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
-        loader.read_tensor(layer_prefix + "input_layernorm.bias", transformer.layers[i].input_layernorm.bias);
-        loader.read_tensor(layer_prefix + "attention.query_key_value.weight",
+        state_dict.emplace(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
+        state_dict.emplace(layer_prefix + "input_layernorm.bias", transformer.layers[i].input_layernorm.bias);
+        state_dict.emplace(layer_prefix + "attention.query_key_value.weight",
                            transformer.layers[i].attention.query_key_value.weight);
-        loader.read_tensor(layer_prefix + "attention.query_key_value.bias",
+        state_dict.emplace(layer_prefix + "attention.query_key_value.bias",
                            transformer.layers[i].attention.query_key_value.bias);
-        loader.read_tensor(layer_prefix + "attention.dense.weight", transformer.layers[i].attention.dense.weight);
-        loader.read_tensor(layer_prefix + "attention.dense.bias", transformer.layers[i].attention.dense.bias);
-        loader.read_tensor(layer_prefix + "post_attention_layernorm.weight",
+        state_dict.emplace(layer_prefix + "attention.dense.weight", transformer.layers[i].attention.dense.weight);
+        state_dict.emplace(layer_prefix + "attention.dense.bias", transformer.layers[i].attention.dense.bias);
+        state_dict.emplace(layer_prefix + "post_attention_layernorm.weight",
                            transformer.layers[i].post_attention_layernorm.weight);
-        loader.read_tensor(layer_prefix + "post_attention_layernorm.bias",
+        state_dict.emplace(layer_prefix + "post_attention_layernorm.bias",
                            transformer.layers[i].post_attention_layernorm.bias);
-        loader.read_tensor(layer_prefix + "mlp.dense_h_to_4h.weight", transformer.layers[i].mlp.dense_h_to_4h.weight);
-        loader.read_tensor(layer_prefix + "mlp.dense_h_to_4h.bias", transformer.layers[i].mlp.dense_h_to_4h.bias);
-        loader.read_tensor(layer_prefix + "mlp.dense_4h_to_h.weight", transformer.layers[i].mlp.dense_4h_to_h.weight);
-        loader.read_tensor(layer_prefix + "mlp.dense_4h_to_h.bias", transformer.layers[i].mlp.dense_4h_to_h.bias);
+        state_dict.emplace(layer_prefix + "mlp.dense_h_to_4h.weight", transformer.layers[i].mlp.dense_h_to_4h.weight);
+        state_dict.emplace(layer_prefix + "mlp.dense_h_to_4h.bias", transformer.layers[i].mlp.dense_h_to_4h.bias);
+        state_dict.emplace(layer_prefix + "mlp.dense_4h_to_h.weight", transformer.layers[i].mlp.dense_4h_to_h.weight);
+        state_dict.emplace(layer_prefix + "mlp.dense_4h_to_h.bias", transformer.layers[i].mlp.dense_4h_to_h.bias);
     }
-    loader.read_tensor("transformer.final_layernorm.weight", transformer.final_layernorm.weight);
-    loader.read_tensor("transformer.final_layernorm.bias", transformer.final_layernorm.bias);
+    state_dict.emplace("transformer.final_layernorm.weight", transformer.final_layernorm.weight);
+    state_dict.emplace("transformer.final_layernorm.bias", transformer.final_layernorm.bias);
+
+    for (auto &item : state_dict) {
+        const std::string &name = item.first;
+        ggml_tensor *tensor = item.second;
+        loader.read_tensor(name, tensor);
+        tensor_to_device(tensor);
+    }
+
     CHATGLM_CHECK(ggml_used_mem(w_ctx_.gctx.get()) == ggml_get_mem_size(w_ctx_.gctx.get()))
         << "corrupted model weights";
-
-    for (int i = 0; i < config.num_hidden_layers; i++) {
-        tensor_to_device(transformer.layers[i].attention.query_key_value.weight);
-        tensor_to_device(transformer.layers[i].attention.dense.weight);
-        tensor_to_device(transformer.layers[i].mlp.dense_h_to_4h.weight);
-        tensor_to_device(transformer.layers[i].mlp.dense_4h_to_h.weight);
-    }
 }
 
 ggml_tensor *ChatGLMForConditionalGeneration::forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past,
