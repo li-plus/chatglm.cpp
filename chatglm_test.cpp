@@ -15,13 +15,9 @@ static inline int get_num_threads_for_benchmark() {
 #ifdef GGML_USE_CUBLAS
     return 1;
 #endif
-    int num_threads_for_benchmark;
     const char *chatglm_num_threads_env = getenv("CHATGLM_NUM_THREADS");
-    if (chatglm_num_threads_env) {
-        num_threads_for_benchmark = std::stoi(chatglm_num_threads_env);
-    } else {
-        num_threads_for_benchmark = get_num_physical_cores();
-    }
+    int num_threads_for_benchmark =
+        chatglm_num_threads_env ? std::stoi(chatglm_num_threads_env) : get_num_physical_cores();
     return num_threads_for_benchmark;
 }
 
@@ -414,7 +410,7 @@ TEST_F(ChatGLMTest, GLMBlock) {
         EXPECT_EQ(out_y1->backend, x1->backend);
         out_y1->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y1);
-        ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, 1); // TODO: test with 2
+        ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, 1);
 
         expect_all_close(ref_y1, out_y1, 5e-4);
     }

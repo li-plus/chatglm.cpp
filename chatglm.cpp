@@ -746,6 +746,7 @@ ggml_tensor *GLMSelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_
     tensor_assign_buffers(value_layer);
 
 #ifdef GGML_USE_CUBLAS
+    // make query contiguous to speed up cuda gemm
     query_layer = ggml_cont(ctx->gctx.get(), query_layer);
     tensor_assign_buffers(query_layer);
 #endif

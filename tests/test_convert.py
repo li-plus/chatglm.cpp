@@ -233,7 +233,7 @@ def make_data_glm_block():
 
     m = (
         GLMBlock(
-            hidden_size=32, num_attention_heads=8, layernorm_epsilon=1e-5, layer_id=3, num_layers=28, empty_init=False
+            hidden_size=32, num_attention_heads=4, layernorm_epsilon=1e-5, layer_id=3, num_layers=28, empty_init=False
         )
         .float()
         .eval()
