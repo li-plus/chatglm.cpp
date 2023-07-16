@@ -431,6 +431,7 @@ class ChatGLMForConditionalGeneration : public BaseModelForConditionalGeneration
     static constexpr size_t SCRATCH_SIZE = 128ull * 1024 * 1024;
     ChatGLMConfig config;
     ChatGLMModel transformer;
+    Linear lm_head;
 
   private:
     // hold ggml_context & kv_cache

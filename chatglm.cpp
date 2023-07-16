@@ -827,19 +827,21 @@ ggml_tensor *ChatGLMModel::forward(ForwardContext *ctx, ggml_tensor *input_ids, 
 ChatGLMForConditionalGeneration::ChatGLMForConditionalGeneration(const ChatGLMConfig &config)
     : BaseModelForConditionalGeneration(MODEL_TYPE_CHATGLM, config, MEM_SIZE, SCRATCH_SIZE), config(config) {
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
-    const size_t num_tensors = 3 + config.num_hidden_layers * 14;
+    const size_t num_tensors = 4 + config.num_hidden_layers * 14;
     const size_t ctx_size = num_tensors * tensor_ovhd;
     w_ctx_.gctx = GGMLContext(ctx_size, nullptr, true);
     w_ctx_.dtype = config.dtype;
 
     transformer = ChatGLMModel(&w_ctx_, config);
+    lm_head = Linear(&w_ctx_, config.hidden_size, config.vocab_size, false);
+    CHATGLM_CHECK(ggml_used_mem(w_ctx_.gctx.get()) == ggml_get_mem_size(w_ctx_.gctx.get()))
+        << "corrupted model weights";
 
     const size_t kv_cache_size =
         config.num_hidden_layers * 2 * config.max_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16);
     kv_cache_buffer_.reset(new char[kv_cache_size]);
     char *kv_cache_ptr = kv_cache_buffer_.get();
     for (int i = 0; i < config.num_hidden_layers; i++) {
-        std::string layer_prefix = "transformer.layers." + std::to_string(i) + '.';
         transformer.layers[i].attention.k_cache->data = kv_cache_ptr;
         kv_cache_ptr += ggml_nbytes(transformer.layers[i].attention.k_cache);
         transformer.layers[i].attention.v_cache->data = kv_cache_ptr;
@@ -849,29 +851,33 @@ ChatGLMForConditionalGeneration::ChatGLMForConditionalGeneration(const ChatGLMCo
 }
 
 void ChatGLMForConditionalGeneration::load(ModelLoader &loader) {
-    std::unordered_map<std::string, ggml_tensor *> state_dict{
-        {"transformer.word_embeddings.weight", transformer.word_embeddings.weight}};
+    std::vector<std::pair<std::string, ggml_tensor *>> state_dict;
+    state_dict.reserve(3 + config.num_hidden_layers * 12);
+
+    state_dict.emplace_back("transformer.word_embeddings.weight", transformer.word_embeddings.weight);
     for (int i = 0; i < config.num_hidden_layers; i++) {
         std::string layer_prefix = "transformer.layers." + std::to_string(i) + '.';
-        state_dict.emplace(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
-        state_dict.emplace(layer_prefix + "input_layernorm.bias", transformer.layers[i].input_layernorm.bias);
-        state_dict.emplace(layer_prefix + "attention.query_key_value.weight",
-                           transformer.layers[i].attention.query_key_value.weight);
-        state_dict.emplace(layer_prefix + "attention.query_key_value.bias",
-                           transformer.layers[i].attention.query_key_value.bias);
-        state_dict.emplace(layer_prefix + "attention.dense.weight", transformer.layers[i].attention.dense.weight);
-        state_dict.emplace(layer_prefix + "attention.dense.bias", transformer.layers[i].attention.dense.bias);
-        state_dict.emplace(layer_prefix + "post_attention_layernorm.weight",
-                           transformer.layers[i].post_attention_layernorm.weight);
-        state_dict.emplace(layer_prefix + "post_attention_layernorm.bias",
-                           transformer.layers[i].post_attention_layernorm.bias);
-        state_dict.emplace(layer_prefix + "mlp.dense_h_to_4h.weight", transformer.layers[i].mlp.dense_h_to_4h.weight);
-        state_dict.emplace(layer_prefix + "mlp.dense_h_to_4h.bias", transformer.layers[i].mlp.dense_h_to_4h.bias);
-        state_dict.emplace(layer_prefix + "mlp.dense_4h_to_h.weight", transformer.layers[i].mlp.dense_4h_to_h.weight);
-        state_dict.emplace(layer_prefix + "mlp.dense_4h_to_h.bias", transformer.layers[i].mlp.dense_4h_to_h.bias);
+        state_dict.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
+        state_dict.emplace_back(layer_prefix + "input_layernorm.bias", transformer.layers[i].input_layernorm.bias);
+        state_dict.emplace_back(layer_prefix + "attention.query_key_value.weight",
+                                transformer.layers[i].attention.query_key_value.weight);
+        state_dict.emplace_back(layer_prefix + "attention.query_key_value.bias",
+                                transformer.layers[i].attention.query_key_value.bias);
+        state_dict.emplace_back(layer_prefix + "attention.dense.weight", transformer.layers[i].attention.dense.weight);
+        state_dict.emplace_back(layer_prefix + "attention.dense.bias", transformer.layers[i].attention.dense.bias);
+        state_dict.emplace_back(layer_prefix + "post_attention_layernorm.weight",
+                                transformer.layers[i].post_attention_layernorm.weight);
+        state_dict.emplace_back(layer_prefix + "post_attention_layernorm.bias",
+                                transformer.layers[i].post_attention_layernorm.bias);
+        state_dict.emplace_back(layer_prefix + "mlp.dense_h_to_4h.weight",
+                                transformer.layers[i].mlp.dense_h_to_4h.weight);
+        state_dict.emplace_back(layer_prefix + "mlp.dense_h_to_4h.bias", transformer.layers[i].mlp.dense_h_to_4h.bias);
+        state_dict.emplace_back(layer_prefix + "mlp.dense_4h_to_h.weight",
+                                transformer.layers[i].mlp.dense_4h_to_h.weight);
+        state_dict.emplace_back(layer_prefix + "mlp.dense_4h_to_h.bias", transformer.layers[i].mlp.dense_4h_to_h.bias);
     }
-    state_dict.emplace("transformer.final_layernorm.weight", transformer.final_layernorm.weight);
-    state_dict.emplace("transformer.final_layernorm.bias", transformer.final_layernorm.bias);
+    state_dict.emplace_back("transformer.final_layernorm.weight", transformer.final_layernorm.weight);
+    state_dict.emplace_back("transformer.final_layernorm.bias", transformer.final_layernorm.bias);
 
     for (auto &item : state_dict) {
         const std::string &name = item.first;
@@ -880,8 +886,7 @@ void ChatGLMForConditionalGeneration::load(ModelLoader &loader) {
         tensor_to_device(tensor);
     }
 
-    CHATGLM_CHECK(ggml_used_mem(w_ctx_.gctx.get()) == ggml_get_mem_size(w_ctx_.gctx.get()))
-        << "corrupted model weights";
+    lm_head.weight->data = transformer.word_embeddings.weight->data; // tied weight
 }
 
 ggml_tensor *ChatGLMForConditionalGeneration::forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past,
@@ -893,8 +898,7 @@ ggml_tensor *ChatGLMForConditionalGeneration::forward(ForwardContext *ctx, ggml_
             ggml_view_1d(ctx->gctx.get(), transformer_outputs, config.hidden_size,
                          (input_ids->ne[0] - 1) * config.hidden_size * ggml_element_size(transformer_outputs));
     }
-    ggml_tensor *lm_head_weight = transformer.word_embeddings.weight; // tied weight
-    ggml_tensor *lm_logits = ggml_mul_mat(ctx->gctx.get(), lm_head_weight, transformer_outputs);
+    ggml_tensor *lm_logits = lm_head.forward(ctx, transformer_outputs);
     return lm_logits;
 }
 
@@ -1087,7 +1091,6 @@ ChatGLM2ForConditionalGeneration::ChatGLM2ForConditionalGeneration(const ChatGLM
 
     char *kv_cache_ptr = kv_cache_buffer_.get();
     for (int i = 0; i < config.num_hidden_layers; i++) {
-        std::string layer_prefix = "transformer.layers." + std::to_string(i) + '.';
         transformer.layers[i].attention.k_cache->data = kv_cache_ptr;
         kv_cache_ptr += ggml_nbytes(transformer.layers[i].attention.k_cache);
         transformer.layers[i].attention.v_cache->data = kv_cache_ptr;
