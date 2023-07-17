@@ -523,35 +523,36 @@ TEST_F(ChatGLMTest, GLM2Block) {
     constexpr int max_length = 8;
 
     GLM2Block model(&ictx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length);
-    ptr = read_tensor_data(ptr, model.input_layernorm.weight);
-    ptr = read_tensor_data(ptr, model.attention.query_key_value.weight);
-    ptr = read_tensor_data(ptr, model.attention.query_key_value.bias);
-    ptr = read_tensor_data(ptr, model.attention.dense.weight);
-    ptr = read_tensor_data(ptr, model.post_attention_layernorm.weight);
-    ptr = read_tensor_data(ptr, model.mlp.dense_h_to_4h.weight);
-    ptr = read_tensor_data(ptr, model.mlp.dense_4h_to_h.weight);
 
     ggml_tensor *x1 = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
-    ptr = read_tensor_data(ptr, x1);
-
     ggml_tensor *ref_y1 = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
-    ptr = read_tensor_data(ptr, ref_y1);
-
     ggml_tensor *x2 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
-    ptr = read_tensor_data(ptr, x2);
-
     ggml_tensor *ref_y2 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
-    ptr = read_tensor_data(ptr, ref_y2);
-
     ggml_tensor *x3 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
-    ptr = read_tensor_data(ptr, x3);
-
     ggml_tensor *ref_y3 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
-    ptr = read_tensor_data(ptr, ref_y3);
 
+    std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
+                                           model.attention.query_key_value.weight,
+                                           model.attention.query_key_value.bias,
+                                           model.attention.dense.weight,
+                                           model.post_attention_layernorm.weight,
+                                           model.mlp.dense_h_to_4h.weight,
+                                           model.mlp.dense_4h_to_h.weight,
+                                           x1,
+                                           ref_y1,
+                                           x2,
+                                           ref_y2,
+                                           x3,
+                                           ref_y3};
+
+    for (auto tensor : all_tensors) {
+        ptr = read_tensor_data(ptr, tensor);
+        tensor_to_device(tensor);
+    }
     ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
 
     // self attention
+    reset_cgraph();
     {
         ggml_tensor *out_y1 = model.forward(&ctx, x1, 0);
         ggml_build_forward_expand(&ctx.gf, out_y1);
@@ -561,23 +562,25 @@ TEST_F(ChatGLMTest, GLM2Block) {
     }
 
     // cross attention
+    reset_cgraph();
     {
-        reset_cgraph();
-
         ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len);
         ggml_build_forward_expand(&ctx.gf, out_y2);
         ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_);
 
         expect_all_close(ref_y2, out_y2, 5e-5);
     }
+    reset_cgraph();
     {
-        reset_cgraph();
-
         ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1);
         ggml_build_forward_expand(&ctx.gf, out_y3);
         ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_);
 
         expect_all_close(ref_y3, out_y3, 5e-5);
+    }
+
+    for (auto tensor : all_tensors) {
+        tensor_to_cpu(tensor);
     }
 }
 

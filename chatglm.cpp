@@ -144,6 +144,16 @@ void tensor_to_cpu(ggml_tensor *tensor) {
 #endif
 }
 
+// for debugging purpose
+static inline ggml_tensor *add_zero(ggml_context *ctx, ggml_tensor *tensor) {
+    ggml_tensor *zeros = ggml_new_tensor(ctx, tensor->type, tensor->n_dims, tensor->ne);
+    ggml_set_f32(zeros, 0);
+    tensor_to_device(zeros);
+    ggml_tensor *out = ggml_add(ctx, tensor, zeros);
+    tensor_assign_buffers(out);
+    return out;
+}
+
 // ===== streamer =====
 
 void StreamerGroup::put(const std::vector<int> &output_ids) {
@@ -722,15 +732,6 @@ ggml_tensor *GLMSelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_
     tensor_assign_buffers(k_cache_view);
     ggml_build_forward_expand(&ctx->gf, ggml_cpy(ctx->gctx.get(), key_layer, k_cache_view));
 
-    // {
-    //     auto zeros = ggml_new_tensor(ctx->gctx.get(), k_cache_view->type, k_cache_view->n_dims, k_cache_view->ne);
-    //     ggml_set_f32(zeros, 0);
-    //     tensor_to_device(zeros);
-    //     auto out = ggml_add(ctx->gctx.get(), k_cache_view, zeros);
-    //     tensor_assign_buffers(out);
-    //     return out;
-    // }
-
     ggml_tensor *v_cache_view =
         ggml_view_3d(ctx->gctx.get(), v_cache, qlen, head_size, num_attention_heads, v_cache->nb[1], v_cache->nb[2],
                      n_past * ggml_element_size(v_cache)); // [heads, head_size, qlen]
@@ -981,30 +982,36 @@ ggml_tensor *GLM2SelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden
         ggml_view_3d(ctx->gctx.get(), qkv, head_size, num_attention_heads, qlen, head_size * ggml_element_size(qkv),
                      qkv->nb[1], 0); // [qlen, heads, head_size]
     query_layer = ggml_rope_inplace(ctx->gctx.get(), query_layer, n_past, rope_dim, 0, 0);
+    tensor_assign_buffers(query_layer);
     query_layer = ggml_view_4d(ctx->gctx.get(), query_layer, head_size, mqa_scale, num_kv_heads, qlen,
                                query_layer->nb[1], query_layer->nb[1] * mqa_scale, query_layer->nb[2],
                                0);                                        // [qlen, kv_heads, mqa_scale, head_size]
     query_layer = ggml_permute(ctx->gctx.get(), query_layer, 0, 2, 3, 1); // [kv_heads, mqa_scale, qlen, head_size]
+    tensor_assign_buffers(query_layer);
 
     ggml_tensor *key_layer =
         ggml_view_3d(ctx->gctx.get(), qkv, head_size, num_kv_heads, qlen, head_size * ggml_element_size(qkv),
                      qkv->nb[1], hidden_size * ggml_element_size(qkv)); // [qlen, kv_heads, head_size]
     key_layer = ggml_rope_inplace(ctx->gctx.get(), key_layer, n_past, rope_dim, 0, 0);
+    tensor_assign_buffers(key_layer);
     key_layer = ggml_permute(ctx->gctx.get(), key_layer, 0, 2, 1, 3); // [kv_heads, qlen, head_size]
 
     ggml_tensor *value_layer = ggml_view_3d(
         ctx->gctx.get(), qkv, head_size, num_kv_heads, qlen, head_size * ggml_element_size(qkv), qkv->nb[1],
         (hidden_size + head_size * num_kv_heads) * ggml_element_size(qkv)); // [qlen, kv_heads, head_size]
     value_layer = ggml_permute(ctx->gctx.get(), value_layer, 1, 2, 0, 3);   // [kv_heads, head_size, qlen]
+    tensor_assign_buffers(value_layer);
 
     // store key & value to cache
     ggml_tensor *k_cache_view =
         ggml_view_3d(ctx->gctx.get(), k_cache, head_size, qlen, num_kv_heads, k_cache->nb[1], k_cache->nb[2],
                      n_past * head_size * ggml_element_size(k_cache)); // [kv_heads, qlen, head_size]
+    tensor_assign_buffers(k_cache_view);
     ggml_build_forward_expand(&ctx->gf, ggml_cpy(ctx->gctx.get(), key_layer, k_cache_view));
     ggml_tensor *v_cache_view =
         ggml_view_3d(ctx->gctx.get(), v_cache, qlen, head_size, num_kv_heads, v_cache->nb[1], v_cache->nb[2],
                      n_past * ggml_element_size(v_cache)); // [kv_heads, head_size, qlen]
+    tensor_assign_buffers(v_cache_view);
     ggml_build_forward_expand(&ctx->gf, ggml_cpy(ctx->gctx.get(), value_layer, v_cache_view));
 
     // concat key & value with past kv
@@ -1014,6 +1021,8 @@ ggml_tensor *GLM2SelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden
     value_layer = ggml_view_4d(ctx->gctx.get(), v_cache, n_past + qlen, head_size, mqa_scale, num_kv_heads,
                                v_cache->nb[1], 0, v_cache->nb[2],
                                0); // [kv_heads, mqa_scale, head_size, klen]
+
+    // flash attention is not yet implemented on CUDA, falling back to native ops for now
 
     // flash attention
     ggml_tensor *context_layer = ggml_flash_attn(ctx->gctx.get(), query_layer, key_layer, value_layer,
@@ -1041,18 +1050,22 @@ ggml_tensor *GLM2MLP::forward(ForwardContext *ctx, ggml_tensor *hidden_states) c
 
 ggml_tensor *GLM2Block::forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const {
     ggml_tensor *residual = ggml_dup(ctx->gctx.get(), hidden_states);
+    tensor_assign_buffers(residual);
     ggml_build_forward_expand(&ctx->gf, residual);
 
     hidden_states = input_layernorm.forward(ctx, hidden_states);
     hidden_states = attention.forward(ctx, hidden_states, n_past);
     hidden_states = ggml_add_inplace(ctx->gctx.get(), hidden_states, residual);
+    tensor_assign_buffers(hidden_states);
 
     residual = ggml_dup(ctx->gctx.get(), hidden_states);
+    tensor_assign_buffers(residual);
     ggml_build_forward_expand(&ctx->gf, residual);
 
     hidden_states = post_attention_layernorm.forward(ctx, hidden_states);
     hidden_states = mlp.forward(ctx, hidden_states);
     hidden_states = ggml_add_inplace(ctx->gctx.get(), hidden_states, residual);
+    tensor_assign_buffers(hidden_states);
 
     return hidden_states;
 }
