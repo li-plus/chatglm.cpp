@@ -982,12 +982,10 @@ ggml_tensor *GLM2SelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden
         ggml_view_3d(ctx->gctx.get(), qkv, head_size, num_attention_heads, qlen, head_size * ggml_element_size(qkv),
                      qkv->nb[1], 0); // [qlen, heads, head_size]
     query_layer = ggml_rope_inplace(ctx->gctx.get(), query_layer, n_past, rope_dim, 0, 0);
-    tensor_assign_buffers(query_layer);
-    query_layer = ggml_view_4d(ctx->gctx.get(), query_layer, head_size, mqa_scale, num_kv_heads, qlen,
-                               query_layer->nb[1], query_layer->nb[1] * mqa_scale, query_layer->nb[2],
-                               0);                                        // [qlen, kv_heads, mqa_scale, head_size]
-    query_layer = ggml_permute(ctx->gctx.get(), query_layer, 0, 2, 3, 1); // [kv_heads, mqa_scale, qlen, head_size]
-    tensor_assign_buffers(query_layer);
+    query_layer =
+        ggml_cont(ctx->gctx.get(), ggml_permute(ctx->gctx.get(), query_layer, 0, 2, 1, 3)); // [heads, qlen, head_size]
+    query_layer = ggml_reshape_3d(ctx->gctx.get(), query_layer, head_size, mqa_scale * qlen,
+                                  num_kv_heads); // [kv_heads, mqa_scale * qlen, head_size]
 
     ggml_tensor *key_layer =
         ggml_view_3d(ctx->gctx.get(), qkv, head_size, num_kv_heads, qlen, head_size * ggml_element_size(qkv),
@@ -1015,20 +1013,34 @@ ggml_tensor *GLM2SelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden
     ggml_build_forward_expand(&ctx->gf, ggml_cpy(ctx->gctx.get(), value_layer, v_cache_view));
 
     // concat key & value with past kv
-    key_layer = ggml_view_4d(ctx->gctx.get(), k_cache, head_size, n_past + qlen, mqa_scale, num_kv_heads,
-                             k_cache->nb[1], 0, k_cache->nb[2],
-                             0); // [kv_heads, mqa_scale, klen, head_size]
-    value_layer = ggml_view_4d(ctx->gctx.get(), v_cache, n_past + qlen, head_size, mqa_scale, num_kv_heads,
-                               v_cache->nb[1], 0, v_cache->nb[2],
-                               0); // [kv_heads, mqa_scale, head_size, klen]
+    key_layer =
+        ggml_view_3d(ctx->gctx.get(), k_cache, head_size, n_past + qlen, num_kv_heads, k_cache->nb[1], k_cache->nb[2],
+                     0); // [kv_heads, klen, head_size]
+    value_layer =
+        ggml_view_3d(ctx->gctx.get(), v_cache, n_past + qlen, head_size, num_kv_heads, v_cache->nb[1], v_cache->nb[2],
+                     0); // [kv_heads, head_size, klen]
 
-    // flash attention is not yet implemented on CUDA, falling back to native ops for now
+    // attention
+    ggml_tensor *attn_scores =
+        ggml_mul_mat(ctx->gctx.get(), key_layer, query_layer); // [kv_heads, mqa_scale * qlen, klen]
+    attn_scores =
+        ggml_scale_inplace(ctx->gctx.get(), attn_scores, ggml_new_f32(ctx->gctx.get(), 1.f / std::sqrt(head_size)));
+    if (n_past == 0) {
+        // build attention mask for context input
+        attn_scores = ggml_reshape_3d(ctx->gctx.get(), attn_scores, n_past + qlen, qlen,
+                                      num_attention_heads); // [heads, qlen, klen]
+        attn_scores = ggml_diag_mask_inf_inplace(ctx->gctx.get(), attn_scores, n_past);
+        attn_scores = ggml_reshape_3d(ctx->gctx.get(), attn_scores, n_past + qlen, mqa_scale * qlen,
+                                      num_kv_heads); // [kv_heads, mqa_scale * qlen, klen]
+    }
+    ggml_tensor *attn_probs = ggml_soft_max_inplace(ctx->gctx.get(), attn_scores); // [kv_heads, mqa_scale * qlen, klen]
 
-    // flash attention
-    ggml_tensor *context_layer = ggml_flash_attn(ctx->gctx.get(), query_layer, key_layer, value_layer,
-                                                 true); // [mqa_scale, kv_heads, qlen, head_size]
+    ggml_tensor *context_layer =
+        ggml_mul_mat(ctx->gctx.get(), value_layer, attn_probs); // [kv_heads, mqa_scale * qlen, head_size]
+    context_layer = ggml_reshape_3d(ctx->gctx.get(), context_layer, head_size, qlen,
+                                    num_attention_heads); // [heads, qlen, head_size]
     context_layer = ggml_reshape_2d(
-        ctx->gctx.get(), ggml_cont(ctx->gctx.get(), ggml_permute(ctx->gctx.get(), context_layer, 0, 3, 1, 2)),
+        ctx->gctx.get(), ggml_cont(ctx->gctx.get(), ggml_permute(ctx->gctx.get(), context_layer, 0, 2, 1, 3)),
         hidden_size, qlen); // [qlen, hidden]
 
     ggml_tensor *attn_output = dense.forward(ctx, context_layer);
