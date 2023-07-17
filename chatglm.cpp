@@ -1143,7 +1143,7 @@ ChatGLM2ForConditionalGeneration::ChatGLM2ForConditionalGeneration(const ChatGLM
     lm_head = Linear(&w_ctx_, config.hidden_size, config.vocab_size, false);
 
     const size_t kv_cache_size = config.num_hidden_layers * 2ull * config.max_length * config.hidden_size /
-                                 config.num_attention_heads * config.num_kv_heads * ggml_type_size(GGML_TYPE_F32);
+                                 config.num_attention_heads * config.num_kv_heads * ggml_type_size(GGML_TYPE_F16);
     kv_cache_buffer_.reset(new char[kv_cache_size]);
 
     char *kv_cache_ptr = kv_cache_buffer_.get();

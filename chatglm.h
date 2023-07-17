@@ -213,10 +213,14 @@ class PerfStreamer : public BaseStreamer {
 
     int64_t num_prompt_tokens() const { return num_prompt_tokens_; }
     int64_t prompt_total_time_us() const { return prompt_us_ - start_us_; }
-    int64_t prompt_token_time_us() const { return prompt_total_time_us() / num_prompt_tokens(); }
+    int64_t prompt_token_time_us() const {
+        return num_prompt_tokens() ? prompt_total_time_us() / num_prompt_tokens() : 0;
+    }
     int64_t num_output_tokens() const { return num_output_tokens_; }
     int64_t output_total_time_us() const { return end_us_ - prompt_us_; }
-    int64_t output_token_time_us() const { return output_total_time_us() / num_output_tokens(); }
+    int64_t output_token_time_us() const {
+        return num_output_tokens() ? output_total_time_us() / num_output_tokens() : 0;
+    }
 
   private:
     int64_t start_us_;
@@ -477,9 +481,9 @@ class GLM2SelfAttention {
         : num_attention_heads(num_attention_heads), num_kv_heads(num_kv_heads),
           query_key_value(ctx, hidden_size, hidden_size + 2 * (hidden_size / num_attention_heads) * num_kv_heads),
           dense(ctx, hidden_size, hidden_size, false),
-          k_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F32, hidden_size / num_attention_heads, max_length,
+          k_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
                                      num_kv_heads)),
-          v_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F32, max_length, hidden_size / num_attention_heads,
+          v_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
                                      num_kv_heads)) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const;
@@ -511,7 +515,8 @@ class GLM2Block {
     GLM2Block() = default;
     GLM2Block(InitContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int intermediate_size,
               int max_length)
-        : input_layernorm(ctx, hidden_size, false), attention(ctx, hidden_size, num_attention_heads, num_kv_heads, max_length),
+        : input_layernorm(ctx, hidden_size, false),
+          attention(ctx, hidden_size, num_attention_heads, num_kv_heads, max_length),
           post_attention_layernorm(ctx, hidden_size, false), mlp(ctx, hidden_size, intermediate_size) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const;
