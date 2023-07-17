@@ -523,6 +523,8 @@ TEST_F(ChatGLMTest, GLM2Block) {
     constexpr int max_length = 8;
 
     GLM2Block model(&ictx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length);
+    tensor_to_device(model.attention.k_cache);
+    tensor_to_device(model.attention.v_cache);
 
     ggml_tensor *x1 = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
     ggml_tensor *ref_y1 = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
@@ -555,6 +557,8 @@ TEST_F(ChatGLMTest, GLM2Block) {
     reset_cgraph();
     {
         ggml_tensor *out_y1 = model.forward(&ctx, x1, 0);
+        EXPECT_EQ(out_y1->backend, x1->backend);
+        out_y1->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y1);
         ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_);
 
@@ -565,6 +569,8 @@ TEST_F(ChatGLMTest, GLM2Block) {
     reset_cgraph();
     {
         ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len);
+        EXPECT_EQ(out_y2->backend, x2->backend);
+        out_y2->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y2);
         ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_);
 
@@ -573,6 +579,8 @@ TEST_F(ChatGLMTest, GLM2Block) {
     reset_cgraph();
     {
         ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1);
+        EXPECT_EQ(out_y3->backend, x3->backend);
+        out_y3->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y3);
         ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_);
 
@@ -581,6 +589,67 @@ TEST_F(ChatGLMTest, GLM2Block) {
 
     for (auto tensor : all_tensors) {
         tensor_to_cpu(tensor);
+    }
+    tensor_to_cpu(model.attention.k_cache);
+    tensor_to_cpu(model.attention.v_cache);
+}
+
+TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
+    constexpr int seq_len = 64;
+    constexpr int hidden_size = 4096;
+    constexpr int num_attention_heads = 32;
+    constexpr int num_kv_heads = 2;
+    constexpr int ffn_hidden_size = 13696;
+    constexpr int max_length = 2048;
+
+    ggml_type dtypes[]{GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0};
+    for (const auto dtype : dtypes) {
+        SetUp();
+
+        ictx.dtype = dtype;
+        GLM2Block model(&ictx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length);
+        tensor_to_device(model.attention.k_cache);
+        tensor_to_device(model.attention.v_cache);
+
+        ggml_tensor *self_attn_x = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
+        ggml_tensor *cross_attn_x = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
+
+        std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
+                                               model.attention.query_key_value.weight,
+                                               model.attention.query_key_value.bias,
+                                               model.attention.dense.weight,
+                                               model.post_attention_layernorm.weight,
+                                               model.mlp.dense_h_to_4h.weight,
+                                               model.mlp.dense_4h_to_h.weight,
+                                               self_attn_x,
+                                               cross_attn_x};
+
+        for (auto tensor : all_tensors) {
+            random_fill(tensor);
+            tensor_to_device(tensor);
+        }
+
+        // self attention
+        reset_cgraph();
+        {
+            ggml_tensor *self_attn_y = model.forward(&ctx, self_attn_x, 0);
+            ggml_build_forward_expand(&ctx.gf, self_attn_y);
+            auto fn = [this] { ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_); };
+            std::cout << "GLM2Block " << ggml_type_name(dtype) << "  self attn: " << timeit(fn, 1, 3) << " ms\n";
+        }
+
+        // cross attention
+        reset_cgraph();
+        {
+            ggml_tensor *cross_attn_y = model.forward(&ctx, cross_attn_x, seq_len);
+            ggml_build_forward_expand(&ctx.gf, cross_attn_y);
+            auto fn = [this] { ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_); };
+            std::cout << "GLM2Block " << ggml_type_name(dtype) << " cross attn: " << timeit(fn, 2, 10) << " ms\n";
+        }
+
+        for (auto tensor : all_tensors) {
+            tensor_to_cpu(tensor);
+        }
     }
 }
 

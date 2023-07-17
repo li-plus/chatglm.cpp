@@ -157,14 +157,15 @@ class LayerNorm {
 
 class RMSNorm {
   public:
-    RMSNorm() : weight(nullptr) {}
-    RMSNorm(InitContext *ctx, int normalized_shape)
-        : weight(ggml_new_tensor_1d(ctx->gctx.get(), GGML_TYPE_F32, normalized_shape)) {}
+    RMSNorm() : weight(nullptr), inplace(true) {}
+    RMSNorm(InitContext *ctx, int normalized_shape, bool inplace = true)
+        : weight(ggml_new_tensor_1d(ctx->gctx.get(), GGML_TYPE_F32, normalized_shape)), inplace(inplace) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input) const;
 
   public:
     ggml_tensor *weight;
+    bool inplace;
 };
 
 class BaseStreamer {
@@ -510,8 +511,8 @@ class GLM2Block {
     GLM2Block() = default;
     GLM2Block(InitContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int intermediate_size,
               int max_length)
-        : input_layernorm(ctx, hidden_size), attention(ctx, hidden_size, num_attention_heads, num_kv_heads, max_length),
-          post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size, intermediate_size) {}
+        : input_layernorm(ctx, hidden_size, false), attention(ctx, hidden_size, num_attention_heads, num_kv_heads, max_length),
+          post_attention_layernorm(ctx, hidden_size, false), mlp(ctx, hidden_size, intermediate_size) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const;
 
