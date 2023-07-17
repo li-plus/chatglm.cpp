@@ -101,9 +101,10 @@ std::string to_string(ggml_tensor *tensor, bool with_data) {
         }
         if (tensor->n_dims > 3)
             oss << "]";
+        oss << ", ";
     }
 
-    oss << ", shape=" << shape_to_string(tensor) << ", stride=" << strides_to_string(tensor) << ")";
+    oss << "shape=" << shape_to_string(tensor) << ", stride=" << strides_to_string(tensor) << ")";
     return oss.str();
 }
 
@@ -536,6 +537,7 @@ int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int
     memcpy(input_ids_tensor->data, input_ids.data(), ggml_nbytes(input_ids_tensor));
 
     ggml_tensor *lm_logits = forward(&ctx, input_ids_tensor, n_past, n_ctx);
+    lm_logits->backend = GGML_BACKEND_CPU;
 
     ggml_build_forward_expand(&ctx.gf, lm_logits);
     // TODO: upgrade to ggml_graph_compute with cplan
@@ -672,10 +674,7 @@ GLMSelfAttention::GLMSelfAttention(InitContext *ctx, int hidden_size, int num_at
       k_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
                                  num_attention_heads)),
       v_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
-                                 num_attention_heads)) {
-    tensor_to_device(k_cache);
-    tensor_to_device(v_cache);
-}
+                                 num_attention_heads)) {}
 
 ggml_tensor *GLMSelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
     int hidden_size = hidden_states->ne[0];
@@ -841,11 +840,13 @@ ChatGLMForConditionalGeneration::ChatGLMForConditionalGeneration(const ChatGLMCo
         config.num_hidden_layers * 2 * config.max_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16);
     kv_cache_buffer_.reset(new char[kv_cache_size]);
     char *kv_cache_ptr = kv_cache_buffer_.get();
-    for (int i = 0; i < config.num_hidden_layers; i++) {
-        transformer.layers[i].attention.k_cache->data = kv_cache_ptr;
-        kv_cache_ptr += ggml_nbytes(transformer.layers[i].attention.k_cache);
-        transformer.layers[i].attention.v_cache->data = kv_cache_ptr;
-        kv_cache_ptr += ggml_nbytes(transformer.layers[i].attention.v_cache);
+    for (auto &layer : transformer.layers) {
+        layer.attention.k_cache->data = kv_cache_ptr;
+        kv_cache_ptr += ggml_nbytes(layer.attention.k_cache);
+        tensor_to_device(layer.attention.k_cache);
+        layer.attention.v_cache->data = kv_cache_ptr;
+        kv_cache_ptr += ggml_nbytes(layer.attention.v_cache);
+        tensor_to_device(layer.attention.v_cache);
     }
     CHATGLM_CHECK(kv_cache_ptr == kv_cache_buffer_.get() + kv_cache_size) << "corrupted kv cache";
 }
@@ -883,10 +884,13 @@ void ChatGLMForConditionalGeneration::load(ModelLoader &loader) {
         const std::string &name = item.first;
         ggml_tensor *tensor = item.second;
         loader.read_tensor(name, tensor);
-        tensor_to_device(tensor);
+        if (name != "transformer.word_embeddings.weight") {
+            tensor_to_device(tensor);
+        }
     }
 
     lm_head.weight->data = transformer.word_embeddings.weight->data; // tied weight
+    tensor_to_device(lm_head.weight);
 }
 
 ggml_tensor *ChatGLMForConditionalGeneration::forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past,
@@ -897,6 +901,7 @@ ggml_tensor *ChatGLMForConditionalGeneration::forward(ForwardContext *ctx, ggml_
         transformer_outputs =
             ggml_view_1d(ctx->gctx.get(), transformer_outputs, config.hidden_size,
                          (input_ids->ne[0] - 1) * config.hidden_size * ggml_element_size(transformer_outputs));
+        tensor_assign_buffers(transformer_outputs);
     }
     ggml_tensor *lm_logits = lm_head.forward(ctx, transformer_outputs);
     return lm_logits;

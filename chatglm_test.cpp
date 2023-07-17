@@ -39,17 +39,22 @@ static inline char *read_tensor_data(char *ptr, ggml_tensor *tensor) {
 static inline float random() { return rand() / (float)RAND_MAX; }
 
 static inline void random_fill(ggml_tensor *tensor) {
-    int64_t numel = ggml_nelements(tensor);
+    std::vector<float> values(ggml_nelements(tensor));
+    for (float &v : values) {
+        v = random();
+    }
+    int64_t hist[16]{};
+
     if (tensor->type == GGML_TYPE_F32) {
-        for (int64_t i = 0; i < numel; i++) {
-            ((float *)tensor->data)[i] = random();
-        }
+        memcpy(tensor->data, values.data(), sizeof(float) * values.size());
     } else if (tensor->type == GGML_TYPE_F16) {
-        for (int64_t i = 0; i < numel; i++) {
-            ((ggml_fp16_t *)tensor->data)[i] = ggml_fp32_to_fp16(random());
-        }
+        ggml_fp32_to_fp16_row(values.data(), (ggml_fp16_t *)tensor->data, values.size());
+    } else if (tensor->type == GGML_TYPE_Q8_0) {
+        ggml_quantize_q8_0(values.data(), tensor->data, ggml_nelements(tensor), tensor->ne[0], hist);
+    } else if (tensor->type == GGML_TYPE_Q4_0) {
+        ggml_quantize_q4_0(values.data(), tensor->data, ggml_nelements(tensor), tensor->ne[0], hist);
     } else {
-        CHATGLM_THROW << "unsupported dtype " << tensor->type;
+        CHATGLM_THROW << "unsupported dtype " << ggml_type_name(tensor->type);
     }
 }
 
@@ -370,6 +375,8 @@ TEST_F(ChatGLMTest, GLMBlock) {
     constexpr int max_length = 16;
     constexpr int seq_len = 4;
     GLMBlock model(&ictx, hidden_size, num_attention_heads, num_hidden_layers, max_length);
+    tensor_to_device(model.attention.k_cache);
+    tensor_to_device(model.attention.v_cache);
 
     ggml_tensor *x1 = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
     ggml_tensor *ref_y1 = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
@@ -448,50 +455,58 @@ TEST_F(ChatGLMTest, BenchmarkGLMBlock) {
     constexpr int num_hidden_layers = 28;
     constexpr int max_length = 2048;
     constexpr int seq_len = 128;
-    GLMBlock model(&ictx, hidden_size, num_attention_heads, num_hidden_layers, max_length);
 
-    ggml_tensor *self_attn_x = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
-    ggml_tensor *cross_attn_x = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
+    ggml_type dtypes[]{GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0};
+    for (const auto dtype : dtypes) {
+        SetUp();
 
-    std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
-                                           model.input_layernorm.bias,
-                                           model.attention.query_key_value.weight,
-                                           model.attention.query_key_value.bias,
-                                           model.attention.dense.weight,
-                                           model.attention.dense.bias,
-                                           model.post_attention_layernorm.weight,
-                                           model.post_attention_layernorm.bias,
-                                           model.mlp.dense_h_to_4h.weight,
-                                           model.mlp.dense_h_to_4h.bias,
-                                           model.mlp.dense_4h_to_h.weight,
-                                           model.mlp.dense_4h_to_h.bias,
-                                           self_attn_x,
-                                           cross_attn_x};
+        ictx.dtype = dtype;
+        GLMBlock model(&ictx, hidden_size, num_attention_heads, num_hidden_layers, max_length);
 
-    for (auto tensor : all_tensors) {
-        random_fill(tensor);
-        tensor_to_device(tensor);
-    }
+        ggml_tensor *self_attn_x = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
+        ggml_tensor *cross_attn_x = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
 
-    // self attention
-    {
-        ggml_tensor *self_attn_y = model.forward(&ctx, self_attn_x, 0, seq_len);
-        ggml_build_forward_expand(&ctx.gf, self_attn_y);
-        auto fn = [this] { ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_); };
-        std::cout << "GLMBlock self attn: " << timeit(fn, 10, 100) << " ms\n";
-    }
+        std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
+                                               model.input_layernorm.bias,
+                                               model.attention.query_key_value.weight,
+                                               model.attention.query_key_value.bias,
+                                               model.attention.dense.weight,
+                                               model.attention.dense.bias,
+                                               model.post_attention_layernorm.weight,
+                                               model.post_attention_layernorm.bias,
+                                               model.mlp.dense_h_to_4h.weight,
+                                               model.mlp.dense_h_to_4h.bias,
+                                               model.mlp.dense_4h_to_h.weight,
+                                               model.mlp.dense_4h_to_h.bias,
+                                               self_attn_x,
+                                               cross_attn_x};
 
-    // cross attention
-    reset_cgraph();
-    {
-        ggml_tensor *cross_attn_y = model.forward(&ctx, cross_attn_x, seq_len, seq_len);
-        ggml_build_forward_expand(&ctx.gf, cross_attn_y);
-        auto fn = [this] { ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_); };
-        std::cout << "GLMBlock cross attn: " << timeit(fn, 10, 100) << " ms\n";
-    }
+        for (auto tensor : all_tensors) {
+            random_fill(tensor);
+            tensor_to_device(tensor);
+        }
 
-    for (auto tensor : all_tensors) {
-        tensor_to_cpu(tensor);
+        // self attention
+        reset_cgraph();
+        {
+            ggml_tensor *self_attn_y = model.forward(&ctx, self_attn_x, 0, seq_len);
+            ggml_build_forward_expand(&ctx.gf, self_attn_y);
+            auto fn = [this] { ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_); };
+            std::cout << "GLMBlock " << ggml_type_name(dtype) << "  self attn: " << timeit(fn, 10, 100) << " ms\n";
+        }
+
+        // cross attention
+        reset_cgraph();
+        {
+            ggml_tensor *cross_attn_y = model.forward(&ctx, cross_attn_x, seq_len, seq_len);
+            ggml_build_forward_expand(&ctx.gf, cross_attn_y);
+            auto fn = [this] { ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_); };
+            std::cout << "GLMBlock " << ggml_type_name(dtype) << " cross attn: " << timeit(fn, 10, 100) << " ms\n";
+        }
+
+        for (auto tensor : all_tensors) {
+            tensor_to_cpu(tensor);
+        }
     }
 }
 

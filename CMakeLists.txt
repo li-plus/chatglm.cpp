@@ -14,6 +14,7 @@ if (NOT CMAKE_BUILD_TYPE)
 endif ()
 
 # third-party libraries
+add_compile_definitions(GGML_CUDA_MMV_Y=2)  # for large vocab
 include_directories(third_party/ggml/include/ggml third_party/ggml/src)
 add_subdirectory(third_party/ggml)
 
