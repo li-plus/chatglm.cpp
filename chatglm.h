@@ -25,7 +25,19 @@ class LogMessageFatal {
     if (!(cond))                                                                                                       \
     CHATGLM_THROW << "check failed (" #cond ") "
 
+#define CHATGLM_CHECK_CUDA(call)                                                                                       \
+    do {                                                                                                               \
+        cudaError_t error = (call);                                                                                    \
+        CHATGLM_CHECK(error == cudaSuccess) << "CUDA error: " << cudaGetErrorString(error);                            \
+    } while (0)
+
 std::string to_string(ggml_tensor *tensor, bool with_data = true);
+
+void tensor_assign_buffers(ggml_tensor *tensor, bool scratch = true, bool force_inplace = false);
+
+void tensor_to_device(ggml_tensor *tensor);
+
+void tensor_to_cpu(ggml_tensor *tensor);
 
 struct BaseConfig {
     // common attributes
@@ -145,14 +157,15 @@ class LayerNorm {
 
 class RMSNorm {
   public:
-    RMSNorm() : weight(nullptr) {}
-    RMSNorm(InitContext *ctx, int normalized_shape)
-        : weight(ggml_new_tensor_1d(ctx->gctx.get(), GGML_TYPE_F32, normalized_shape)) {}
+    RMSNorm() : weight(nullptr), inplace(true) {}
+    RMSNorm(InitContext *ctx, int normalized_shape, bool inplace = true)
+        : weight(ggml_new_tensor_1d(ctx->gctx.get(), GGML_TYPE_F32, normalized_shape)), inplace(inplace) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input) const;
 
   public:
     ggml_tensor *weight;
+    bool inplace;
 };
 
 class BaseStreamer {
@@ -200,10 +213,14 @@ class PerfStreamer : public BaseStreamer {
 
     int64_t num_prompt_tokens() const { return num_prompt_tokens_; }
     int64_t prompt_total_time_us() const { return prompt_us_ - start_us_; }
-    int64_t prompt_token_time_us() const { return prompt_total_time_us() / num_prompt_tokens(); }
+    int64_t prompt_token_time_us() const {
+        return num_prompt_tokens() ? prompt_total_time_us() / num_prompt_tokens() : 0;
+    }
     int64_t num_output_tokens() const { return num_output_tokens_; }
     int64_t output_total_time_us() const { return end_us_ - prompt_us_; }
-    int64_t output_token_time_us() const { return output_total_time_us() / num_output_tokens(); }
+    int64_t output_token_time_us() const {
+        return num_output_tokens() ? output_total_time_us() / num_output_tokens() : 0;
+    }
 
   private:
     int64_t start_us_;
@@ -270,7 +287,24 @@ enum ModelType {
     MODEL_TYPE_CHATGLM2 = 2,
 };
 
+int get_num_physical_cores();
+
 std::string to_string(ModelType model_type);
+
+struct TokenIdScore {
+    int id;
+    float score;
+
+    TokenIdScore() = default;
+    TokenIdScore(int id, float score) : id(id), score(score) {}
+
+    bool operator<(const TokenIdScore &other) const { return score < other.score; }
+    bool operator>(const TokenIdScore &other) const { return score > other.score; }
+
+    friend std::ostream &operator<<(std::ostream &os, const TokenIdScore &self) {
+        return os << "TokenIdScore(id=" << self.id << ", score=" << self.score << ")";
+    }
+};
 
 class BaseModelForConditionalGeneration {
   public:
@@ -291,18 +325,10 @@ class BaseModelForConditionalGeneration {
     int generate_next_token(const std::vector<int> &input_ids, const GenerationConfig &gen_config, int n_past,
                             int n_ctx) const;
 
-    struct TokenIdScore {
-        int id;
-        float score;
+    static void sampling_temperature(float *first, float *last, float temp);
+    static void sampling_top_k(TokenIdScore *first, TokenIdScore *kth, TokenIdScore *last);
+    static TokenIdScore *sampling_top_p(TokenIdScore *first, TokenIdScore *last, float top_p);
 
-        TokenIdScore() = default;
-        TokenIdScore(int id, float score) : id(id), score(score) {}
-
-        bool operator<(const TokenIdScore &other) const { return score < other.score; }
-        bool operator>(const TokenIdScore &other) const { return score > other.score; }
-    };
-
-  private:
     static void sampling_softmax_inplace(TokenIdScore *first, TokenIdScore *last);
 
   private:
@@ -361,13 +387,7 @@ class GLMSelfAttention {
   public:
     // TODO: kv cache type
     GLMSelfAttention() : num_attention_heads(0) {}
-    GLMSelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int max_length)
-        : query_key_value(ctx, hidden_size, 3 * hidden_size), dense(ctx, hidden_size, hidden_size),
-          num_attention_heads(num_attention_heads),
-          k_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
-                                     num_attention_heads)),
-          v_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
-                                     num_attention_heads)) {}
+    GLMSelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int max_length);
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
 
@@ -420,9 +440,10 @@ class ChatGLMForConditionalGeneration : public BaseModelForConditionalGeneration
 
   public:
     static constexpr size_t MEM_SIZE = 272ull * 1024 * 1024;
-    static constexpr size_t SCRATCH_SIZE = 128ull * 1024 * 1024;
+    static constexpr size_t SCRATCH_SIZE = 256ull * 1024 * 1024;
     ChatGLMConfig config;
     ChatGLMModel transformer;
+    Linear lm_head;
 
   private:
     // hold ggml_context & kv_cache
@@ -467,9 +488,9 @@ class GLM2SelfAttention {
         : num_attention_heads(num_attention_heads), num_kv_heads(num_kv_heads),
           query_key_value(ctx, hidden_size, hidden_size + 2 * (hidden_size / num_attention_heads) * num_kv_heads),
           dense(ctx, hidden_size, hidden_size, false),
-          k_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F32, hidden_size / num_attention_heads, max_length,
+          k_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
                                      num_kv_heads)),
-          v_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F32, max_length, hidden_size / num_attention_heads,
+          v_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
                                      num_kv_heads)) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const;
@@ -501,8 +522,9 @@ class GLM2Block {
     GLM2Block() = default;
     GLM2Block(InitContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int intermediate_size,
               int max_length)
-        : input_layernorm(ctx, hidden_size), attention(ctx, hidden_size, num_attention_heads, num_kv_heads, max_length),
-          post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size, intermediate_size) {}
+        : input_layernorm(ctx, hidden_size, false),
+          attention(ctx, hidden_size, num_attention_heads, num_kv_heads, max_length),
+          post_attention_layernorm(ctx, hidden_size, false), mlp(ctx, hidden_size, intermediate_size) {}
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const;
 
@@ -537,7 +559,7 @@ class ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGeneratio
 
   public:
     static constexpr size_t MEM_SIZE = 512ull * 1024 * 1024;
-    static constexpr size_t SCRATCH_SIZE = 144ull * 1024 * 1024;
+    static constexpr size_t SCRATCH_SIZE = 256ull * 1024 * 1024;
 
     ChatGLM2Config config;
     ChatGLM2Model transformer;

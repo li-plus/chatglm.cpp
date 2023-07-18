@@ -141,23 +141,27 @@ docker run -it --rm -v [model path]:/opt/ chulinx/chatglm /chatglm -m /opt/chatg
 
 ## Performance
 
-Measured on a Linux server with Intel(R) Xeon(R) Platinum 8260 CPU @ 2.40GHz using 16 threads.
+Environment:
+* CPU performance is measured on a Linux server with Intel(R) Xeon(R) Platinum 8260 CPU @ 2.40GHz using 16 threads.
+* CUDA performance is measured on a V100-SXM2-32GB GPU using 1 thread.
 
 ChatGLM-6B:
 
-|           | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   | F32   |
-|-----------|-------|-------|-------|-------|-------|-------|-------|
-| ms/token  | 74    | 77    | 86    | 89    | 114   | 189   | 357   |
-| file size | 3.3GB | 3.7GB | 4.0GB | 4.4GB | 6.2GB | 12GB  | 23GB  |
-| mem usage | 4.0GB | 4.4GB | 4.7GB | 5.1GB | 6.9GB | 13GB  | 24GB  |
+|                 | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   | F32   |
+|-----------------|-------|-------|-------|-------|-------|-------|-------|
+| ms/token (CPU)  | 74    | 77    | 86    | 89    | 114   | 189   | 357   |
+| ms/token (V100) | 10.0  | 9.8   | 10.7  | 10.6  | 14.6  | 19.8  | 34.2  |
+| file size       | 3.3GB | 3.7GB | 4.0GB | 4.4GB | 6.2GB | 12GB  | 23GB  |
+| mem usage       | 4.0GB | 4.4GB | 4.7GB | 5.1GB | 6.9GB | 13GB  | 24GB  |
 
 ChatGLM2-6B:
 
-|           | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   | F32   |
-|-----------|-------|-------|-------|-------|-------|-------|-------|
-| ms/token  | 64    | 71    | 79    | 83    | 106   | 189   | 372   |
-| file size | 3.3GB | 3.7GB | 4.0GB | 4.4GB | 6.2GB | 12GB  | 24GB  |
-| mem usage | 3.4GB | 3.8GB | 4.1GB | 4.5GB | 6.2GB | 12GB  | 23GB  |
+|                 | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   | F32   |
+|-----------------|-------|-------|-------|-------|-------|-------|-------|
+| ms/token (CPU)  | 64    | 71    | 79    | 83    | 106   | 189   | 372   |
+| ms/token (V100) | 9.7   | 9.4   | 10.3  | 10.2  | 14.0  | 19.1  | 33.0  |
+| file size       | 3.3GB | 3.7GB | 4.0GB | 4.4GB | 6.2GB | 12GB  | 24GB  |
+| mem usage       | 3.4GB | 3.8GB | 4.1GB | 4.5GB | 6.2GB | 12GB  | 23GB  |
 
 ## Development
 

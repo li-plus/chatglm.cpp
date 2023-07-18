@@ -14,6 +14,7 @@ if (NOT CMAKE_BUILD_TYPE)
 endif ()
 
 # third-party libraries
+add_compile_definitions(GGML_CUDA_MMV_Y=2)  # for large vocab
 include_directories(third_party/ggml/include/ggml third_party/ggml/src)
 add_subdirectory(third_party/ggml)
 
@@ -38,7 +39,7 @@ set(CPP_SOURCES
 set_source_files_properties(${CPP_SOURCES} PROPERTIES COMPILE_FLAGS "-pedantic-errors")
 
 add_library(chatglm STATIC chatglm.cpp)
-target_link_libraries(chatglm PRIVATE ggml sentencepiece-static)
+target_link_libraries(chatglm PUBLIC ggml sentencepiece-static)
 
 add_executable(main main.cpp)
 target_link_libraries(main PRIVATE chatglm)
@@ -58,11 +59,12 @@ if (CHATGLM_ENABLE_TESTING)
     # For Windows: Prevent overriding the parent project's compiler/linker settings
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
+    include(GoogleTest)
 
     # Now simply link against gtest or gtest_main as needed. Eg
     add_executable(chatglm_test chatglm_test.cpp)
     target_link_libraries(chatglm_test PRIVATE chatglm gtest_main)
-    add_test(NAME chatglm_test COMMAND chatglm_test)
+    gtest_discover_tests(chatglm_test)
 endif ()
 
 option(CHATGLM_ENABLE_PYBIND, "chatglm: enable python binding" OFF)

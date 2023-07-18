@@ -366,13 +366,13 @@ def make_data_glm2_block():
 
 
 def main():
-    sys.path.append(str(CHATGLM2_MODEL_PATH))
+    sys.path.append(str(CHATGLM_MODEL_PATH))
     torch.manual_seed(0)
     (HERE / "data").mkdir(parents=True, exist_ok=True)
     # make_data_linear()
-    make_data_layernorm()
+    # make_data_layernorm()
     # make_data_rms_norm()
-    # make_data_glm_block()
+    make_data_glm_block()
     # make_data_glm2_block()
 
 
