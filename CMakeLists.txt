@@ -59,11 +59,12 @@ if (CHATGLM_ENABLE_TESTING)
     # For Windows: Prevent overriding the parent project's compiler/linker settings
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
+    include(GoogleTest)
 
     # Now simply link against gtest or gtest_main as needed. Eg
     add_executable(chatglm_test chatglm_test.cpp)
     target_link_libraries(chatglm_test PRIVATE chatglm gtest_main)
-    add_test(NAME chatglm_test COMMAND chatglm_test)
+    gtest_discover_tests(chatglm_test)
 endif ()
 
 option(CHATGLM_ENABLE_PYBIND, "chatglm: enable python binding" OFF)

@@ -725,33 +725,33 @@ ggml_tensor *GLMSelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_
 
     ggml_tensor *query_layer = ggml_view_3d(ctx->gctx.get(), qkv, head_size, num_attention_heads, qlen,
                                             3 * head_size * ggml_element_size(qkv), qkv->nb[1], 0);
-    ggml_tensor *key_layer =
-        ggml_view_3d(ctx->gctx.get(), qkv, head_size, num_attention_heads, qlen, 3 * head_size * ggml_element_size(qkv),
-                     qkv->nb[1], head_size * ggml_element_size(qkv));
-    ggml_tensor *value_layer = ggml_view_3d(ctx->gctx.get(), qkv, head_size, num_attention_heads, qlen,
-                                            3 * head_size * ggml_element_size(qkv), qkv->nb[1],
-                                            2 * head_size * ggml_element_size(qkv)); // [qlen, heads, head_size]
-
 #ifdef GGML_USE_CUBLAS
     // dst for inplace ops should be contiguous for cuda
     query_layer = ggml_cont(ctx->gctx.get(), query_layer);
     tensor_assign_buffers(query_layer);
-    key_layer = ggml_cont(ctx->gctx.get(), key_layer);
-    tensor_assign_buffers(key_layer);
 #endif
-
     query_layer =
         ggml_rope_inplace(ctx->gctx.get(), query_layer, n_past, rope_dim, 4, n_ctx); // [qlen, heads, head_size]
     tensor_assign_buffers(query_layer);
     query_layer = ggml_permute(ctx->gctx.get(), query_layer, 0, 2, 1, 3); // [heads, qlen, head_size]
     tensor_assign_buffers(query_layer, false, true);
 
+    ggml_tensor *key_layer =
+        ggml_view_3d(ctx->gctx.get(), qkv, head_size, num_attention_heads, qlen, 3 * head_size * ggml_element_size(qkv),
+                     qkv->nb[1], head_size * ggml_element_size(qkv));
+#ifdef GGML_USE_CUBLAS
+    key_layer = ggml_cont(ctx->gctx.get(), key_layer);
+    tensor_assign_buffers(key_layer);
+#endif
     key_layer = ggml_rope_inplace(ctx->gctx.get(), key_layer, n_past, rope_dim, 4, n_ctx); // [qlen, heads, head_size]
     tensor_assign_buffers(key_layer);
     key_layer = ggml_permute(ctx->gctx.get(), key_layer, 0, 2, 1, 3); // [heads, qlen, head_size]
     tensor_assign_buffers(key_layer, false, true);
 
-    value_layer = ggml_permute(ctx->gctx.get(), value_layer, 1, 2, 0, 3); // [heads, head_size, qlen]
+    ggml_tensor *value_layer = ggml_view_3d(ctx->gctx.get(), qkv, head_size, num_attention_heads, qlen,
+                                            3 * head_size * ggml_element_size(qkv), qkv->nb[1],
+                                            2 * head_size * ggml_element_size(qkv)); // [qlen, heads, head_size]
+    value_layer = ggml_permute(ctx->gctx.get(), value_layer, 1, 2, 0, 3);            // [heads, head_size, qlen]
     tensor_assign_buffers(value_layer, false, true);
 
     // store key & value to cache
@@ -760,7 +760,6 @@ ggml_tensor *GLMSelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_
                      n_past * head_size * ggml_element_size(k_cache)); // [heads, qlen, head_size]
     tensor_assign_buffers(k_cache_view);
     ggml_build_forward_expand(&ctx->gf, ggml_cpy(ctx->gctx.get(), key_layer, k_cache_view));
-
     ggml_tensor *v_cache_view =
         ggml_view_3d(ctx->gctx.get(), v_cache, qlen, head_size, num_attention_heads, v_cache->nb[1], v_cache->nb[2],
                      n_past * ggml_element_size(v_cache)); // [heads, head_size, qlen]
