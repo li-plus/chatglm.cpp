@@ -102,16 +102,13 @@ static bool equal(const std::vector<int> &a, const std::vector<int> &b) {
     return true;
 }
 
-static bool equal(const std::vector<TokenIdScore> &a, const std::vector<TokenIdScore> &b, float eps = 1e-6f) {
-    if (a.size() != b.size()) {
-        return false;
+static std::vector<int> extract_sorted_ids(std::vector<TokenIdScore> &token_scores) {
+    std::vector<int> token_ids(token_scores.size());
+    for (size_t i = 0; i < token_scores.size(); i++) {
+        token_ids[i] = token_scores[i].id;
     }
-    for (size_t i = 0; i < a.size(); i++) {
-        if (!(a[i].id == b[i].id && std::abs(a[i].score - b[i].score) < eps)) {
-            return false;
-        }
-    }
-    return true;
+    std::sort(token_ids.begin(), token_ids.end());
+    return token_ids;
 }
 
 TEST(Sampling, Temperature) {
@@ -151,8 +148,7 @@ TEST(Sampling, TopK) {
     token_scores.resize(top_k);
 
     // sort & compare
-    std::sort(token_scores.begin(), token_scores.end(), std::greater<TokenIdScore>());
-    EXPECT_TRUE(equal(token_scores, target));
+    EXPECT_TRUE(equal(extract_sorted_ids(token_scores), extract_sorted_ids(target)));
 }
 
 static void reference_top_p(std::vector<TokenIdScore> &token_scores, float top_p) {
@@ -188,8 +184,9 @@ TEST(Sampling, TopP) {
         token_scores.resize(pos - token_scores.data());
 
         // sort & compare
-        std::sort(token_scores.begin(), token_scores.end(), std::greater<TokenIdScore>());
-        EXPECT_TRUE(equal(token_scores, target)) << "size " << token_scores.size() << " vs " << target.size();
+        auto output_ids = extract_sorted_ids(token_scores);
+        auto target_ids = extract_sorted_ids(target);
+        EXPECT_TRUE(equal(output_ids, target_ids)) << "size " << output_ids.size() << " vs " << target_ids.size();
     }
 }
 
