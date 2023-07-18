@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <iostream>
 #include <locale>
+#include <numeric>
 #include <random>
 #include <regex>
 #include <string>
