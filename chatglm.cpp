@@ -539,7 +539,10 @@ int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int
     ctx.gf = {};
     ctx.scratch = {0, scratch_size_, scratch_buffer_.get()};
 
-    int n_threads = gen_config.num_threads > 0 ? gen_config.num_threads : get_num_physical_cores();
+    int n_threads = gen_config.num_threads; // user defined
+    if (n_threads <= 0) {
+        n_threads = ggml_cpu_has_gpublas() ? 1 : get_num_physical_cores(); // default thread num
+    }
     if (input_ids.size() >= 32 && ggml_cpu_has_blas() && !ggml_cpu_has_gpublas()) {
         n_threads = 1; // BLAS enabled
     }

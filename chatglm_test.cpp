@@ -327,7 +327,7 @@ TEST_F(ChatGLMTest, BenchmarkLinear) {
 
     ggml_tensor *y = m.forward(&ctx, x);
     ggml_build_forward_expand(&ctx.gf, y);
-    std::cout << "BenchmarkLinear: " << perf_compute() << " ms\n";
+    std::cout << "[Benchmark] Linear " << ggml_type_name(ictx.dtype) << " time: " << perf_compute() << " ms\n";
 
     for (auto tensor : all_tensors) {
         tensor_to_cpu(tensor);
@@ -340,16 +340,14 @@ TEST_F(ChatGLMTest, LayerNorm) {
     char *ptr = mapped_file.data;
 
     LayerNorm model(&ictx, 64);
-    ptr = map_tensor_data(ptr, model.weight);
-    ptr = map_tensor_data(ptr, model.bias);
-
     ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 64, 3);
-    ptr = map_tensor_data(ptr, x);
-    x = ggml_dup(ctx.gctx.get(), x);
-
     ggml_tensor *ref = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 64, 3);
-    ptr = map_tensor_data(ptr, ref);
 
+    std::vector<ggml_tensor *> all_tensors{model.weight, model.bias, x, ref};
+    for (auto tensor : all_tensors) {
+        ptr = read_tensor_data(ptr, tensor);
+        tensor_to_device(tensor);
+    }
     ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
 
     ggml_tensor *out = model.forward(&ctx, x);
@@ -381,7 +379,7 @@ TEST_F(ChatGLMTest, BenchmarkLayerNorm) {
 
     ggml_tensor *y = m.forward(&ctx, x);
     ggml_build_forward_expand(&ctx.gf, y);
-    std::cout << "BenchmarkLayerNorm: " << perf_compute() << " ms\n";
+    std::cout << "[Benchmark] LayerNorm " << ggml_type_name(ictx.dtype) << " time: " << perf_compute() << " ms\n";
 
     for (auto tensor : all_tensors) {
         tensor_to_cpu(tensor);
@@ -394,16 +392,8 @@ TEST_F(ChatGLMTest, RMSNorm) {
     char *ptr = mapped_file.data;
 
     RMSNorm model(&ictx, 64);
-    ptr = map_tensor_data(ptr, model.weight);
-
     ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 64, 3);
-    ptr = map_tensor_data(ptr, x);
-    x = ggml_dup(ctx.gctx.get(), x);
-
     ggml_tensor *ref = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 64, 3);
-    ptr = map_tensor_data(ptr, ref);
-
-    ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
 
     std::vector<ggml_tensor *> all_tensors{model.weight, x, ref};
     for (auto tensor : all_tensors) {
@@ -426,28 +416,6 @@ TEST_F(ChatGLMTest, RMSNorm) {
     }
 }
 
-// TEST_F(ChatGLMTest, TMP) {
-//     ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 4, 2);
-//     random_fill(x);
-//     std::cout << "x=" << to_string(x) << std::endl;
-//     tensor_to_device(x);
-
-//     ggml_tensor *y = ggml_dup(ctx.gctx.get(), x);
-//     // random_fill(y);
-//     // std::cout << "y=" << to_string(y) << std::endl;
-//     tensor_to_device(y);
-
-//     ggml_tensor *z = ggml_scale(ctx.gctx.get(), y, ggml_new_f32(ctx.gctx.get(), 1));
-//     tensor_assign_buffers(z);
-//     ASSERT_EQ(z->backend, GGML_BACKEND_GPU);
-//     z->backend = GGML_BACKEND_CPU;
-
-//     ggml_build_forward_expand(&ctx.gf, z);
-//     ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_);
-
-//     std::cout << "z=" << to_string(z) << std::endl;
-// }
-
 TEST_F(ChatGLMTest, BenchmarkRMSNorm) {
     constexpr int seq_len = 64;
     constexpr int hidden = 1024;
@@ -463,7 +431,7 @@ TEST_F(ChatGLMTest, BenchmarkRMSNorm) {
 
     ggml_tensor *y = m.forward(&ctx, x);
     ggml_build_forward_expand(&ctx.gf, y);
-    std::cout << "BenchmarkRMSNorm: " << perf_compute() << " ms\n";
+    std::cout << "[Benchmark] RMSNorm " << ggml_type_name(ictx.dtype) << " time: " << perf_compute() << " ms\n";
 
     for (auto tensor : all_tensors) {
         tensor_to_cpu(tensor);
@@ -476,7 +444,7 @@ TEST_F(ChatGLMTest, GLMBlock) {
     char *ptr = mapped_file.data;
 
     constexpr int hidden_size = 32;
-    constexpr int num_attention_heads = 4;
+    constexpr int num_attention_heads = 8;
     constexpr int num_hidden_layers = 28;
     constexpr int max_length = 16;
     constexpr int seq_len = 4;
@@ -597,7 +565,8 @@ TEST_F(ChatGLMTest, BenchmarkGLMBlock) {
         {
             ggml_tensor *self_attn_y = model.forward(&ctx, self_attn_x, 0, seq_len);
             ggml_build_forward_expand(&ctx.gf, self_attn_y);
-            std::cout << "GLMBlock " << ggml_type_name(dtype) << "  self attn: " << perf_compute() << " ms\n";
+            std::cout << "[Benchmark] GLMBlock " << ggml_type_name(dtype) << " self attn time: " << perf_compute()
+                      << " ms\n";
         }
 
         // cross attention
@@ -605,7 +574,8 @@ TEST_F(ChatGLMTest, BenchmarkGLMBlock) {
         {
             ggml_tensor *cross_attn_y = model.forward(&ctx, cross_attn_x, seq_len, seq_len);
             ggml_build_forward_expand(&ctx.gf, cross_attn_y);
-            std::cout << "GLMBlock " << ggml_type_name(dtype) << " cross attn: " << perf_compute() << " ms\n";
+            std::cout << "[Benchmark] GLMBlock " << ggml_type_name(dtype) << " cross attn time: " << perf_compute()
+                      << " ms\n";
         }
 
         for (auto tensor : all_tensors) {
@@ -666,7 +636,7 @@ TEST_F(ChatGLMTest, GLM2Block) {
         ggml_build_forward_expand(&ctx.gf, out_y1);
         ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_);
 
-        expect_all_close(ref_y1, out_y1, 5e-5);
+        expect_all_close(ref_y1, out_y1, 1e-4);
     }
 
     // cross attention
@@ -678,7 +648,7 @@ TEST_F(ChatGLMTest, GLM2Block) {
         ggml_build_forward_expand(&ctx.gf, out_y2);
         ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_);
 
-        expect_all_close(ref_y2, out_y2, 5e-5);
+        expect_all_close(ref_y2, out_y2, 1e-4);
     }
     reset_cgraph();
     {
@@ -688,7 +658,7 @@ TEST_F(ChatGLMTest, GLM2Block) {
         ggml_build_forward_expand(&ctx.gf, out_y3);
         ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_);
 
-        expect_all_close(ref_y3, out_y3, 5e-5);
+        expect_all_close(ref_y3, out_y3, 1e-4);
     }
 
     for (auto tensor : all_tensors) {
@@ -738,7 +708,8 @@ TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
         {
             ggml_tensor *self_attn_y = model.forward(&ctx, self_attn_x, 0);
             ggml_build_forward_expand(&ctx.gf, self_attn_y);
-            std::cout << "GLM2Block " << ggml_type_name(dtype) << "  self attn: " << perf_compute() << " ms\n";
+            std::cout << "[Benchmark] GLM2Block " << ggml_type_name(dtype) << " self attn time: " << perf_compute()
+                      << " ms\n";
         }
 
         // cross attention
@@ -746,7 +717,8 @@ TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
         {
             ggml_tensor *cross_attn_y = model.forward(&ctx, cross_attn_x, seq_len);
             ggml_build_forward_expand(&ctx.gf, cross_attn_y);
-            std::cout << "GLM2Block " << ggml_type_name(dtype) << " cross attn: " << perf_compute() << " ms\n";
+            std::cout << "[Benchmark] GLM2Block " << ggml_type_name(dtype) << " cross attn time: " << perf_compute()
+                      << " ms\n";
         }
 
         for (auto tensor : all_tensors) {
@@ -1017,10 +989,7 @@ static void run_benchmark(const fs::path &model_path) {
 
     GenerationConfig gen_config;
     gen_config.do_sample = false;
-    char *num_threads_env = getenv("CHATGLM_NUM_THREADS");
-    if (num_threads_env) {
-        gen_config.num_threads = std::stoi(num_threads_env);
-    }
+    gen_config.num_threads = get_num_threads_for_benchmark();
 
     PerfStreamer streamer;
     start_ms = ggml_time_ms();

@@ -233,7 +233,7 @@ def make_data_glm_block():
 
     m = (
         GLMBlock(
-            hidden_size=32, num_attention_heads=4, layernorm_epsilon=1e-5, layer_id=3, num_layers=28, empty_init=False
+            hidden_size=32, num_attention_heads=8, layernorm_epsilon=1e-5, layer_id=3, num_layers=28, empty_init=False
         )
         .float()
         .eval()
@@ -366,13 +366,13 @@ def make_data_glm2_block():
 
 
 def main():
-    sys.path.append(str(CHATGLM2_MODEL_PATH))
+    sys.path.append(str(CHATGLM_MODEL_PATH))
     torch.manual_seed(0)
     (HERE / "data").mkdir(parents=True, exist_ok=True)
     # make_data_linear()
-    make_data_layernorm()
+    # make_data_layernorm()
     # make_data_rms_norm()
-    # make_data_glm_block()
+    make_data_glm_block()
     # make_data_glm2_block()
 
 

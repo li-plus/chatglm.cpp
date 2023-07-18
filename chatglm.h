@@ -440,7 +440,7 @@ class ChatGLMForConditionalGeneration : public BaseModelForConditionalGeneration
 
   public:
     static constexpr size_t MEM_SIZE = 272ull * 1024 * 1024;
-    static constexpr size_t SCRATCH_SIZE = 128ull * 1024 * 1024;
+    static constexpr size_t SCRATCH_SIZE = 256ull * 1024 * 1024;
     ChatGLMConfig config;
     ChatGLMModel transformer;
     Linear lm_head;
@@ -559,7 +559,7 @@ class ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGeneratio
 
   public:
     static constexpr size_t MEM_SIZE = 512ull * 1024 * 1024;
-    static constexpr size_t SCRATCH_SIZE = 192ull * 1024 * 1024;
+    static constexpr size_t SCRATCH_SIZE = 256ull * 1024 * 1024;
 
     ChatGLM2Config config;
     ChatGLM2Model transformer;
