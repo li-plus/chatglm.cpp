@@ -564,9 +564,8 @@ int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int
     int next_token_id;
     if (gen_config.do_sample) {
         // temperature sampling
-        float inv_temp = 1.f / gen_config.temperature;
-        for (int i = 0; i < vocab_size; i++) {
-            next_token_logits[i] *= inv_temp;
+        if (gen_config.temperature > 0) {
+            sampling_temperature(next_token_logits, next_token_logits + vocab_size, gen_config.temperature);
         }
 
         std::vector<TokenIdScore> token_scores(vocab_size);
@@ -576,24 +575,15 @@ int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int
 
         // top_k sampling
         if (0 < gen_config.top_k && gen_config.top_k < (int)token_scores.size()) {
-            std::nth_element(token_scores.begin(), token_scores.begin() + gen_config.top_k, token_scores.end(),
-                             std::greater<TokenIdScore>());
+            sampling_top_k(token_scores.data(), token_scores.data() + gen_config.top_k,
+                           token_scores.data() + token_scores.size());
             token_scores.resize(gen_config.top_k);
         }
 
         // top_p sampling
         if (0.f < gen_config.top_p && gen_config.top_p < 1.f) {
-            std::sort(token_scores.begin(), token_scores.end(), std::greater<TokenIdScore>()); // hot code!
-            sampling_softmax_inplace(token_scores.data(), token_scores.data() + token_scores.size());
-
-            float cumsum = 0.f;
-            for (size_t i = 0; i < token_scores.size(); i++) {
-                cumsum += token_scores[i].score;
-                if (cumsum >= gen_config.top_p) {
-                    token_scores.resize(i + 1);
-                    break;
-                }
-            }
+            auto pos = sampling_top_p(token_scores.data(), token_scores.data() + token_scores.size(), gen_config.top_p);
+            token_scores.resize(pos - token_scores.data());
         }
 
         // sample next token
@@ -613,6 +603,31 @@ int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int
     }
 
     return next_token_id;
+}
+
+void BaseModelForConditionalGeneration::sampling_temperature(float *first, float *last, float temp) {
+    float inv_temp = 1.f / temp;
+    for (float *it = first; it != last; it++) {
+        *it *= inv_temp;
+    }
+}
+
+void BaseModelForConditionalGeneration::sampling_top_k(TokenIdScore *first, TokenIdScore *kth, TokenIdScore *last) {
+    std::nth_element(first, kth, last, std::greater<TokenIdScore>());
+}
+
+TokenIdScore *BaseModelForConditionalGeneration::sampling_top_p(TokenIdScore *first, TokenIdScore *last, float top_p) {
+    std::sort(first, last, std::greater<TokenIdScore>());
+    sampling_softmax_inplace(first, last);
+
+    float cumsum = 0.f;
+    for (TokenIdScore *it = first; it != last; it++) {
+        if (cumsum >= top_p) {
+            return it;
+        }
+        cumsum += it->score;
+    }
+    return last;
 }
 
 void BaseModelForConditionalGeneration::sampling_softmax_inplace(TokenIdScore *first, TokenIdScore *last) {

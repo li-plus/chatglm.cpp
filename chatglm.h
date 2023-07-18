@@ -291,6 +291,18 @@ int get_num_physical_cores();
 
 std::string to_string(ModelType model_type);
 
+struct TokenIdScore {
+    int id;
+    float score;
+
+    TokenIdScore() = default;
+    TokenIdScore(int id, float score) : id(id), score(score) {}
+
+    bool operator<(const TokenIdScore &other) const { return score < other.score; }
+    bool operator>(const TokenIdScore &other) const { return score > other.score; }
+    bool operator==(const TokenIdScore &other) const { return id == other.id && score == other.score; }
+};
+
 class BaseModelForConditionalGeneration {
   public:
     BaseModelForConditionalGeneration(ModelType model_type, BaseConfig config, size_t mem_size, size_t scratch_size)
@@ -310,18 +322,10 @@ class BaseModelForConditionalGeneration {
     int generate_next_token(const std::vector<int> &input_ids, const GenerationConfig &gen_config, int n_past,
                             int n_ctx) const;
 
-    struct TokenIdScore {
-        int id;
-        float score;
+    static void sampling_temperature(float *first, float *last, float temp);
+    static void sampling_top_k(TokenIdScore *first, TokenIdScore *kth, TokenIdScore *last);
+    static TokenIdScore *sampling_top_p(TokenIdScore *first, TokenIdScore *last, float top_p);
 
-        TokenIdScore() = default;
-        TokenIdScore(int id, float score) : id(id), score(score) {}
-
-        bool operator<(const TokenIdScore &other) const { return score < other.score; }
-        bool operator>(const TokenIdScore &other) const { return score > other.score; }
-    };
-
-  private:
     static void sampling_softmax_inplace(TokenIdScore *first, TokenIdScore *last);
 
   private:

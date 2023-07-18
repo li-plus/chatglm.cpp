@@ -90,6 +90,95 @@ static inline float timeit(std::function<void()> fn, int warmup, int active) {
     return elapsed_ms / active;
 }
 
+template <typename T>
+static bool equal(const std::vector<T> &a, const std::vector<T> &b) {
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < a.size(); i++) {
+        if (!(a[i] == b[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+TEST(Sampling, Temperature) {
+    constexpr float temp = 0.7;
+    std::vector<float> logits(64);
+    for (float &v : logits) {
+        v = random();
+    }
+    // reference
+    std::vector<float> target = logits;
+    for (auto &v : target) {
+        v /= temp;
+    }
+    // test
+    BaseModelForConditionalGeneration::sampling_temperature(logits.data(), logits.data() + logits.size(), temp);
+    // compare
+    for (size_t i = 0; i < logits.size(); i++) {
+        EXPECT_FLOAT_EQ(logits[i], target[i]);
+    }
+}
+
+TEST(Sampling, TopK) {
+    constexpr int top_k = 20;
+    std::vector<TokenIdScore> token_scores(64);
+    for (size_t i = 0; i < token_scores.size(); i++) {
+        token_scores[i] = TokenIdScore(i, random());
+    }
+
+    // reference
+    std::vector<TokenIdScore> target = token_scores;
+    std::sort(target.begin(), target.end(), std::greater<TokenIdScore>());
+    target.resize(top_k);
+
+    // test
+    BaseModelForConditionalGeneration::sampling_top_k(token_scores.data(), token_scores.data() + top_k,
+                                                      token_scores.data() + token_scores.size());
+    token_scores.resize(top_k);
+
+    // sort & compare
+    std::sort(token_scores.begin(), token_scores.end(), std::greater<TokenIdScore>());
+    EXPECT_TRUE(equal(token_scores, target));
+}
+
+static void reference_top_p(std::vector<TokenIdScore> &token_scores, float top_p) {
+    std::sort(token_scores.begin(), token_scores.end(), std::greater<TokenIdScore>());
+    BaseModelForConditionalGeneration::sampling_softmax_inplace(token_scores.data(),
+                                                                token_scores.data() + token_scores.size());
+    float cumsum = 0.f;
+    for (size_t i = 0; i < token_scores.size(); i++) {
+        if (cumsum >= top_p) {
+            token_scores.resize(i);
+        }
+        cumsum += token_scores[i].score;
+    }
+}
+
+TEST(Sampling, TopP) {
+    constexpr float top_p = 0.7;
+    std::vector<TokenIdScore> token_scores(64);
+    for (size_t i = 0; i < token_scores.size(); i++) {
+        token_scores[i] = TokenIdScore(i, random());
+    }
+
+    // reference
+    std::vector<TokenIdScore> target = token_scores;
+    reference_top_p(target, top_p);
+    EXPECT_TRUE(!token_scores.empty());
+
+    // test
+    TokenIdScore *pos = BaseModelForConditionalGeneration::sampling_top_p(
+        token_scores.data(), token_scores.data() + token_scores.size(), top_p);
+    token_scores.resize(pos - token_scores.data());
+
+    // sort & compare
+    std::sort(token_scores.begin(), token_scores.end(), std::greater<TokenIdScore>());
+    EXPECT_TRUE(equal(token_scores, target));
+}
+
 class ChatGLMTest : public ::testing::Test {
   protected:
     InitContext ictx;
@@ -753,18 +842,6 @@ TEST_F(ChatGLMTest, quantize) {
         }
         std::cout << "]\n";
     }
-}
-
-static bool equal(const std::vector<int> &a, const std::vector<int> &b) {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < a.size(); i++) {
-        if (a[i] != b[i]) {
-            return false;
-        }
-    }
-    return true;
 }
 
 TEST(Pipeline, ChatGLM) {
