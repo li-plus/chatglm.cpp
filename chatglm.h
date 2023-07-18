@@ -300,7 +300,10 @@ struct TokenIdScore {
 
     bool operator<(const TokenIdScore &other) const { return score < other.score; }
     bool operator>(const TokenIdScore &other) const { return score > other.score; }
-    bool operator==(const TokenIdScore &other) const { return id == other.id && score == other.score; }
+
+    friend std::ostream &operator<<(std::ostream &os, const TokenIdScore &self) {
+        return os << "TokenIdScore(id=" << self.id << ", score=" << self.score << ")";
+    }
 };
 
 class BaseModelForConditionalGeneration {

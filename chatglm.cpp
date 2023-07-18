@@ -617,15 +617,25 @@ void BaseModelForConditionalGeneration::sampling_top_k(TokenIdScore *first, Toke
 }
 
 TokenIdScore *BaseModelForConditionalGeneration::sampling_top_p(TokenIdScore *first, TokenIdScore *last, float top_p) {
-    std::sort(first, last, std::greater<TokenIdScore>());
+    // fast top_p in expected O(n) time complexity
     sampling_softmax_inplace(first, last);
 
-    float cumsum = 0.f;
-    for (TokenIdScore *it = first; it != last; it++) {
-        if (cumsum >= top_p) {
-            return it;
+    while (first + 1 < last) {
+        float pivot_score = (last - 1)->score; // use mid score?
+        TokenIdScore *mid =
+            std::partition(first, last - 1, [pivot_score](const TokenIdScore &x) { return x.score > pivot_score; });
+        std::swap(*mid, *(last - 1));
+
+        float prefix_sum =
+            std::accumulate(first, mid, 0.f, [](float sum, const TokenIdScore &x) { return sum + x.score; });
+        if (prefix_sum >= top_p) {
+            last = mid;
+        } else if (prefix_sum + mid->score < top_p) {
+            first = mid + 1;
+            top_p -= prefix_sum + mid->score;
+        } else {
+            return mid + 1;
         }
-        cumsum += it->score;
     }
     return last;
 }
