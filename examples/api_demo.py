@@ -2,6 +2,7 @@
 import json
 import logging
 import uvicorn
+import functools
 import chatglm_cpp
 from pathlib import Path
 from fastapi import FastAPI, Request, HTTPException, status
@@ -29,23 +30,28 @@ pipeline = None
 completion_lock = Lock()
 requests_num = 0
 
-async def run_with_lock(func, request):
-    global requests_num
-    requests_num = requests_num + 1
-    logging.debug("Start Waiting. RequestsNum: %r", requests_num)
-    while completion_lock.locked():
-        if await request.is_disconnected():
-            logging.debug("Stop Waiting (Lock). RequestsNum: %r", requests_num)
-            return
-        # 等待
-        logging.debug("Waiting. RequestsNum: %r", requests_num)
-        time.sleep(0.1)
-    else:
-        with completion_lock:
+
+def run_with_lock(method):
+    @functools.wraps(method)
+    async def wrapper(request, *args, **kwargs):
+        global requests_num
+        requests_num = requests_num + 1
+        logging.debug("Start Waiting. RequestsNum: %r", requests_num)
+        while completion_lock.locked():
             if await request.is_disconnected():
                 logging.debug("Stop Waiting (Lock). RequestsNum: %r", requests_num)
                 return
-            return func()
+            # 等待
+            logging.debug("Waiting. RequestsNum: %r", requests_num)
+            time.sleep(0.1)
+        else:
+            with completion_lock:
+                if await request.is_disconnected():
+                    logging.debug("Stop Waiting (Lock). RequestsNum: %r", requests_num)
+                    return
+                return method(request, *args, **kwargs)
+
+    return wrapper
 
 
 @app.on_event("startup")
@@ -55,29 +61,33 @@ async def startup_event():
     logging.info('End Loading chatglm model')
 
 
+@run_with_lock
+def stream_chat(request, history, body):
+    for piece in pipeline.stream_chat(
+        history,
+        max_length=body.max_tokens,
+        max_context_length=body.max_context_length,
+        do_sample=body.temperature > 0,
+        top_k=body.top_k,
+        top_p=body.top_p,
+        temperature=body.temperature,
+        num_threads=16,
+    ):
+        # debug log
+        print(piece, end='', flush=True)
+        yield piece
+
+
 async def process_generate(history, chat_model, body, request):
     # TODO calc tokens
     usage = {}
 
     if len(history) % 2 == 0:
         history = ['hi'] + history
-    def func():
-        for piece in pipeline.stream_chat(
-            history,
-            max_length=body.max_tokens,
-            max_context_length=body.max_context_length,
-            do_sample=body.temperature > 0,
-            top_k=body.top_k,
-            top_p=body.top_p,
-            temperature=body.temperature,
-        ):
-            # debug log
-            print(piece, end='', flush=True)
-            yield piece
 
     async def generate():
         response = ''
-        for delta in await run_with_lock(func, request):
+        for delta in await stream_chat(request, history, body):
             response += delta
             if body.stream:
                 chunk = format_message('', delta, chunk=True, chat_model=chat_model)
