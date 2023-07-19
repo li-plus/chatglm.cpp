@@ -62,7 +62,7 @@ async def startup_event():
 
 
 @run_with_lock
-def stream_chat(request, history, body):
+async def stream_chat(request, history, body):
     for piece in pipeline.stream_chat(
         history,
         max_length=body.max_tokens,
@@ -87,7 +87,7 @@ async def process_generate(history, chat_model, body, request):
 
     async def generate():
         response = ''
-        for delta in await stream_chat(request, history, body):
+        async for delta in await stream_chat(request, history, body):
             response += delta
             if body.stream:
                 chunk = format_message('', delta, chunk=True, chat_model=chat_model)
