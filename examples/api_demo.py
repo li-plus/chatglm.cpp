@@ -56,6 +56,7 @@ async def startup_event():
 
 
 async def process_generate(history, chat_model, body, request):
+    # TODO calc tokens
     usage = {}
 
     if len(history) % 2 == 0:

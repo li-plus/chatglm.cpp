@@ -1,0 +1,5 @@
+CMakeCache.txt
+*.bin
+examples/*.bin
+data/
+third_party/
