@@ -1,0 +1,10 @@
+FROM python:3.9
+
+RUN pip3 install uvicorn fastapi==0.92.0 sse_starlette chatglm-cpp -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn --no-cache-dir
+
+ADD ./examples/api_demo.py /chatglm/api_demo.py
+
+WORKDIR /chatglm
+
+CMD ["python", "api_demo.py"]
+
