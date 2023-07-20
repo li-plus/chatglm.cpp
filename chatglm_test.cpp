@@ -199,11 +199,11 @@ class ChatGLMTest : public ::testing::Test {
 
     void SetUp() override {
         ictx.dtype = GGML_TYPE_F32;
-        ictx.gctx = GGMLContext({1024 * 1024 * 1024, nullptr, false});
+        ictx.gctx = make_unique_ggml_context(1024 * 1024 * 1024, nullptr, false);
 
         scratch_buf.resize(1024 * 1024);
 
-        ctx.gctx = GGMLContext({1024 * 1024 * 1024, nullptr, false});
+        ctx.gctx = make_unique_ggml_context(1024 * 1024 * 1024, nullptr, false);
         ctx.scratch = {0, scratch_buf.size(), scratch_buf.data()};
 
         reset_cgraph();

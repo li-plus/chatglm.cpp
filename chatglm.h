@@ -64,50 +64,21 @@ class BaseTokenizer {
     virtual std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const = 0;
 };
 
-class GGMLContext {
-  public:
-    GGMLContext() : gctx_(nullptr) {}
-
-    GGMLContext(size_t mem_size, void *mem_buffer, bool no_alloc) : gctx_(ggml_init({mem_size, mem_buffer, no_alloc})) {
-        CHATGLM_CHECK(gctx_) << "failed to init ggml context";
-    }
-    // copy constructor
-    GGMLContext(const GGMLContext &) = delete;
-    // move constructor
-    GGMLContext(GGMLContext &&other) : gctx_(other.gctx_) { other.gctx_ = nullptr; }
-
-    ~GGMLContext() { reset(); }
-
-    // copy assignment
-    GGMLContext &operator=(const GGMLContext &) = delete;
-    // move assignment
-    GGMLContext &operator=(GGMLContext &&other) {
-        reset();
-        gctx_ = other.gctx_;
-        other.gctx_ = nullptr;
-        return *this;
-    }
-
-    ggml_context *get() const { return gctx_; }
-
-    void reset() {
-        if (gctx_) {
-            ggml_free(gctx_);
-            gctx_ = nullptr;
-        }
-    }
-
-  private:
-    ggml_context *gctx_;
+struct ggml_context_deleter_t {
+    void operator()(ggml_context *ctx) const noexcept { ggml_free(ctx); }
 };
 
+using unique_ggml_context_t = std::unique_ptr<ggml_context, ggml_context_deleter_t>;
+
+unique_ggml_context_t make_unique_ggml_context(size_t mem_size, void *mem_buffer, bool no_alloc);
+
 struct InitContext {
-    GGMLContext gctx;
+    unique_ggml_context_t gctx;
     ggml_type dtype;
 };
 
 struct ForwardContext {
-    GGMLContext gctx;
+    unique_ggml_context_t gctx;
     ggml_cgraph gf;
     ggml_scratch scratch;
 };
@@ -267,6 +238,12 @@ class ModelLoader {
 
 // ===== generation =====
 
+// reference: https://stackoverflow.com/questions/11149665/c-vector-that-doesnt-initialize-its-members
+struct uninitialized_char {
+    char m;
+    uninitialized_char() {}
+};
+
 struct GenerationConfig {
     int max_length;
     int max_context_length;
@@ -309,8 +286,7 @@ struct TokenIdScore {
 class BaseModelForConditionalGeneration {
   public:
     BaseModelForConditionalGeneration(ModelType model_type, BaseConfig config, size_t mem_size, size_t scratch_size)
-        : model_type_(model_type), config_(config), mem_size_(mem_size), mem_buffer_(new char[mem_size]),
-          scratch_size_(scratch_size), scratch_buffer_(new char[scratch_size]) {}
+        : model_type_(model_type), config_(config), mem_buffer_(mem_size), scratch_buffer_(scratch_size) {}
     virtual ~BaseModelForConditionalGeneration() = default;
 
     virtual void load(ModelLoader &loader) = 0;
@@ -334,10 +310,8 @@ class BaseModelForConditionalGeneration {
   private:
     ModelType model_type_;
     BaseConfig config_;
-    size_t mem_size_;
-    std::unique_ptr<char[]> mem_buffer_; // BLAS buffer
-    size_t scratch_size_;
-    std::unique_ptr<char[]> scratch_buffer_; // intermediate tensor buffer
+    std::vector<uninitialized_char> mem_buffer_;     // BLAS buffer
+    std::vector<uninitialized_char> scratch_buffer_; // intermediate tensor buffer
 };
 
 // ===== ChatGLM-6B =====

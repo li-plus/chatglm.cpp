@@ -145,6 +145,10 @@ void tensor_to_cpu(ggml_tensor *tensor) {
 #endif
 }
 
+unique_ggml_context_t make_unique_ggml_context(size_t mem_size, void *mem_buffer, bool no_alloc) {
+    return unique_ggml_context_t(ggml_init({mem_size, mem_buffer, no_alloc}));
+}
+
 // for debugging purpose
 static inline ggml_tensor *add_zero(ggml_context *ctx, ggml_tensor *tensor) {
     ggml_tensor *zeros = ggml_new_tensor(ctx, tensor->type, tensor->n_dims, tensor->ne);
@@ -536,9 +540,9 @@ int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int
                                                            const GenerationConfig &gen_config, int n_past,
                                                            int n_ctx) const {
     ForwardContext ctx;
-    ctx.gctx = GGMLContext(mem_size_, mem_buffer_.get(), false);
+    ctx.gctx = make_unique_ggml_context(mem_buffer_.size(), (void *)mem_buffer_.data(), false);
     ctx.gf = {};
-    ctx.scratch = {0, scratch_size_, scratch_buffer_.get()};
+    ctx.scratch = {0, scratch_buffer_.size(), (void *)scratch_buffer_.data()};
 
     int n_threads = gen_config.num_threads; // user defined
     if (n_threads <= 0) {
@@ -858,7 +862,7 @@ ChatGLMForConditionalGeneration::ChatGLMForConditionalGeneration(const ChatGLMCo
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
     const size_t num_tensors = 4 + config.num_hidden_layers * 14;
     const size_t ctx_size = num_tensors * tensor_ovhd;
-    w_ctx_.gctx = GGMLContext(ctx_size, nullptr, true);
+    w_ctx_.gctx = make_unique_ggml_context(ctx_size, nullptr, true);
     w_ctx_.dtype = config.dtype;
 
     transformer = ChatGLMModel(&w_ctx_, config);
@@ -1164,7 +1168,7 @@ ChatGLM2ForConditionalGeneration::ChatGLM2ForConditionalGeneration(const ChatGLM
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
     const size_t num_tensors = 3 + config.num_hidden_layers * 9;
     const size_t ctx_size = num_tensors * tensor_ovhd;
-    w_ctx_.gctx = GGMLContext(ctx_size, nullptr, true);
+    w_ctx_.gctx = make_unique_ggml_context(ctx_size, nullptr, true);
     w_ctx_.dtype = config.dtype;
 
     transformer = ChatGLM2Model(&w_ctx_, config);
