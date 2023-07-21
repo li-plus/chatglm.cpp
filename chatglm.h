@@ -10,6 +10,8 @@ namespace chatglm {
 
 // ===== common =====
 
+static constexpr size_t MB = 1024 * 1024;
+
 class LogMessageFatal {
   public:
     LogMessageFatal(const char *file, int line) { oss_ << file << ':' << line << ' '; }
@@ -414,8 +416,8 @@ class ChatGLMForConditionalGeneration : public BaseModelForConditionalGeneration
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
 
   public:
-    static constexpr size_t MEM_SIZE = 272ull * 1024 * 1024;
-    static constexpr size_t SCRATCH_SIZE = 256ull * 1024 * 1024;
+    static constexpr size_t MEM_SIZE = 512 * MB;      // 2k context
+    static constexpr size_t SCRATCH_SIZE = 1024 * MB; // 2k context
     ChatGLMConfig config;
     ChatGLMModel transformer;
     Linear lm_head;
@@ -525,8 +527,8 @@ class ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGeneratio
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
 
   public:
-    static constexpr size_t MEM_SIZE = 512ull * 1024 * 1024;
-    static constexpr size_t SCRATCH_SIZE = 256ull * 1024 * 1024;
+    static constexpr size_t MEM_SIZE = 512 * MB;      // 2k context
+    static constexpr size_t SCRATCH_SIZE = 1280 * MB; // 2k context
 
     ChatGLM2Config config;
     ChatGLM2Model transformer;

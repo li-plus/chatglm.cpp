@@ -876,7 +876,8 @@ TEST(Pipeline, ChatGLM) {
     // memory test
     {
         GenerationConfig gen_config;
-        gen_config.max_length = gen_config.max_context_length + 1;
+        gen_config.max_length = 2048;
+        gen_config.max_context_length = gen_config.max_length - 1;
         gen_config.do_sample = false;
 
         std::ostringstream oss;
@@ -949,7 +950,8 @@ TEST(Pipeline, ChatGLM2) {
     // memory test
     {
         GenerationConfig gen_config;
-        gen_config.max_length = gen_config.max_context_length + 1;
+        gen_config.max_length = 2048;
+        gen_config.max_context_length = gen_config.max_length - 1;
         gen_config.do_sample = false;
 
         std::ostringstream oss;
