@@ -4,6 +4,7 @@ include *.cpp *.h
 # ggml
 graft third_party/ggml/include
 graft third_party/ggml/src
+include third_party/ggml/*
 
 # pybind11
 graft third_party/pybind11/include

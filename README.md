@@ -110,6 +110,11 @@ Install from PyPI (recommended): will trigger compilation on your platform.
 pip install -U chatglm-cpp
 ```
 
+To enable cuBLAS acceleration:
+```sh
+CMAKE_ARGS="-DGGML_CUBLAS=ON" pip install -U chatglm-cpp
+```
+
 You may also install from source:
 ```sh
 # install from the latest source hosted on GitHub
