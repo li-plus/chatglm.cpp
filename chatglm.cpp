@@ -714,11 +714,15 @@ ggml_tensor *GLMMLP::forward(ForwardContext *ctx, ggml_tensor *hidden_states) co
 
 GLMSelfAttention::GLMSelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int max_length)
     : query_key_value(ctx, hidden_size, 3 * hidden_size), dense(ctx, hidden_size, hidden_size),
-      num_attention_heads(num_attention_heads),
-      k_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
-                                 num_attention_heads)),
-      v_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
-                                 num_attention_heads)) {}
+      num_attention_heads(num_attention_heads) {
+    const bool no_alloc = ggml_get_no_alloc(ctx->gctx.get());
+    ggml_set_no_alloc(ctx->gctx.get(), false);
+    k_cache = ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
+                                 num_attention_heads);
+    v_cache = ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
+                                 num_attention_heads);
+    ggml_set_no_alloc(ctx->gctx.get(), no_alloc);
+}
 
 ggml_tensor *GLMSelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
     int hidden_size = hidden_states->ne[0];
@@ -861,60 +865,59 @@ ChatGLMForConditionalGeneration::ChatGLMForConditionalGeneration(const ChatGLMCo
     : BaseModelForConditionalGeneration(MODEL_TYPE_CHATGLM, config, MEM_SIZE, SCRATCH_SIZE), config(config) {
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
     const size_t num_tensors = 4 + config.num_hidden_layers * 14;
-    const size_t ctx_size = num_tensors * tensor_ovhd;
+    const size_t kv_cache_size =
+        config.num_hidden_layers * 2 * config.max_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16);
+    const size_t ctx_size = num_tensors * tensor_ovhd + kv_cache_size;
     w_ctx_.gctx = make_unique_ggml_context(ctx_size, nullptr, true);
     w_ctx_.dtype = config.dtype;
 
     transformer = ChatGLMModel(&w_ctx_, config);
     lm_head = Linear(&w_ctx_, config.hidden_size, config.vocab_size, false);
     CHATGLM_CHECK(ggml_used_mem(w_ctx_.gctx.get()) == ggml_get_mem_size(w_ctx_.gctx.get()))
-        << "corrupted model weights";
+        << "corrupted model weights or kv cache";
 
-    const size_t kv_cache_size =
-        config.num_hidden_layers * 2 * config.max_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16);
-    kv_cache_buffer_.reset(new char[kv_cache_size]);
-    char *kv_cache_ptr = kv_cache_buffer_.get();
-    for (auto &layer : transformer.layers) {
-        layer.attention.k_cache->data = kv_cache_ptr;
-        kv_cache_ptr += ggml_nbytes(layer.attention.k_cache);
-        tensor_to_device(layer.attention.k_cache);
-        layer.attention.v_cache->data = kv_cache_ptr;
-        kv_cache_ptr += ggml_nbytes(layer.attention.v_cache);
-        tensor_to_device(layer.attention.v_cache);
+    // build state_dict
+    state_dict_.reserve(3 + config.num_hidden_layers * 12);
+    state_dict_.emplace_back("transformer.word_embeddings.weight", transformer.word_embeddings.weight);
+    for (int i = 0; i < config.num_hidden_layers; i++) {
+        std::string layer_prefix = "transformer.layers." + std::to_string(i) + '.';
+        state_dict_.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
+        state_dict_.emplace_back(layer_prefix + "input_layernorm.bias", transformer.layers[i].input_layernorm.bias);
+        state_dict_.emplace_back(layer_prefix + "attention.query_key_value.weight",
+                                 transformer.layers[i].attention.query_key_value.weight);
+        state_dict_.emplace_back(layer_prefix + "attention.query_key_value.bias",
+                                 transformer.layers[i].attention.query_key_value.bias);
+        state_dict_.emplace_back(layer_prefix + "attention.dense.weight", transformer.layers[i].attention.dense.weight);
+        state_dict_.emplace_back(layer_prefix + "attention.dense.bias", transformer.layers[i].attention.dense.bias);
+        state_dict_.emplace_back(layer_prefix + "post_attention_layernorm.weight",
+                                 transformer.layers[i].post_attention_layernorm.weight);
+        state_dict_.emplace_back(layer_prefix + "post_attention_layernorm.bias",
+                                 transformer.layers[i].post_attention_layernorm.bias);
+        state_dict_.emplace_back(layer_prefix + "mlp.dense_h_to_4h.weight",
+                                 transformer.layers[i].mlp.dense_h_to_4h.weight);
+        state_dict_.emplace_back(layer_prefix + "mlp.dense_h_to_4h.bias", transformer.layers[i].mlp.dense_h_to_4h.bias);
+        state_dict_.emplace_back(layer_prefix + "mlp.dense_4h_to_h.weight",
+                                 transformer.layers[i].mlp.dense_4h_to_h.weight);
+        state_dict_.emplace_back(layer_prefix + "mlp.dense_4h_to_h.bias", transformer.layers[i].mlp.dense_4h_to_h.bias);
     }
-    CHATGLM_CHECK(kv_cache_ptr == kv_cache_buffer_.get() + kv_cache_size) << "corrupted kv cache";
+    state_dict_.emplace_back("transformer.final_layernorm.weight", transformer.final_layernorm.weight);
+    state_dict_.emplace_back("transformer.final_layernorm.bias", transformer.final_layernorm.bias);
+}
+
+ChatGLMForConditionalGeneration::~ChatGLMForConditionalGeneration() {
+    for (auto &item : state_dict_) {
+        tensor_to_cpu(item.second);
+    }
+    tensor_to_cpu(lm_head.weight);
+
+    for (auto &layer : transformer.layers) {
+        tensor_to_cpu(layer.attention.k_cache);
+        tensor_to_cpu(layer.attention.v_cache);
+    }
 }
 
 void ChatGLMForConditionalGeneration::load(ModelLoader &loader) {
-    std::vector<std::pair<std::string, ggml_tensor *>> state_dict;
-    state_dict.reserve(3 + config.num_hidden_layers * 12);
-
-    state_dict.emplace_back("transformer.word_embeddings.weight", transformer.word_embeddings.weight);
-    for (int i = 0; i < config.num_hidden_layers; i++) {
-        std::string layer_prefix = "transformer.layers." + std::to_string(i) + '.';
-        state_dict.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
-        state_dict.emplace_back(layer_prefix + "input_layernorm.bias", transformer.layers[i].input_layernorm.bias);
-        state_dict.emplace_back(layer_prefix + "attention.query_key_value.weight",
-                                transformer.layers[i].attention.query_key_value.weight);
-        state_dict.emplace_back(layer_prefix + "attention.query_key_value.bias",
-                                transformer.layers[i].attention.query_key_value.bias);
-        state_dict.emplace_back(layer_prefix + "attention.dense.weight", transformer.layers[i].attention.dense.weight);
-        state_dict.emplace_back(layer_prefix + "attention.dense.bias", transformer.layers[i].attention.dense.bias);
-        state_dict.emplace_back(layer_prefix + "post_attention_layernorm.weight",
-                                transformer.layers[i].post_attention_layernorm.weight);
-        state_dict.emplace_back(layer_prefix + "post_attention_layernorm.bias",
-                                transformer.layers[i].post_attention_layernorm.bias);
-        state_dict.emplace_back(layer_prefix + "mlp.dense_h_to_4h.weight",
-                                transformer.layers[i].mlp.dense_h_to_4h.weight);
-        state_dict.emplace_back(layer_prefix + "mlp.dense_h_to_4h.bias", transformer.layers[i].mlp.dense_h_to_4h.bias);
-        state_dict.emplace_back(layer_prefix + "mlp.dense_4h_to_h.weight",
-                                transformer.layers[i].mlp.dense_4h_to_h.weight);
-        state_dict.emplace_back(layer_prefix + "mlp.dense_4h_to_h.bias", transformer.layers[i].mlp.dense_4h_to_h.bias);
-    }
-    state_dict.emplace_back("transformer.final_layernorm.weight", transformer.final_layernorm.weight);
-    state_dict.emplace_back("transformer.final_layernorm.bias", transformer.final_layernorm.bias);
-
-    for (auto &item : state_dict) {
+    for (auto &item : state_dict_) {
         const std::string &name = item.first;
         ggml_tensor *tensor = item.second;
         loader.read_tensor(name, tensor);
@@ -925,6 +928,11 @@ void ChatGLMForConditionalGeneration::load(ModelLoader &loader) {
 
     lm_head.weight->data = transformer.word_embeddings.weight->data; // tied weight
     tensor_to_device(lm_head.weight);
+
+    for (auto &layer : transformer.layers) {
+        tensor_to_device(layer.attention.k_cache);
+        tensor_to_device(layer.attention.v_cache);
+    }
 }
 
 ggml_tensor *ChatGLMForConditionalGeneration::forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past,
@@ -1000,6 +1008,19 @@ std::string ChatGLM2Tokenizer::build_prompt(const std::vector<std::string> &hist
 bool ChatGLM2Tokenizer::is_special_id(int id) const {
     return id == mask_token_id || id == gmask_token_id || id == smask_token_id || id == sop_token_id ||
            id == eop_token_id;
+}
+
+GLM2SelfAttention::GLM2SelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads,
+                                     int max_length)
+    : num_attention_heads(num_attention_heads), num_kv_heads(num_kv_heads),
+      query_key_value(ctx, hidden_size, hidden_size + 2 * (hidden_size / num_attention_heads) * num_kv_heads),
+      dense(ctx, hidden_size, hidden_size, false) {
+    const bool no_alloc = ggml_get_no_alloc(ctx->gctx.get());
+    ggml_set_no_alloc(ctx->gctx.get(), false);
+    const int head_size = hidden_size / num_attention_heads;
+    k_cache = ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, head_size, max_length, num_kv_heads);
+    v_cache = ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, max_length, head_size, num_kv_heads);
+    ggml_set_no_alloc(ctx->gctx.get(), no_alloc);
 }
 
 ggml_tensor *GLM2SelfAttention::forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const {
@@ -1167,62 +1188,64 @@ ChatGLM2ForConditionalGeneration::ChatGLM2ForConditionalGeneration(const ChatGLM
     : BaseModelForConditionalGeneration(MODEL_TYPE_CHATGLM2, config, MEM_SIZE, SCRATCH_SIZE), config(config) {
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
     const size_t num_tensors = 3 + config.num_hidden_layers * 9;
-    const size_t ctx_size = num_tensors * tensor_ovhd;
+    const size_t kv_cache_size = config.num_hidden_layers * 2ull * config.max_length * config.hidden_size /
+                                 config.num_attention_heads * config.num_kv_heads * ggml_type_size(GGML_TYPE_F16);
+    const size_t ctx_size = num_tensors * tensor_ovhd + kv_cache_size;
     w_ctx_.gctx = make_unique_ggml_context(ctx_size, nullptr, true);
     w_ctx_.dtype = config.dtype;
 
     transformer = ChatGLM2Model(&w_ctx_, config);
     lm_head = Linear(&w_ctx_, config.hidden_size, config.vocab_size, false);
+    CHATGLM_CHECK(ggml_used_mem(w_ctx_.gctx.get()) == ggml_get_mem_size(w_ctx_.gctx.get()))
+        << "corrupted model weights or kv cache";
 
-    const size_t kv_cache_size = config.num_hidden_layers * 2ull * config.max_length * config.hidden_size /
-                                 config.num_attention_heads * config.num_kv_heads * ggml_type_size(GGML_TYPE_F16);
-    kv_cache_buffer_.reset(new char[kv_cache_size]);
-
-    char *kv_cache_ptr = kv_cache_buffer_.get();
-    for (auto &layer : transformer.layers) {
-        layer.attention.k_cache->data = kv_cache_ptr;
-        kv_cache_ptr += ggml_nbytes(layer.attention.k_cache);
-        tensor_to_device(layer.attention.k_cache);
-        layer.attention.v_cache->data = kv_cache_ptr;
-        kv_cache_ptr += ggml_nbytes(layer.attention.v_cache);
-        tensor_to_device(layer.attention.v_cache);
+    // build state_dict
+    state_dict_.reserve(3 + config.num_hidden_layers * 7);
+    state_dict_.emplace_back("transformer.embedding.word_embeddings.weight", transformer.word_embeddings.weight);
+    for (int i = 0; i < config.num_hidden_layers; i++) {
+        std::string layer_prefix = "transformer.encoder.layers." + std::to_string(i) + '.';
+        state_dict_.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
+        state_dict_.emplace_back(layer_prefix + "self_attention.query_key_value.weight",
+                                 transformer.layers[i].attention.query_key_value.weight);
+        state_dict_.emplace_back(layer_prefix + "self_attention.query_key_value.bias",
+                                 transformer.layers[i].attention.query_key_value.bias);
+        state_dict_.emplace_back(layer_prefix + "self_attention.dense.weight",
+                                 transformer.layers[i].attention.dense.weight);
+        state_dict_.emplace_back(layer_prefix + "post_attention_layernorm.weight",
+                                 transformer.layers[i].post_attention_layernorm.weight);
+        state_dict_.emplace_back(layer_prefix + "mlp.dense_h_to_4h.weight",
+                                 transformer.layers[i].mlp.dense_h_to_4h.weight);
+        state_dict_.emplace_back(layer_prefix + "mlp.dense_4h_to_h.weight",
+                                 transformer.layers[i].mlp.dense_4h_to_h.weight);
     }
-    CHATGLM_CHECK(kv_cache_ptr == kv_cache_buffer_.get() + kv_cache_size) << "corrupted kv cache";
+    state_dict_.emplace_back("transformer.encoder.final_layernorm.weight", transformer.final_layernorm.weight);
+    state_dict_.emplace_back("transformer.output_layer.weight", lm_head.weight);
+}
+
+ChatGLM2ForConditionalGeneration::~ChatGLM2ForConditionalGeneration() {
+    for (auto &item : state_dict_) {
+        tensor_to_cpu(item.second);
+    }
+
+    for (auto &layer : transformer.layers) {
+        tensor_to_cpu(layer.attention.k_cache);
+        tensor_to_cpu(layer.attention.v_cache);
+    }
 }
 
 void ChatGLM2ForConditionalGeneration::load(ModelLoader &loader) {
-    std::vector<std::pair<std::string, ggml_tensor *>> state_dict;
-    state_dict.reserve(3 + config.num_hidden_layers * 7);
-
-    state_dict.emplace_back("transformer.embedding.word_embeddings.weight", transformer.word_embeddings.weight);
-    for (int i = 0; i < config.num_hidden_layers; i++) {
-        std::string layer_prefix = "transformer.encoder.layers." + std::to_string(i) + '.';
-        state_dict.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
-        state_dict.emplace_back(layer_prefix + "self_attention.query_key_value.weight",
-                                transformer.layers[i].attention.query_key_value.weight);
-        state_dict.emplace_back(layer_prefix + "self_attention.query_key_value.bias",
-                                transformer.layers[i].attention.query_key_value.bias);
-        state_dict.emplace_back(layer_prefix + "self_attention.dense.weight",
-                                transformer.layers[i].attention.dense.weight);
-        state_dict.emplace_back(layer_prefix + "post_attention_layernorm.weight",
-                                transformer.layers[i].post_attention_layernorm.weight);
-        state_dict.emplace_back(layer_prefix + "mlp.dense_h_to_4h.weight",
-                                transformer.layers[i].mlp.dense_h_to_4h.weight);
-        state_dict.emplace_back(layer_prefix + "mlp.dense_4h_to_h.weight",
-                                transformer.layers[i].mlp.dense_4h_to_h.weight);
-    }
-    state_dict.emplace_back("transformer.encoder.final_layernorm.weight", transformer.final_layernorm.weight);
-    state_dict.emplace_back("transformer.output_layer.weight", lm_head.weight);
-    CHATGLM_CHECK(ggml_used_mem(w_ctx_.gctx.get()) == ggml_get_mem_size(w_ctx_.gctx.get()))
-        << "corrupted model weights";
-
-    for (auto &item : state_dict) {
+    for (auto &item : state_dict_) {
         const std::string &name = item.first;
         ggml_tensor *tensor = item.second;
         loader.read_tensor(name, tensor);
         if (name != "transformer.embedding.word_embeddings.weight") {
             tensor_to_device(tensor);
         }
+    }
+
+    for (auto &layer : transformer.layers) {
+        tensor_to_device(layer.attention.k_cache);
+        tensor_to_device(layer.attention.v_cache);
     }
 }
 

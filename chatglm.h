@@ -407,6 +407,7 @@ class ChatGLMForConditionalGeneration : public BaseModelForConditionalGeneration
   public:
     ChatGLMForConditionalGeneration() = default;
     ChatGLMForConditionalGeneration(const ChatGLMConfig &config);
+    ~ChatGLMForConditionalGeneration();
 
     void load(ModelLoader &loader) override;
 
@@ -420,10 +421,8 @@ class ChatGLMForConditionalGeneration : public BaseModelForConditionalGeneration
     Linear lm_head;
 
   private:
-    // hold ggml_context & kv_cache
-    InitContext w_ctx_; // weight context
-    // InitContext kv_ctx_; // TODO: kv cache context
-    std::unique_ptr<char[]> kv_cache_buffer_;
+    InitContext w_ctx_; // hold weights & kv_cache
+    std::vector<std::pair<std::string, ggml_tensor *>> state_dict_;
 };
 
 // ===== ChatGLM2-6B =====
@@ -458,14 +457,7 @@ class ChatGLM2Tokenizer : public BaseTokenizer {
 class GLM2SelfAttention {
   public:
     GLM2SelfAttention() : num_attention_heads(0), num_kv_heads(0) {}
-    GLM2SelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int max_length)
-        : num_attention_heads(num_attention_heads), num_kv_heads(num_kv_heads),
-          query_key_value(ctx, hidden_size, hidden_size + 2 * (hidden_size / num_attention_heads) * num_kv_heads),
-          dense(ctx, hidden_size, hidden_size, false),
-          k_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
-                                     num_kv_heads)),
-          v_cache(ggml_new_tensor_3d(ctx->gctx.get(), GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
-                                     num_kv_heads)) {}
+    GLM2SelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int max_length);
 
     ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const;
 
@@ -526,6 +518,7 @@ class ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGeneratio
   public:
     ChatGLM2ForConditionalGeneration() = default;
     ChatGLM2ForConditionalGeneration(const ChatGLM2Config &config);
+    ~ChatGLM2ForConditionalGeneration();
 
     void load(ModelLoader &loader) override;
 
@@ -540,10 +533,8 @@ class ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGeneratio
     Linear lm_head;
 
   private:
-    // hold ggml_context & kv_cache
-    InitContext w_ctx_; // weight context
-    // InitContext kv_ctx_; // TODO: kv cache context
-    std::unique_ptr<char[]> kv_cache_buffer_;
+    InitContext w_ctx_; // hold weights & kv_cache
+    std::vector<std::pair<std::string, ggml_tensor *>> state_dict_;
 };
 
 // ===== pipeline =====
