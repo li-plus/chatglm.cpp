@@ -29,8 +29,9 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        python -m pip install pytest
-        pip install . -v
+        python -m pip install pytest build
+        python -m build --sdist
+        pip install dist/*.tar.gz -v
     - name: Lint with black
       uses: psf/black@stable
       with:

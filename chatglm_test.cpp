@@ -193,7 +193,6 @@ TEST(Sampling, TopP) {
 class ChatGLMTest : public ::testing::Test {
   protected:
     ModelContext ctx;
-    std::vector<uninitialized_char> scratch_buf;
     int num_benchmark_threads_;
 
     void SetUp() override {
@@ -201,9 +200,8 @@ class ChatGLMTest : public ::testing::Test {
         ctx.ctx_w = make_unique_ggml_context(1024 * MB, nullptr, false);
         ctx.ctx_kv = make_unique_ggml_context(128 * MB, nullptr, false);
         ctx.ctx_b = make_unique_ggml_context(128 * MB, nullptr, false);
-
-        scratch_buf.resize(1 * MB);
-        ctx.scratch = {0, scratch_buf.size(), scratch_buf.data()};
+        ctx.scratch_buffer.resize(1 * MB);
+        ctx.scratch = {0, ctx.scratch_buffer.size(), ctx.scratch_buffer.data()};
 
         reset_cgraph();
 
