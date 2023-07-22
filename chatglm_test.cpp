@@ -192,19 +192,16 @@ TEST(Sampling, TopP) {
 
 class ChatGLMTest : public ::testing::Test {
   protected:
-    InitContext ictx;
-    ForwardContext ctx;
-    std::vector<char> scratch_buf;
+    ModelContext ctx;
     int num_benchmark_threads_;
 
     void SetUp() override {
-        ictx.dtype = GGML_TYPE_F32;
-        ictx.gctx = GGMLContext({1024 * 1024 * 1024, nullptr, false});
-
-        scratch_buf.resize(1024 * 1024);
-
-        ctx.gctx = GGMLContext({1024 * 1024 * 1024, nullptr, false});
-        ctx.scratch = {0, scratch_buf.size(), scratch_buf.data()};
+        ctx.dtype = GGML_TYPE_F32;
+        ctx.ctx_w = make_unique_ggml_context(1024 * MB, nullptr, false);
+        ctx.ctx_kv = make_unique_ggml_context(128 * MB, nullptr, false);
+        ctx.ctx_b = make_unique_ggml_context(128 * MB, nullptr, false);
+        ctx.scratch_buffer.resize(1 * MB);
+        ctx.scratch = {0, ctx.scratch_buffer.size(), ctx.scratch_buffer.data()};
 
         reset_cgraph();
 
@@ -214,7 +211,7 @@ class ChatGLMTest : public ::testing::Test {
     void reset_cgraph() { ctx.gf = {}; }
 
     float perf_compute() {
-        auto fn = [this] { ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_); };
+        auto fn = [this] { ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, num_benchmark_threads_); };
         if (ggml_cpu_has_cublas()) {
             return timeit(fn, 10, 100);
         } else {
@@ -230,17 +227,17 @@ TEST_F(ChatGLMTest, Embedding) {
     float y_data[]{0.5684,  -1.0845, -1.3986, -0.4033, -0.5966, 0.1820,  1.5410, -0.2934,
                    -2.1788, 0.4033,  0.8380,  -0.7193, -0.4033, -0.5966, 0.1820};
 
-    ggml_tensor *x = ggml_new_tensor_1d(ctx.gctx.get(), GGML_TYPE_I32, 5);
+    ggml_tensor *x = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 5);
     memcpy(x->data, x_data, sizeof(x_data));
-    Embedding model(&ictx, 4, 3);
+    Embedding model(&ctx, 4, 3);
     memcpy(model.weight->data, w_data, sizeof(w_data));
-    ggml_tensor *ref = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 3, 5);
+    ggml_tensor *ref = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 3, 5);
     ref->data = y_data;
 
     ggml_tensor *out = model.forward(&ctx, x);
 
     ggml_build_forward_expand(&ctx.gf, out);
-    ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, 1);
+    ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, 1);
 
     expect_all_close(ref, out);
 }
@@ -250,13 +247,13 @@ TEST_F(ChatGLMTest, Linear) {
     MappedFile mapped_file(test_path.string());
     char *ptr = mapped_file.data;
 
-    ggml_tensor *w = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 32, 16);
+    ggml_tensor *w = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 32, 16);
     ptr = read_tensor_data(ptr, w);
-    ggml_tensor *b = ggml_new_tensor_1d(ctx.gctx.get(), GGML_TYPE_F32, 16);
+    ggml_tensor *b = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, 16);
     ptr = read_tensor_data(ptr, b);
-    ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 32, 2);
+    ggml_tensor *x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 32, 2);
     ptr = read_tensor_data(ptr, x);
-    ggml_tensor *ref = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 16, 2);
+    ggml_tensor *ref = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 16, 2);
     ptr = read_tensor_data(ptr, ref);
     ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
 
@@ -264,8 +261,8 @@ TEST_F(ChatGLMTest, Linear) {
 
     // fp32
     {
-        ictx.dtype = GGML_TYPE_F32;
-        Linear model(&ictx, 32, 16);
+        ctx.dtype = GGML_TYPE_F32;
+        Linear model(&ctx, 32, 16);
         model.weight->data = w->data;
         model.bias->data = b->data;
         tensor_to_device(model.weight);
@@ -276,7 +273,7 @@ TEST_F(ChatGLMTest, Linear) {
         out->backend = GGML_BACKEND_CPU;
 
         ggml_build_forward_expand(&ctx.gf, out);
-        ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, 1);
+        ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, 1);
 
         expect_all_close(ref, out);
 
@@ -287,8 +284,8 @@ TEST_F(ChatGLMTest, Linear) {
     {
         reset_cgraph();
 
-        ictx.dtype = GGML_TYPE_F16;
-        Linear model(&ictx, 32, 16);
+        ctx.dtype = GGML_TYPE_F16;
+        Linear model(&ctx, 32, 16);
         ggml_fp32_to_fp16_row((float *)w->data, (ggml_fp16_t *)model.weight->data, ggml_nelements(model.weight));
         model.bias->data = b->data;
         tensor_to_device(model.weight);
@@ -299,7 +296,7 @@ TEST_F(ChatGLMTest, Linear) {
         out->backend = GGML_BACKEND_CPU;
 
         ggml_build_forward_expand(&ctx.gf, out);
-        ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, 1);
+        ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, 1);
 
         EXPECT_EQ(out->type, GGML_TYPE_F32);
         expect_all_close(ref, out, 5e-3);
@@ -312,9 +309,9 @@ TEST_F(ChatGLMTest, Linear) {
 
 TEST_F(ChatGLMTest, BenchmarkLinear) {
     constexpr int M = 64, N = 1024, K = 1024 * 3;
-    ictx.dtype = GGML_TYPE_F32;
-    Linear m(&ictx, K, N);
-    ggml_tensor *x = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, K, M);
+    ctx.dtype = GGML_TYPE_F32;
+    Linear m(&ctx, K, N);
+    ggml_tensor *x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, K, M);
 
     std::vector<ggml_tensor *> all_tensors{m.weight, m.bias, x};
     for (auto tensor : all_tensors) {
@@ -324,7 +321,7 @@ TEST_F(ChatGLMTest, BenchmarkLinear) {
 
     ggml_tensor *y = m.forward(&ctx, x);
     ggml_build_forward_expand(&ctx.gf, y);
-    std::cout << "[Benchmark] Linear " << ggml_type_name(ictx.dtype) << " time: " << perf_compute() << " ms\n";
+    std::cout << "[Benchmark] Linear " << ggml_type_name(ctx.dtype) << " time: " << perf_compute() << " ms\n";
 
     for (auto tensor : all_tensors) {
         tensor_to_cpu(tensor);
@@ -336,9 +333,9 @@ TEST_F(ChatGLMTest, LayerNorm) {
     MappedFile mapped_file(test_path.string());
     char *ptr = mapped_file.data;
 
-    LayerNorm model(&ictx, 64);
-    ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 64, 3);
-    ggml_tensor *ref = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 64, 3);
+    LayerNorm model(&ctx, 64);
+    ggml_tensor *x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 64, 3);
+    ggml_tensor *ref = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 64, 3);
 
     std::vector<ggml_tensor *> all_tensors{model.weight, model.bias, x, ref};
     for (auto tensor : all_tensors) {
@@ -352,7 +349,7 @@ TEST_F(ChatGLMTest, LayerNorm) {
     out->backend = GGML_BACKEND_CPU;
 
     ggml_build_forward_expand(&ctx.gf, out);
-    ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_);
+    ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, num_benchmark_threads_);
 
     expect_all_close(ref, out);
 
@@ -365,8 +362,8 @@ TEST_F(ChatGLMTest, BenchmarkLayerNorm) {
     constexpr int seq_len = 64;
     constexpr int hidden = 1024;
 
-    LayerNorm m(&ictx, hidden);
-    ggml_tensor *x = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden, seq_len);
+    LayerNorm m(&ctx, hidden);
+    ggml_tensor *x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden, seq_len);
 
     std::vector<ggml_tensor *> all_tensors{m.weight, m.bias, x};
     for (auto tensor : all_tensors) {
@@ -376,7 +373,7 @@ TEST_F(ChatGLMTest, BenchmarkLayerNorm) {
 
     ggml_tensor *y = m.forward(&ctx, x);
     ggml_build_forward_expand(&ctx.gf, y);
-    std::cout << "[Benchmark] LayerNorm " << ggml_type_name(ictx.dtype) << " time: " << perf_compute() << " ms\n";
+    std::cout << "[Benchmark] LayerNorm " << ggml_type_name(ctx.dtype) << " time: " << perf_compute() << " ms\n";
 
     for (auto tensor : all_tensors) {
         tensor_to_cpu(tensor);
@@ -388,9 +385,9 @@ TEST_F(ChatGLMTest, RMSNorm) {
     MappedFile mapped_file(test_path.string());
     char *ptr = mapped_file.data;
 
-    RMSNorm model(&ictx, 64);
-    ggml_tensor *x = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 64, 3);
-    ggml_tensor *ref = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 64, 3);
+    RMSNorm model(&ctx, 64);
+    ggml_tensor *x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 64, 3);
+    ggml_tensor *ref = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 64, 3);
 
     std::vector<ggml_tensor *> all_tensors{model.weight, x, ref};
     for (auto tensor : all_tensors) {
@@ -404,7 +401,7 @@ TEST_F(ChatGLMTest, RMSNorm) {
     out->backend = GGML_BACKEND_CPU;
 
     ggml_build_forward_expand(&ctx.gf, out);
-    ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_);
+    ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, num_benchmark_threads_);
 
     expect_all_close(ref, out);
 
@@ -417,8 +414,8 @@ TEST_F(ChatGLMTest, BenchmarkRMSNorm) {
     constexpr int seq_len = 64;
     constexpr int hidden = 1024;
 
-    RMSNorm m(&ictx, hidden);
-    ggml_tensor *x = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden, seq_len);
+    RMSNorm m(&ctx, hidden);
+    ggml_tensor *x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden, seq_len);
 
     std::vector<ggml_tensor *> all_tensors{m.weight, x};
     for (auto tensor : all_tensors) {
@@ -428,7 +425,7 @@ TEST_F(ChatGLMTest, BenchmarkRMSNorm) {
 
     ggml_tensor *y = m.forward(&ctx, x);
     ggml_build_forward_expand(&ctx.gf, y);
-    std::cout << "[Benchmark] RMSNorm " << ggml_type_name(ictx.dtype) << " time: " << perf_compute() << " ms\n";
+    std::cout << "[Benchmark] RMSNorm " << ggml_type_name(ctx.dtype) << " time: " << perf_compute() << " ms\n";
 
     for (auto tensor : all_tensors) {
         tensor_to_cpu(tensor);
@@ -445,16 +442,16 @@ TEST_F(ChatGLMTest, GLMBlock) {
     constexpr int num_hidden_layers = 28;
     constexpr int max_length = 16;
     constexpr int seq_len = 4;
-    GLMBlock model(&ictx, hidden_size, num_attention_heads, num_hidden_layers, max_length);
+    GLMBlock model(&ctx, hidden_size, num_attention_heads, num_hidden_layers, max_length);
     tensor_to_device(model.attention.k_cache);
     tensor_to_device(model.attention.v_cache);
 
-    ggml_tensor *x1 = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
-    ggml_tensor *ref_y1 = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
-    ggml_tensor *x2 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
-    ggml_tensor *ref_y2 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
-    ggml_tensor *x3 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
-    ggml_tensor *ref_y3 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
+    ggml_tensor *x1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
+    ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
+    ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
+    ggml_tensor *ref_y2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
+    ggml_tensor *x3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
+    ggml_tensor *ref_y3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
 
     std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
                                            model.input_layernorm.bias,
@@ -488,7 +485,7 @@ TEST_F(ChatGLMTest, GLMBlock) {
         EXPECT_EQ(out_y1->backend, x1->backend);
         out_y1->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y1);
-        ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, 1);
+        ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, 1);
 
         expect_all_close(ref_y1, out_y1, 5e-4);
     }
@@ -500,7 +497,7 @@ TEST_F(ChatGLMTest, GLMBlock) {
         EXPECT_EQ(out_y2->backend, x2->backend);
         out_y2->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y2);
-        ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, 1);
+        ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, 1);
 
         expect_all_close(ref_y2, out_y2, 5e-4);
     }
@@ -510,7 +507,7 @@ TEST_F(ChatGLMTest, GLMBlock) {
         EXPECT_EQ(out_y3->backend, x3->backend);
         out_y3->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y3);
-        ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, 1);
+        ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, 1);
 
         expect_all_close(ref_y3, out_y3, 5e-4);
     }
@@ -531,11 +528,11 @@ TEST_F(ChatGLMTest, BenchmarkGLMBlock) {
     for (const auto dtype : dtypes) {
         SetUp();
 
-        ictx.dtype = dtype;
-        GLMBlock model(&ictx, hidden_size, num_attention_heads, num_hidden_layers, max_length);
+        ctx.dtype = dtype;
+        GLMBlock model(&ctx, hidden_size, num_attention_heads, num_hidden_layers, max_length);
 
-        ggml_tensor *self_attn_x = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
-        ggml_tensor *cross_attn_x = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
+        ggml_tensor *self_attn_x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
+        ggml_tensor *cross_attn_x = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
 
         std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
                                                model.input_layernorm.bias,
@@ -593,16 +590,16 @@ TEST_F(ChatGLMTest, GLM2Block) {
     constexpr int ffn_hidden_size = 6;
     constexpr int max_length = 8;
 
-    GLM2Block model(&ictx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length);
+    GLM2Block model(&ctx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length);
     tensor_to_device(model.attention.k_cache);
     tensor_to_device(model.attention.v_cache);
 
-    ggml_tensor *x1 = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
-    ggml_tensor *ref_y1 = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
-    ggml_tensor *x2 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
-    ggml_tensor *ref_y2 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
-    ggml_tensor *x3 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
-    ggml_tensor *ref_y3 = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
+    ggml_tensor *x1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
+    ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
+    ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
+    ggml_tensor *ref_y2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
+    ggml_tensor *x3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
+    ggml_tensor *ref_y3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
 
     std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
                                            model.attention.query_key_value.weight,
@@ -631,7 +628,7 @@ TEST_F(ChatGLMTest, GLM2Block) {
         EXPECT_EQ(out_y1->backend, x1->backend);
         out_y1->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y1);
-        ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_);
+        ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, num_benchmark_threads_);
 
         expect_all_close(ref_y1, out_y1, 1e-4);
     }
@@ -643,7 +640,7 @@ TEST_F(ChatGLMTest, GLM2Block) {
         EXPECT_EQ(out_y2->backend, x2->backend);
         out_y2->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y2);
-        ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_);
+        ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, num_benchmark_threads_);
 
         expect_all_close(ref_y2, out_y2, 1e-4);
     }
@@ -653,7 +650,7 @@ TEST_F(ChatGLMTest, GLM2Block) {
         EXPECT_EQ(out_y3->backend, x3->backend);
         out_y3->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y3);
-        ggml_graph_compute_with_ctx(ctx.gctx.get(), &ctx.gf, num_benchmark_threads_);
+        ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, num_benchmark_threads_);
 
         expect_all_close(ref_y3, out_y3, 1e-4);
     }
@@ -677,13 +674,13 @@ TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
     for (const auto dtype : dtypes) {
         SetUp();
 
-        ictx.dtype = dtype;
-        GLM2Block model(&ictx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length);
+        ctx.dtype = dtype;
+        GLM2Block model(&ctx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length);
         tensor_to_device(model.attention.k_cache);
         tensor_to_device(model.attention.v_cache);
 
-        ggml_tensor *self_attn_x = ggml_new_tensor_2d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size, seq_len);
-        ggml_tensor *cross_attn_x = ggml_new_tensor_1d(ictx.gctx.get(), GGML_TYPE_F32, hidden_size);
+        ggml_tensor *self_attn_x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
+        ggml_tensor *cross_attn_x = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
 
         std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
                                                model.attention.query_key_value.weight,
@@ -762,12 +759,12 @@ TEST_F(ChatGLMTest, quantize) {
         -1.4777e+00, -1.7557e+00, 7.6166e-02,  -1.0786e+00, 1.4403e+00,  -1.1059e-01, 5.7686e-01,  -1.6917e-01,
         -6.4025e-02, 1.0384e+00,  9.0682e-01,  -4.7551e-01, -8.7074e-01, 1.4474e-01,  1.9029e+00,  3.9040e-01};
 
-    ggml_tensor *src = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_F32, 128, 2);
+    ggml_tensor *src = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 128, 2);
     memcpy(src->data, src_data, sizeof(src_data));
 
     // q8_0
     {
-        ggml_tensor *q8_dst = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_Q8_0, 128, 2);
+        ggml_tensor *q8_dst = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_Q8_0, 128, 2);
         int64_t hist[16]{};
         ggml_quantize_q8_0((float *)src->data, q8_dst->data, ggml_nelements(src), src->ne[0], hist);
 
@@ -779,7 +776,7 @@ TEST_F(ChatGLMTest, quantize) {
     }
     // q4_0
     {
-        ggml_tensor *q4_dst = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_Q4_0, 128, 2);
+        ggml_tensor *q4_dst = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_Q4_0, 128, 2);
         int64_t hist[16]{};
         ggml_quantize_q4_0((float *)src->data, q4_dst->data, ggml_nelements(src), src->ne[0], hist);
 
@@ -791,7 +788,7 @@ TEST_F(ChatGLMTest, quantize) {
     }
     // q4_1
     {
-        ggml_tensor *q4_dst = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_Q4_1, 128, 2);
+        ggml_tensor *q4_dst = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_Q4_1, 128, 2);
         int64_t hist[16]{};
         ggml_quantize_q4_1((float *)src->data, q4_dst->data, ggml_nelements(src), src->ne[0], hist);
 
@@ -803,7 +800,7 @@ TEST_F(ChatGLMTest, quantize) {
     }
     // q5_0
     {
-        ggml_tensor *q5_dst = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_Q5_0, 128, 2);
+        ggml_tensor *q5_dst = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_Q5_0, 128, 2);
         int64_t hist[16]{};
         ggml_quantize_q5_0((float *)src->data, q5_dst->data, ggml_nelements(src), src->ne[0], hist);
 
@@ -815,7 +812,7 @@ TEST_F(ChatGLMTest, quantize) {
     }
     // q5_1
     {
-        ggml_tensor *q5_dst = ggml_new_tensor_2d(ctx.gctx.get(), GGML_TYPE_Q5_1, 128, 2);
+        ggml_tensor *q5_dst = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_Q5_1, 128, 2);
         int64_t hist[16]{};
         ggml_quantize_q5_1((float *)src->data, q5_dst->data, ggml_nelements(src), src->ne[0], hist);
 
@@ -876,7 +873,8 @@ TEST(Pipeline, ChatGLM) {
     // memory test
     {
         GenerationConfig gen_config;
-        gen_config.max_length = gen_config.max_context_length + 1;
+        gen_config.max_length = 2048;
+        gen_config.max_context_length = gen_config.max_length - 1;
         gen_config.do_sample = false;
 
         std::ostringstream oss;
@@ -949,7 +947,8 @@ TEST(Pipeline, ChatGLM2) {
     // memory test
     {
         GenerationConfig gen_config;
-        gen_config.max_length = gen_config.max_context_length + 1;
+        gen_config.max_length = 2048;
+        gen_config.max_context_length = gen_config.max_length - 1;
         gen_config.do_sample = false;
 
         std::ostringstream oss;
