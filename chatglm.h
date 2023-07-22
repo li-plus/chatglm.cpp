@@ -74,24 +74,30 @@ using unique_ggml_context_t = std::unique_ptr<ggml_context, ggml_context_deleter
 
 unique_ggml_context_t make_unique_ggml_context(size_t mem_size, void *mem_buffer, bool no_alloc);
 
-struct InitContext {
-    unique_ggml_context_t gctx;
-    ggml_type dtype;
+// reference: https://stackoverflow.com/questions/11149665/c-vector-that-doesnt-initialize-its-members
+struct uninitialized_char {
+    char m;
+    uninitialized_char() {}
 };
 
-struct ForwardContext {
-    unique_ggml_context_t gctx;
+struct ModelContext {
+    ggml_type dtype;
+    unique_ggml_context_t ctx_w;  // weight
+    unique_ggml_context_t ctx_kv; // kv cache
+    unique_ggml_context_t ctx_b;  // buffer
     ggml_cgraph gf;
     ggml_scratch scratch;
+    std::vector<uninitialized_char> compute_buffer; // BLAS buffer
+    std::vector<uninitialized_char> scratch_buffer; // intermediate tensor buffer
 };
 
 class Embedding {
   public:
     Embedding() : weight(nullptr) {}
-    Embedding(InitContext *ctx, int num_embeddings, int embedding_dim)
-        : weight(ggml_new_tensor_2d(ctx->gctx.get(), ctx->dtype, embedding_dim, num_embeddings)) {}
+    Embedding(ModelContext *ctx, int num_embeddings, int embedding_dim)
+        : weight(ggml_new_tensor_2d(ctx->ctx_w.get(), ctx->dtype, embedding_dim, num_embeddings)) {}
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input) const;
 
   public:
     ggml_tensor *weight;
@@ -100,14 +106,14 @@ class Embedding {
 class Linear {
   public:
     Linear() : weight(nullptr), bias(nullptr) {}
-    Linear(InitContext *ctx, int in_features, int out_features, bool use_bias = true)
-        : weight(ggml_new_tensor_2d(ctx->gctx.get(), ctx->dtype, in_features, out_features)),
-          bias(use_bias ? ggml_new_tensor_1d(ctx->gctx.get(), GGML_TYPE_F32, out_features) : nullptr) {}
+    Linear(ModelContext *ctx, int in_features, int out_features, bool use_bias = true)
+        : weight(ggml_new_tensor_2d(ctx->ctx_w.get(), ctx->dtype, in_features, out_features)),
+          bias(use_bias ? ggml_new_tensor_1d(ctx->ctx_w.get(), GGML_TYPE_F32, out_features) : nullptr) {}
 
     int in_features() const { return weight->ne[0]; }
     int out_features() const { return weight->ne[1]; }
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input) const;
 
   public:
     ggml_tensor *weight; // [out_features, in_features]
@@ -117,11 +123,11 @@ class Linear {
 class LayerNorm {
   public:
     LayerNorm() : weight(nullptr), bias(nullptr) {}
-    LayerNorm(InitContext *ctx, int normalized_shape)
-        : weight(ggml_new_tensor_1d(ctx->gctx.get(), GGML_TYPE_F32, normalized_shape)),
-          bias(ggml_new_tensor_1d(ctx->gctx.get(), GGML_TYPE_F32, normalized_shape)) {}
+    LayerNorm(ModelContext *ctx, int normalized_shape)
+        : weight(ggml_new_tensor_1d(ctx->ctx_w.get(), GGML_TYPE_F32, normalized_shape)),
+          bias(ggml_new_tensor_1d(ctx->ctx_w.get(), GGML_TYPE_F32, normalized_shape)) {}
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input) const;
 
   public:
     ggml_tensor *weight; // [normalized_shape]
@@ -131,10 +137,10 @@ class LayerNorm {
 class RMSNorm {
   public:
     RMSNorm() : weight(nullptr), inplace(true) {}
-    RMSNorm(InitContext *ctx, int normalized_shape, bool inplace = true)
-        : weight(ggml_new_tensor_1d(ctx->gctx.get(), GGML_TYPE_F32, normalized_shape)), inplace(inplace) {}
+    RMSNorm(ModelContext *ctx, int normalized_shape, bool inplace = true)
+        : weight(ggml_new_tensor_1d(ctx->ctx_w.get(), GGML_TYPE_F32, normalized_shape)), inplace(inplace) {}
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input) const;
 
   public:
     ggml_tensor *weight;
@@ -240,12 +246,6 @@ class ModelLoader {
 
 // ===== generation =====
 
-// reference: https://stackoverflow.com/questions/11149665/c-vector-that-doesnt-initialize-its-members
-struct uninitialized_char {
-    char m;
-    uninitialized_char() {}
-};
-
 struct GenerationConfig {
     int max_length;
     int max_context_length;
@@ -287,21 +287,20 @@ struct TokenIdScore {
 
 class BaseModelForConditionalGeneration {
   public:
-    BaseModelForConditionalGeneration(ModelType model_type, BaseConfig config, size_t mem_size, size_t scratch_size)
-        : model_type_(model_type), config_(config), mem_buffer_(mem_size), scratch_buffer_(scratch_size) {}
+    BaseModelForConditionalGeneration(ModelType model_type, BaseConfig config, size_t mem_size, size_t scratch_size);
     virtual ~BaseModelForConditionalGeneration() = default;
 
     virtual void load(ModelLoader &loader) = 0;
-    virtual ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const = 0;
+    virtual ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const = 0;
 
     ModelType type() const { return model_type_; }
     std::string type_name() const { return to_string(model_type_); }
 
     std::vector<int> generate(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
-                              BaseStreamer *streamer = nullptr) const;
+                              BaseStreamer *streamer = nullptr);
 
     int generate_next_token(const std::vector<int> &input_ids, const GenerationConfig &gen_config, int n_past,
-                            int n_ctx) const;
+                            int n_ctx);
 
     static void sampling_temperature(float *first, float *last, float temp);
     static void sampling_top_k(TokenIdScore *first, TokenIdScore *kth, TokenIdScore *last);
@@ -309,11 +308,11 @@ class BaseModelForConditionalGeneration {
 
     static void sampling_softmax_inplace(TokenIdScore *first, TokenIdScore *last);
 
-  private:
+  protected:
     ModelType model_type_;
     BaseConfig config_;
-    std::vector<uninitialized_char> mem_buffer_;     // BLAS buffer
-    std::vector<uninitialized_char> scratch_buffer_; // intermediate tensor buffer
+    ModelContext ctx_;
+    std::vector<std::pair<std::string, ggml_tensor *>> state_dict_;
 };
 
 // ===== ChatGLM-6B =====
@@ -349,10 +348,10 @@ class ChatGLMTokenizer : public BaseTokenizer {
 class GLMMLP {
   public:
     GLMMLP() = default;
-    GLMMLP(InitContext *ctx, int hidden_size)
+    GLMMLP(ModelContext *ctx, int hidden_size)
         : dense_h_to_4h(ctx, hidden_size, 4 * hidden_size), dense_4h_to_h(ctx, 4 * hidden_size, hidden_size) {}
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const;
 
   public:
     Linear dense_h_to_4h;
@@ -363,9 +362,9 @@ class GLMSelfAttention {
   public:
     // TODO: kv cache type
     GLMSelfAttention() : num_attention_heads(0) {}
-    GLMSelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int max_length);
+    GLMSelfAttention(ModelContext *ctx, int hidden_size, int num_attention_heads, int max_length);
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
 
   public:
     Linear query_key_value;
@@ -378,11 +377,11 @@ class GLMSelfAttention {
 class GLMBlock {
   public:
     GLMBlock() : num_hidden_layers(0) {}
-    GLMBlock(InitContext *ctx, int hidden_size, int num_attention_heads, int num_hidden_layers, int max_length)
+    GLMBlock(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_hidden_layers, int max_length)
         : input_layernorm(ctx, hidden_size), attention(ctx, hidden_size, num_attention_heads, max_length),
           post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size), num_hidden_layers(num_hidden_layers) {}
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
 
   public:
     LayerNorm input_layernorm;
@@ -395,9 +394,9 @@ class GLMBlock {
 class ChatGLMModel {
   public:
     ChatGLMModel() = default;
-    ChatGLMModel(InitContext *ctx, const ChatGLMConfig &config);
+    ChatGLMModel(ModelContext *ctx, const ChatGLMConfig &config);
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const;
 
   public:
     Embedding word_embeddings;
@@ -413,7 +412,7 @@ class ChatGLMForConditionalGeneration : public BaseModelForConditionalGeneration
 
     void load(ModelLoader &loader) override;
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
 
   public:
     static constexpr size_t MEM_SIZE = 512 * MB;      // 2k context
@@ -421,10 +420,6 @@ class ChatGLMForConditionalGeneration : public BaseModelForConditionalGeneration
     ChatGLMConfig config;
     ChatGLMModel transformer;
     Linear lm_head;
-
-  private:
-    InitContext w_ctx_; // hold weights & kv_cache
-    std::vector<std::pair<std::string, ggml_tensor *>> state_dict_;
 };
 
 // ===== ChatGLM2-6B =====
@@ -459,9 +454,9 @@ class ChatGLM2Tokenizer : public BaseTokenizer {
 class GLM2SelfAttention {
   public:
     GLM2SelfAttention() : num_attention_heads(0), num_kv_heads(0) {}
-    GLM2SelfAttention(InitContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int max_length);
+    GLM2SelfAttention(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int max_length);
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past) const;
 
   public:
     int num_attention_heads;
@@ -474,11 +469,12 @@ class GLM2SelfAttention {
 
 class GLM2MLP {
   public:
-    GLM2MLP(InitContext *ctx, int hidden_size, int intermediate_size)
+    GLM2MLP() = default;
+    GLM2MLP(ModelContext *ctx, int hidden_size, int intermediate_size)
         : dense_h_to_4h(ctx, hidden_size, intermediate_size * 2, false),
           dense_4h_to_h(ctx, intermediate_size, hidden_size, false) {}
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const;
 
   public:
     Linear dense_h_to_4h;
@@ -488,13 +484,13 @@ class GLM2MLP {
 class GLM2Block {
   public:
     GLM2Block() = default;
-    GLM2Block(InitContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int intermediate_size,
+    GLM2Block(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int intermediate_size,
               int max_length)
         : input_layernorm(ctx, hidden_size, false),
           attention(ctx, hidden_size, num_attention_heads, num_kv_heads, max_length),
           post_attention_layernorm(ctx, hidden_size, false), mlp(ctx, hidden_size, intermediate_size) {}
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *hidden_states, int n_past) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past) const;
 
   public:
     RMSNorm input_layernorm;
@@ -506,9 +502,9 @@ class GLM2Block {
 class ChatGLM2Model {
   public:
     ChatGLM2Model() = default;
-    ChatGLM2Model(InitContext *ctx, const ChatGLM2Config &config);
+    ChatGLM2Model(ModelContext *ctx, const ChatGLM2Config &config);
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past) const;
 
   public:
     Embedding word_embeddings;
@@ -524,7 +520,7 @@ class ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGeneratio
 
     void load(ModelLoader &loader) override;
 
-    ggml_tensor *forward(ForwardContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
 
   public:
     static constexpr size_t MEM_SIZE = 512 * MB;      // 2k context
@@ -533,10 +529,6 @@ class ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGeneratio
     ChatGLM2Config config;
     ChatGLM2Model transformer;
     Linear lm_head;
-
-  private:
-    InitContext w_ctx_; // hold weights & kv_cache
-    std::vector<std::pair<std::string, ggml_tensor *>> state_dict_;
 };
 
 // ===== pipeline =====
