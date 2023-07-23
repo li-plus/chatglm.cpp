@@ -26,6 +26,10 @@ if (GGML_CUBLAS)
     add_compile_definitions(GGML_USE_CUBLAS)
 endif ()
 
+if (GGML_METAL)
+    add_compile_definitions(GGML_USE_METAL)
+endif ()
+
 if (GGML_PERF)
     add_compile_definitions(GGML_PERF)
 endif ()
