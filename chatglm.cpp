@@ -567,16 +567,9 @@ std::string to_string(ModelType model_type) {
 BaseModelForConditionalGeneration::BaseModelForConditionalGeneration(ModelType model_type, BaseConfig config,
                                                                      size_t mem_size, size_t scratch_size)
     : model_type_(model_type), config_(config) {
-    // #ifdef GGML_USE_METAL
-    //     CHATGLM_CHECK(posix_memalign((void **)&ctx_.compute_data, getpagesize(), mem_size));
-    //     memset(ctx_.compute_data, 0, ctx_.compute_size);
-    //     CHATGLM_CHECK(posix_memalign((void **)&ctx_.scratch_data, getpagesize(), scratch_size));
-    //     memset(ctx_.scratch_data, 0, ctx_.scratch_size);
-    // #else
     ctx_.compute_buffer.resize(mem_size);
     ctx_.scratch_buffer.resize(scratch_size);
     ctx_.scratch = {0, ctx_.scratch_buffer.size(), ctx_.scratch_buffer.data()};
-    // #endif
 }
 
 int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int> &input_ids,

@@ -269,7 +269,7 @@ TEST_F(ChatGLMTest, Embedding) {
     ggml_tensor *out = model.forward(&ctx, x);
 
     ggml_build_forward_expand(&ctx.gf, out);
-    ggml_graph_compute_helper(work_buf, &ctx.gf, 1);
+    cpu_graph_compute(1);
 
     expect_all_close(ref, out);
 }
@@ -520,7 +520,7 @@ TEST_F(ChatGLMTest, GLMBlock) {
         EXPECT_EQ(out_y1->backend, x1->backend);
         out_y1->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y1);
-        ggml_graph_compute_helper(work_buf, &ctx.gf, 1);
+        cpu_graph_compute(1);
 
         expect_all_close(ref_y1, out_y1, 5e-4);
     }
@@ -532,7 +532,7 @@ TEST_F(ChatGLMTest, GLMBlock) {
         EXPECT_EQ(out_y2->backend, x2->backend);
         out_y2->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y2);
-        ggml_graph_compute_helper(work_buf, &ctx.gf, 1);
+        cpu_graph_compute(1);
 
         expect_all_close(ref_y2, out_y2, 5e-4);
     }
@@ -542,7 +542,7 @@ TEST_F(ChatGLMTest, GLMBlock) {
         EXPECT_EQ(out_y3->backend, x3->backend);
         out_y3->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y3);
-        ggml_graph_compute_helper(work_buf, &ctx.gf, 1);
+        cpu_graph_compute(1);
 
         expect_all_close(ref_y3, out_y3, 5e-4);
     }

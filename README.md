@@ -87,19 +87,24 @@ Accelerate Framework is automatically enabled on macOS. To disable it, add the C
 
 OpenBLAS provides acceleration on CPU. Add the CMake flag `-DGGML_OPENBLAS=ON` to enable it.
 ```sh
-cmake -B build -DGGML_OPENBLAS=ON
-cmake --build build -j
+cmake -B build -DGGML_OPENBLAS=ON && cmake --build build -j
 ```
 
 **cuBLAS**
 
 cuBLAS uses NVIDIA GPU to accelerate BLAS. Add the CMake flag `-DGGML_CUBLAS=ON` to enable it.
 ```sh
-cmake -B build -DGGML_CUBLAS=ON
-cmake --build build -j
+cmake -B build -DGGML_CUBLAS=ON && cmake --build build -j
 ```
 
 Note that the current GGML CUDA implementation is really slow. The community is making efforts to optimize it.
+
+**Metal**
+
+MPS (Metal Performance Shaders) allows computation to run on powerful Apple Silicon GPU. Add the CMake flag `-DGGML_METAL=ON` to enable it.
+```sh
+cmake -B build -DGGML_METAL=ON && cmake --build build -j
+```
 
 ## Python Binding
 
@@ -110,12 +115,17 @@ Install from PyPI (recommended): will trigger compilation on your platform.
 pip install -U chatglm-cpp
 ```
 
-To enable cuBLAS acceleration:
+To enable cuBLAS acceleration on NVIDIA GPU:
 ```sh
 CMAKE_ARGS="-DGGML_CUBLAS=ON" pip install -U chatglm-cpp
 ```
 
-You may also install from source:
+To enable Metal on Apple silicon devices:
+```sh
+CMAKE_ARGS="-DGGML_METAL=ON" pip install -U chatglm-cpp
+```
+
+You may also install from source. Add the corresponding `CMAKE_ARGS` for acceleration.
 ```sh
 # install from the latest source hosted on GitHub
 pip install git+https://github.com/li-plus/chatglm.cpp.git@main
@@ -147,26 +157,28 @@ docker run -it --rm -v [model path]:/opt/ chulinx/chatglm /chatglm -m /opt/chatg
 ## Performance
 
 Environment:
-* CPU performance is measured on a Linux server with Intel(R) Xeon(R) Platinum 8260 CPU @ 2.40GHz using 16 threads.
-* CUDA performance is measured on a V100-SXM2-32GB GPU using 1 thread.
+* CPU backend performance is measured on a Linux server with Intel(R) Xeon(R) Platinum 8260 CPU @ 2.40GHz using 16 threads.
+* CUDA backend is measured on a V100-SXM2-32GB GPU using 1 thread.
+* MPS backend is measured on an Apple M2 Ultra device using 1 thread (currently only supports ChatGLM2).
 
 ChatGLM-6B:
 
-|                 | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   | F32   |
-|-----------------|-------|-------|-------|-------|-------|-------|-------|
-| ms/token (CPU)  | 74    | 77    | 86    | 89    | 114   | 189   | 357   |
-| ms/token (V100) | 10.0  | 9.8   | 10.7  | 10.6  | 14.6  | 19.8  | 34.2  |
-| file size       | 3.3GB | 3.7GB | 4.0GB | 4.4GB | 6.2GB | 12GB  | 23GB  |
-| mem usage       | 4.0GB | 4.4GB | 4.7GB | 5.1GB | 6.9GB | 13GB  | 24GB  |
+|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   | F32   |
+|--------------------------------|-------|-------|-------|-------|-------|-------|-------|
+| ms/token (CPU @ Platinum 8260) | 74    | 77    | 86    | 89    | 114   | 189   | 357   |
+| ms/token (CUDA @ V100 SXM2)    | 10.0  | 9.8   | 10.7  | 10.6  | 14.6  | 19.8  | 34.2  |
+| file size                      | 3.3GB | 3.7GB | 4.0GB | 4.4GB | 6.2GB | 12GB  | 23GB  |
+| mem usage                      | 4.0GB | 4.4GB | 4.7GB | 5.1GB | 6.9GB | 13GB  | 24GB  |
 
 ChatGLM2-6B:
 
-|                 | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   | F32   |
-|-----------------|-------|-------|-------|-------|-------|-------|-------|
-| ms/token (CPU)  | 64    | 71    | 79    | 83    | 106   | 189   | 372   |
-| ms/token (V100) | 9.7   | 9.4   | 10.3  | 10.2  | 14.0  | 19.1  | 33.0  |
-| file size       | 3.3GB | 3.7GB | 4.0GB | 4.4GB | 6.2GB | 12GB  | 24GB  |
-| mem usage       | 3.4GB | 3.8GB | 4.1GB | 4.5GB | 6.2GB | 12GB  | 23GB  |
+|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   | F32   |
+|--------------------------------|-------|-------|-------|-------|-------|-------|-------|
+| ms/token (CPU @ Platinum 8260) | 64    | 71    | 79    | 83    | 106   | 189   | 372   |
+| ms/token (CUDA @ V100 SXM2)    | 9.7   | 9.4   | 10.3  | 10.2  | 14.0  | 19.1  | 33.0  |
+| ms/token (MPS @ M2 Ultra)      | 11.8  | N/A   | N/A   | N/A   | N/A   | N/A   | N/A   |
+| file size                      | 3.3GB | 3.7GB | 4.0GB | 4.4GB | 6.2GB | 12GB  | 24GB  |
+| mem usage                      | 3.4GB | 3.8GB | 4.1GB | 4.5GB | 6.2GB | 12GB  | 23GB  |
 
 ## Development
 
