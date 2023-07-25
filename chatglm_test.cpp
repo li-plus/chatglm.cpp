@@ -186,9 +186,22 @@ TEST(Sampling, TopP) {
     }
 }
 
+static void ggml_graph_compute_helper(const std::vector<uninitialized_char> &buf, ggml_cgraph *graph, int n_threads) {
+    struct ggml_cplan plan = ggml_graph_plan(graph, n_threads);
+
+    if (plan.work_size > 0) {
+        CHATGLM_CHECK(plan.work_size <= buf.size())
+            << "not enough space in work_buf (needed " << plan.work_size << ", available " << buf.size() << ")";
+        plan.work_data = (uint8_t *)buf.data();
+    }
+
+    ggml_graph_compute(graph, &plan);
+}
+
 class ChatGLMTest : public ::testing::Test {
   protected:
     ModelContext ctx;
+    std::vector<uninitialized_char> work_buf;
 
     void SetUp() override {
         ctx.dtype = GGML_TYPE_F32;
@@ -199,12 +212,14 @@ class ChatGLMTest : public ::testing::Test {
         ctx.scratch = {0, ctx.scratch_buffer.size(), ctx.scratch_buffer.data()};
         ctx.init_device_context(nullptr, 0);
 
+        work_buf.resize(512 * MB);
+
         reset_cgraph();
     }
 
     void reset_cgraph() { ctx.gf = {}; }
 
-    void cpu_graph_compute(int n_threads) { ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, n_threads); }
+    void cpu_graph_compute(int n_threads) { ggml_graph_compute_helper(work_buf, &ctx.gf, n_threads); }
 
     void device_graph_compute(int n_threads) {
 #ifdef GGML_USE_METAL
@@ -254,7 +269,7 @@ TEST_F(ChatGLMTest, Embedding) {
     ggml_tensor *out = model.forward(&ctx, x);
 
     ggml_build_forward_expand(&ctx.gf, out);
-    ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, 1);
+    ggml_graph_compute_helper(work_buf, &ctx.gf, 1);
 
     expect_all_close(ref, out);
 }
@@ -505,7 +520,7 @@ TEST_F(ChatGLMTest, GLMBlock) {
         EXPECT_EQ(out_y1->backend, x1->backend);
         out_y1->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y1);
-        ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, 1);
+        ggml_graph_compute_helper(work_buf, &ctx.gf, 1);
 
         expect_all_close(ref_y1, out_y1, 5e-4);
     }
@@ -517,7 +532,7 @@ TEST_F(ChatGLMTest, GLMBlock) {
         EXPECT_EQ(out_y2->backend, x2->backend);
         out_y2->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y2);
-        ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, 1);
+        ggml_graph_compute_helper(work_buf, &ctx.gf, 1);
 
         expect_all_close(ref_y2, out_y2, 5e-4);
     }
@@ -527,7 +542,7 @@ TEST_F(ChatGLMTest, GLMBlock) {
         EXPECT_EQ(out_y3->backend, x3->backend);
         out_y3->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y3);
-        ggml_graph_compute_with_ctx(ctx.ctx_b.get(), &ctx.gf, 1);
+        ggml_graph_compute_helper(work_buf, &ctx.gf, 1);
 
         expect_all_close(ref_y3, out_y3, 5e-4);
     }

@@ -601,15 +601,8 @@ int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int
     ggml_build_forward_expand(&ctx_.gf, lm_logits);
 #ifdef GGML_USE_METAL
     if (input_ids.size() == 1) {
-        ggml_metal_set_n_cb(ctx_.ctx_metal.get(), n_threads);
         ggml_metal_graph_compute(ctx_.ctx_metal.get(), &ctx_.gf);
-        // ggml_metal_get_tensor(ctx_.ctx_metal.get(), lm_logits);
     } else {
-        // We need to sync the GPU KV cache with the CPU KV cache
-        // for (int i = 0; i < ; i++) {
-        //     ggml_metal_get_tensor(ctx_.ctx_metal.get(),  ctx_.ctx_kv);
-        //     ggml_metal_get_tensor(ctx_.ctx_metal.get(), kv_self.v);
-        // }
         ggml_graph_compute_with_ctx(ctx_.ctx_b.get(), &ctx_.gf, n_threads);
     }
 #else
@@ -1177,8 +1170,15 @@ ggml_tensor *GLM2MLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) con
 
     // swiglu activation
     ggml_tensor *x0 = ggml_view_2d(gctx, output, output->ne[0] / 2, output->ne[1], output->nb[1], 0);
+    // TODO: remove cont after https://github.com/ggerganov/llama.cpp/pull/2371
+#ifdef GGML_USE_METAL
+    if (x0->ne[1] > 1) {
+        x0 = ggml_cont(gctx, x0);
+    }
+#else
     x0 = ggml_cont(gctx, x0);
     tensor_assign_buffers(x0);
+#endif
     x0 = ggml_silu_inplace(gctx, x0);
     tensor_assign_buffers(x0);
 
@@ -1247,12 +1247,12 @@ ChatGLM2ForConditionalGeneration::ChatGLM2ForConditionalGeneration(const ChatGLM
                                 tensor_ovhd);
     ctx_.dtype = config.dtype;
     ctx_.ctx_w = make_unique_ggml_context(ctx_w_size, nullptr, true);
-    ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size, nullptr, false);
+    ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size + 1 * MB, nullptr, false); // 1MB extra for MPS
 
     transformer = ChatGLM2Model(&ctx_, config);
     lm_head = Linear(&ctx_, config.hidden_size, config.vocab_size, false);
     CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_w.get()) == ggml_get_mem_size(ctx_.ctx_w.get())) << "corrupted model weights";
-    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ggml_get_mem_size(ctx_.ctx_kv.get())) << "corrupted kv cache";
+    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ctx_kv_size) << "corrupted kv cache";
 
     // build state_dict
     state_dict_.reserve(3 + config.num_hidden_layers * 7);
