@@ -155,14 +155,14 @@ static inline ggml_tensor *add_zero(ggml_context *ctx, ggml_tensor *tensor) {
     return out;
 }
 
-void ModelContext::init_device_context(void *mapped_data, size_t mapped_size) {
+void ModelContext::init_device_context() {
 #ifdef GGML_USE_METAL
     ctx_metal = make_unique_ggml_metal_context(1);
 
     const size_t max_size = ggml_get_max_tensor_size(ctx_w.get());
 
-    void *weight_data = mapped_data ? mapped_data : ggml_get_mem_buffer(ctx_w.get());
-    size_t weight_size = mapped_data ? mapped_size : ggml_get_mem_size(ctx_w.get());
+    void *weight_data = weight_buffer.empty() ? ggml_get_mem_buffer(ctx_w.get()) : (void *)weight_buffer.data();
+    size_t weight_size = weight_buffer.empty() ? ggml_get_mem_size(ctx_w.get()) : weight_buffer.size();
     CHATGLM_CHECK(ggml_metal_add_buffer(ctx_metal.get(), "weights", weight_data, weight_size, max_size));
 
     CHATGLM_CHECK(ggml_metal_add_buffer(ctx_metal.get(), "kv", ggml_get_mem_buffer(ctx_kv.get()),
@@ -974,7 +974,8 @@ void ChatGLMForConditionalGeneration::load(ModelLoader &loader) {
         tensor_to_device(layer.attention.v_cache);
     }
 
-    ctx_.init_device_context((void *)loader.data, loader.size);
+    ctx_.weight_buffer = std::string_view(loader.data, loader.size);
+    ctx_.init_device_context();
 }
 
 ggml_tensor *ChatGLMForConditionalGeneration::forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past,
@@ -1291,7 +1292,8 @@ void ChatGLM2ForConditionalGeneration::load(ModelLoader &loader) {
         tensor_to_device(layer.attention.v_cache);
     }
 
-    ctx_.init_device_context((void *)loader.data, loader.size);
+    ctx_.weight_buffer = std::string_view(loader.data, loader.size);
+    ctx_.init_device_context();
 }
 
 ggml_tensor *ChatGLM2ForConditionalGeneration::forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past,

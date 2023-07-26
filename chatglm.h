@@ -110,9 +110,9 @@ struct ModelContext {
     ggml_scratch scratch;
     std::vector<uninitialized_char> compute_buffer; // BLAS buffer
     std::vector<uninitialized_char> scratch_buffer; // intermediate tensor buffer
-    // TODO: mapped file here
+    std::string_view weight_buffer;                 // mapped weight
 
-    void init_device_context(void *mapped_data, size_t mapped_size);
+    void init_device_context();
 };
 
 class Embedding {

@@ -212,7 +212,7 @@ class ChatGLMTest : public ::testing::Test {
         ctx.ctx_b = make_unique_ggml_context(512 * MB, nullptr, false);
         ctx.scratch_buffer.resize(1 * MB);
         ctx.scratch = {0, ctx.scratch_buffer.size(), ctx.scratch_buffer.data()};
-        ctx.init_device_context(nullptr, 0);
+        ctx.init_device_context();
 
         work_buf.resize(512 * MB);
 
