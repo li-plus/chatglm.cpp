@@ -215,7 +215,7 @@ def make_data_layernorm():
 def make_data_rms_norm():
     from modeling_chatglm import RMSNorm
 
-    m = RMSNorm(64, eps=1e-6).eval()
+    m = RMSNorm(64, eps=1e-5).eval()
     m.weight.data.uniform_()
 
     x = torch.randn(3, 64)
@@ -311,7 +311,7 @@ def make_data_glm2_block():
     from transformers import AutoConfig
 
     config = AutoConfig.from_pretrained(CHATGLM2_MODEL_PATH, trust_remote_code=True)
-    config.layernorm_epsilon = 1e-6
+    config.layernorm_epsilon = 1e-5
     config.hidden_size = 32
     config.num_attention_heads = 8
     config.multi_query_group_num = 2

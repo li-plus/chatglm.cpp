@@ -140,7 +140,7 @@ class RMSNorm {
     RMSNorm(ModelContext *ctx, int normalized_shape, bool inplace = true)
         : weight(ggml_new_tensor_1d(ctx->ctx_w.get(), GGML_TYPE_F32, normalized_shape)), inplace(inplace) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input, float eps = 1e-5f) const;
 
   public:
     ggml_tensor *weight;

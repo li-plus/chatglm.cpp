@@ -373,10 +373,10 @@ ggml_tensor *LayerNorm::forward(ModelContext *ctx, ggml_tensor *input) const {
     return output;
 }
 
-ggml_tensor *RMSNorm::forward(ModelContext *ctx, ggml_tensor *input) const {
+ggml_tensor *RMSNorm::forward(ModelContext *ctx, ggml_tensor *input, float eps) const {
     ggml_context *gctx = ctx->ctx_b.get();
     auto ggml_rms_norm_fn = inplace ? ggml_rms_norm_inplace : ggml_rms_norm;
-    ggml_tensor *output = ggml_rms_norm_fn(gctx, input);
+    ggml_tensor *output = ggml_rms_norm_fn(gctx, input, eps);
     tensor_assign_buffers(output);
     output = ggml_mul_inplace(gctx, output, weight);
     tensor_assign_buffers(output);
