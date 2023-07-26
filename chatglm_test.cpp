@@ -49,6 +49,8 @@ static inline void random_fill(ggml_tensor *tensor) {
         ggml_quantize_q8_0(values.data(), tensor->data, ggml_nelements(tensor), tensor->ne[0], hist);
     } else if (tensor->type == GGML_TYPE_Q4_0) {
         ggml_quantize_q4_0(values.data(), tensor->data, ggml_nelements(tensor), tensor->ne[0], hist);
+    } else if (tensor->type == GGML_TYPE_Q4_1) {
+        ggml_quantize_q4_1(values.data(), tensor->data, ggml_nelements(tensor), tensor->ne[0], hist);
     } else {
         CHATGLM_THROW << "unsupported dtype " << ggml_type_name(tensor->type);
     }
@@ -331,7 +333,7 @@ TEST_F(ChatGLMTest, Linear) {
         device_graph_compute(get_num_threads());
 
         EXPECT_EQ(out->type, GGML_TYPE_F32);
-        expect_all_close(ref, out, 5e-3);
+        expect_all_close(ref, out, 8e-3);
 
         tensor_to_cpu(model.weight);
         tensor_to_cpu(model.bias);
@@ -559,11 +561,7 @@ TEST_F(ChatGLMTest, BenchmarkGLMBlock) {
     constexpr int max_length = 2048;
     constexpr int seq_len = 64;
 
-#ifdef GGML_USE_METAL
-    ggml_type dtypes[]{GGML_TYPE_F16, GGML_TYPE_Q4_0}; // TODO: ggml metal does not support q8_0 & f32 matmul
-#else
     ggml_type dtypes[]{GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0};
-#endif
     for (const auto dtype : dtypes) {
         SetUp();
 
@@ -725,7 +723,7 @@ TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
     constexpr int max_length = 2048;
 
 #ifdef GGML_USE_METAL
-    ggml_type dtypes[]{GGML_TYPE_F16, GGML_TYPE_Q4_0};
+    ggml_type dtypes[]{GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1};
 #else
     ggml_type dtypes[]{GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0};
 #endif

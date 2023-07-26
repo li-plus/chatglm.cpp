@@ -176,7 +176,7 @@ ChatGLM2-6B:
 |--------------------------------|-------|-------|-------|-------|-------|-------|-------|
 | ms/token (CPU @ Platinum 8260) | 64    | 71    | 79    | 83    | 106   | 189   | 372   |
 | ms/token (CUDA @ V100 SXM2)    | 9.7   | 9.4   | 10.3  | 10.2  | 14.0  | 19.1  | 33.0  |
-| ms/token (MPS @ M2 Ultra)      | 11.8  | N/A   | N/A   | N/A   | N/A   | N/A   | N/A   |
+| ms/token (MPS @ M2 Ultra)      | 11.0  | 11.7  | N/A   | N/A   | N/A   | 32.1  | N/A   |
 | file size                      | 3.3GB | 3.7GB | 4.0GB | 4.4GB | 6.2GB | 12GB  | 24GB  |
 | mem usage                      | 3.4GB | 3.8GB | 4.1GB | 4.5GB | 6.2GB | 12GB  | 23GB  |
 

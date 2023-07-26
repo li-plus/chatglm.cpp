@@ -1163,12 +1163,7 @@ ggml_tensor *GLM2MLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) con
 
     // swiglu activation
     ggml_tensor *x0 = ggml_view_2d(gctx, output, output->ne[0] / 2, output->ne[1], output->nb[1], 0);
-    // TODO: remove cont after https://github.com/ggerganov/llama.cpp/pull/2371
-#ifdef GGML_USE_METAL
-    if (x0->ne[1] > 1) {
-        x0 = ggml_cont(gctx, x0);
-    }
-#else
+#ifdef GGML_USE_CUBLAS
     x0 = ggml_cont(gctx, x0);
     tensor_assign_buffers(x0);
 #endif
@@ -1179,8 +1174,8 @@ ggml_tensor *GLM2MLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) con
                                    output->ne[0] / 2 * ggml_element_size(output));
 #ifdef GGML_USE_CUBLAS
     x1 = ggml_cont(gctx, x1);
-#endif
     tensor_assign_buffers(x1);
+#endif
 
     output = ggml_mul_inplace(gctx, x0, x1);
     tensor_assign_buffers(output);
