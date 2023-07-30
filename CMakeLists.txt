@@ -28,6 +28,7 @@ endif ()
 
 if (GGML_METAL)
     add_compile_definitions(GGML_USE_METAL)
+    configure_file(third_party/ggml/src/ggml-metal.metal ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/ggml-metal.metal COPYONLY)
 endif ()
 
 if (GGML_PERF)
