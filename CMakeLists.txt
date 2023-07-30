@@ -24,6 +24,7 @@ add_subdirectory(third_party/sentencepiece)
 
 if (GGML_CUBLAS)
     add_compile_definitions(GGML_USE_CUBLAS)
+    set_property(TARGET ggml PROPERTY CUDA_ARCHITECTURES "52;61;70;75;80;86")
 endif ()
 
 if (GGML_METAL)
