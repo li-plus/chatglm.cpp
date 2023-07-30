@@ -145,10 +145,6 @@ void tensor_to_cpu(ggml_tensor *tensor) {
 #endif
 }
 
-unique_ggml_context_t make_unique_ggml_context(size_t mem_size, void *mem_buffer, bool no_alloc) {
-    return unique_ggml_context_t(ggml_init({mem_size, mem_buffer, no_alloc}));
-}
-
 // for debugging purpose
 static inline ggml_tensor *add_zero(ggml_context *ctx, ggml_tensor *tensor) {
     ggml_tensor *zeros = ggml_new_tensor(ctx, tensor->type, tensor->n_dims, tensor->ne);
@@ -157,6 +153,27 @@ static inline ggml_tensor *add_zero(ggml_context *ctx, ggml_tensor *tensor) {
     ggml_tensor *out = ggml_add(ctx, tensor, zeros);
     tensor_assign_buffers(out);
     return out;
+}
+
+void ModelContext::init_device_context() {
+#ifdef GGML_USE_METAL
+    ctx_metal = make_unique_ggml_metal_context(1);
+
+    const size_t max_size = ggml_get_max_tensor_size(ctx_w.get());
+
+    void *weight_data = weight_buffer.empty() ? ggml_get_mem_buffer(ctx_w.get()) : (void *)weight_buffer.data();
+    size_t weight_size = weight_buffer.empty() ? ggml_get_mem_size(ctx_w.get()) : weight_buffer.size();
+    CHATGLM_CHECK(ggml_metal_add_buffer(ctx_metal.get(), "weights", weight_data, weight_size, max_size));
+
+    CHATGLM_CHECK(ggml_metal_add_buffer(ctx_metal.get(), "kv", ggml_get_mem_buffer(ctx_kv.get()),
+                                        ggml_get_mem_size(ctx_kv.get()), 0));
+
+    void *compute_data = ctx_b ? ggml_get_mem_buffer(ctx_b.get()) : compute_buffer.data();
+    size_t compute_size = ctx_b ? ggml_get_mem_size(ctx_b.get()) : compute_buffer.size();
+    CHATGLM_CHECK(ggml_metal_add_buffer(ctx_metal.get(), "compute", compute_data, compute_size, 0));
+
+    CHATGLM_CHECK(ggml_metal_add_buffer(ctx_metal.get(), "scratch", scratch.data, scratch.size, 0));
+#endif
 }
 
 // ===== streamer =====
@@ -373,10 +390,10 @@ ggml_tensor *LayerNorm::forward(ModelContext *ctx, ggml_tensor *input) const {
     return output;
 }
 
-ggml_tensor *RMSNorm::forward(ModelContext *ctx, ggml_tensor *input) const {
+ggml_tensor *RMSNorm::forward(ModelContext *ctx, ggml_tensor *input, float eps) const {
     ggml_context *gctx = ctx->ctx_b.get();
     auto ggml_rms_norm_fn = inplace ? ggml_rms_norm_inplace : ggml_rms_norm;
-    ggml_tensor *output = ggml_rms_norm_fn(gctx, input);
+    ggml_tensor *output = ggml_rms_norm_fn(gctx, input, eps);
     tensor_assign_buffers(output);
     output = ggml_mul_inplace(gctx, output, weight);
     tensor_assign_buffers(output);
@@ -528,6 +545,14 @@ int get_num_physical_cores() {
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
 }
 
+int get_default_num_threads() {
+#if defined(GGML_USE_CUBLAS) || defined(GGML_USE_METAL)
+    return 1;
+#else
+    return std::min(get_num_physical_cores(), 16);
+#endif
+}
+
 std::string to_string(ModelType model_type) {
     switch (model_type) {
     case MODEL_TYPE_CHATGLM:
@@ -544,20 +569,20 @@ BaseModelForConditionalGeneration::BaseModelForConditionalGeneration(ModelType m
     : model_type_(model_type), config_(config) {
     ctx_.compute_buffer.resize(mem_size);
     ctx_.scratch_buffer.resize(scratch_size);
+    ctx_.scratch = {0, ctx_.scratch_buffer.size(), ctx_.scratch_buffer.data()};
 }
 
 int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int> &input_ids,
                                                            const GenerationConfig &gen_config, int n_past, int n_ctx) {
     ctx_.ctx_b = make_unique_ggml_context(ctx_.compute_buffer.size(), ctx_.compute_buffer.data(), false);
     ctx_.gf = {};
-    ctx_.scratch = {0, ctx_.scratch_buffer.size(), ctx_.scratch_buffer.data()};
 
     int n_threads = gen_config.num_threads; // user defined
     if (n_threads <= 0) {
-        n_threads = ggml_cpu_has_gpublas() ? 1 : get_num_physical_cores(); // default thread num
+        n_threads = get_default_num_threads(); // default thread num
     }
     if (input_ids.size() >= 32 && ggml_cpu_has_blas() && !ggml_cpu_has_gpublas()) {
-        n_threads = 1; // BLAS enabled
+        n_threads = 1; // use 1 thread if BLAS is enabled
     }
 
     ggml_tensor *input_ids_tensor = ggml_new_tensor_1d(ctx_.ctx_b.get(), GGML_TYPE_I32, input_ids.size());
@@ -567,8 +592,16 @@ int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int
     lm_logits->backend = GGML_BACKEND_CPU;
 
     ggml_build_forward_expand(&ctx_.gf, lm_logits);
+#ifdef GGML_USE_METAL
+    if (input_ids.size() == 1) {
+        ggml_metal_graph_compute(ctx_.ctx_metal.get(), &ctx_.gf);
+    } else {
+        ggml_graph_compute_with_ctx(ctx_.ctx_b.get(), &ctx_.gf, n_threads);
+    }
+#else
     // TODO: upgrade to ggml_graph_compute with cplan
     ggml_graph_compute_with_ctx(ctx_.ctx_b.get(), &ctx_.gf, n_threads);
+#endif
 
 #ifdef GGML_PERF
     ggml_graph_print(&ctx_.gf);
@@ -856,13 +889,14 @@ ChatGLMModel::ChatGLMModel(ModelContext *ctx, const ChatGLMConfig &config)
 }
 
 ggml_tensor *ChatGLMModel::forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const {
+    ggml_context *gctx = ctx->ctx_b.get();
     ggml_tensor *hidden_states = word_embeddings.forward(ctx, input_ids);
     for (const GLMBlock &layer : layers) {
-        ggml_set_scratch(ctx->ctx_b.get(), ctx->scratch);
+        ggml_set_scratch(gctx, ctx->scratch);
         hidden_states = layer.forward(ctx, hidden_states, n_past, n_ctx);
     }
     ggml_scratch empty_scratch = {0, 0, nullptr};
-    ggml_set_scratch(ctx->ctx_b.get(), empty_scratch);
+    ggml_set_scratch(gctx, empty_scratch);
     hidden_states = final_layernorm.forward(ctx, hidden_states);
     return hidden_states;
 }
@@ -939,6 +973,9 @@ void ChatGLMForConditionalGeneration::load(ModelLoader &loader) {
         tensor_to_device(layer.attention.k_cache);
         tensor_to_device(layer.attention.v_cache);
     }
+
+    ctx_.weight_buffer = std::string_view(loader.data, loader.size);
+    ctx_.init_device_context();
 }
 
 ggml_tensor *ChatGLMForConditionalGeneration::forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past,
@@ -1127,8 +1164,10 @@ ggml_tensor *GLM2MLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) con
 
     // swiglu activation
     ggml_tensor *x0 = ggml_view_2d(gctx, output, output->ne[0] / 2, output->ne[1], output->nb[1], 0);
+#ifdef GGML_USE_CUBLAS
     x0 = ggml_cont(gctx, x0);
     tensor_assign_buffers(x0);
+#endif
     x0 = ggml_silu_inplace(gctx, x0);
     tensor_assign_buffers(x0);
 
@@ -1136,8 +1175,8 @@ ggml_tensor *GLM2MLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) con
                                    output->ne[0] / 2 * ggml_element_size(output));
 #ifdef GGML_USE_CUBLAS
     x1 = ggml_cont(gctx, x1);
-#endif
     tensor_assign_buffers(x1);
+#endif
 
     output = ggml_mul_inplace(gctx, x0, x1);
     tensor_assign_buffers(output);
@@ -1197,12 +1236,12 @@ ChatGLM2ForConditionalGeneration::ChatGLM2ForConditionalGeneration(const ChatGLM
                                 tensor_ovhd);
     ctx_.dtype = config.dtype;
     ctx_.ctx_w = make_unique_ggml_context(ctx_w_size, nullptr, true);
-    ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size, nullptr, false);
+    ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size + 1 * MB, nullptr, false); // 1MB extra for MPS
 
     transformer = ChatGLM2Model(&ctx_, config);
     lm_head = Linear(&ctx_, config.hidden_size, config.vocab_size, false);
     CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_w.get()) == ggml_get_mem_size(ctx_.ctx_w.get())) << "corrupted model weights";
-    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ggml_get_mem_size(ctx_.ctx_kv.get())) << "corrupted kv cache";
+    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ctx_kv_size) << "corrupted kv cache";
 
     // build state_dict
     state_dict_.reserve(3 + config.num_hidden_layers * 7);
@@ -1252,6 +1291,9 @@ void ChatGLM2ForConditionalGeneration::load(ModelLoader &loader) {
         tensor_to_device(layer.attention.k_cache);
         tensor_to_device(layer.attention.v_cache);
     }
+
+    ctx_.weight_buffer = std::string_view(loader.data, loader.size);
+    ctx_.init_device_context();
 }
 
 ggml_tensor *ChatGLM2ForConditionalGeneration::forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past,

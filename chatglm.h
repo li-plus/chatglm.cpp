@@ -6,6 +6,10 @@
 #include <unordered_map>
 #include <vector>
 
+#ifdef GGML_USE_METAL
+#include <ggml-metal.h>
+#endif
+
 namespace chatglm {
 
 // ===== common =====
@@ -72,7 +76,21 @@ struct ggml_context_deleter_t {
 
 using unique_ggml_context_t = std::unique_ptr<ggml_context, ggml_context_deleter_t>;
 
-unique_ggml_context_t make_unique_ggml_context(size_t mem_size, void *mem_buffer, bool no_alloc);
+static inline unique_ggml_context_t make_unique_ggml_context(size_t mem_size, void *mem_buffer, bool no_alloc) {
+    return unique_ggml_context_t(ggml_init({mem_size, mem_buffer, no_alloc}));
+}
+
+#ifdef GGML_USE_METAL
+struct ggml_metal_context_deleter_t {
+    void operator()(ggml_metal_context *ctx) const noexcept { ggml_metal_free(ctx); }
+};
+
+using unique_ggml_metal_context_t = std::unique_ptr<ggml_metal_context, ggml_metal_context_deleter_t>;
+
+static inline unique_ggml_metal_context_t make_unique_ggml_metal_context(int n_cb) {
+    return unique_ggml_metal_context_t(ggml_metal_init(n_cb));
+}
+#endif
 
 // reference: https://stackoverflow.com/questions/11149665/c-vector-that-doesnt-initialize-its-members
 struct uninitialized_char {
@@ -85,10 +103,16 @@ struct ModelContext {
     unique_ggml_context_t ctx_w;  // weight
     unique_ggml_context_t ctx_kv; // kv cache
     unique_ggml_context_t ctx_b;  // buffer
+#ifdef GGML_USE_METAL
+    unique_ggml_metal_context_t ctx_metal;
+#endif
     ggml_cgraph gf;
     ggml_scratch scratch;
     std::vector<uninitialized_char> compute_buffer; // BLAS buffer
     std::vector<uninitialized_char> scratch_buffer; // intermediate tensor buffer
+    std::string_view weight_buffer;                 // mapped weight
+
+    void init_device_context();
 };
 
 class Embedding {
@@ -140,7 +164,7 @@ class RMSNorm {
     RMSNorm(ModelContext *ctx, int normalized_shape, bool inplace = true)
         : weight(ggml_new_tensor_1d(ctx->ctx_w.get(), GGML_TYPE_F32, normalized_shape)), inplace(inplace) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input, float eps = 1e-5f) const;
 
   public:
     ggml_tensor *weight;
@@ -267,6 +291,7 @@ enum ModelType {
 };
 
 int get_num_physical_cores();
+int get_default_num_threads();
 
 std::string to_string(ModelType model_type);
 
@@ -406,7 +431,6 @@ class ChatGLMModel {
 
 class ChatGLMForConditionalGeneration : public BaseModelForConditionalGeneration {
   public:
-    ChatGLMForConditionalGeneration() = default;
     ChatGLMForConditionalGeneration(const ChatGLMConfig &config);
     ~ChatGLMForConditionalGeneration();
 
@@ -514,7 +538,6 @@ class ChatGLM2Model {
 
 class ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGeneration {
   public:
-    ChatGLM2ForConditionalGeneration() = default;
     ChatGLM2ForConditionalGeneration(const ChatGLM2Config &config);
     ~ChatGLM2ForConditionalGeneration();
 
