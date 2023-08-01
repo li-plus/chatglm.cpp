@@ -36,7 +36,7 @@ def main():
     pipeline = chatglm_cpp.Pipeline(args.model)
 
     if not args.interactive:
-        for piece in pipeline.stream_chat(
+        for piece in pipeline.chat(
             [args.prompt],
             max_length=args.max_length,
             max_context_length=args.max_context_length,
@@ -44,6 +44,7 @@ def main():
             top_k=args.top_k,
             top_p=args.top_p,
             temperature=args.temp,
+            stream=True,
         ):
             print(piece, sep="", end="", flush=True)
         print()
@@ -69,7 +70,7 @@ def main():
         history.append(prompt)
         print(f"{pipeline.model.type_name} > ", sep="", end="")
         output = ""
-        for piece in pipeline.stream_chat(
+        for piece in pipeline.chat(
             history,
             max_length=args.max_length,
             max_context_length=args.max_context_length,
@@ -77,6 +78,7 @@ def main():
             top_k=args.top_k,
             top_p=args.top_p,
             temperature=args.temp,
+            stream=True,
         ):
             print(piece, sep="", end="", flush=True)
             output += piece

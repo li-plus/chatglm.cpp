@@ -3,8 +3,8 @@ from pathlib import Path
 import chatglm_cpp
 import pytest
 
-CHATGLM_MODEL_PATH = Path(__file__).resolve().parent / "chatglm-ggml.bin"
-CHATGLM2_MODEL_PATH = Path(__file__).resolve().parent / "chatglm2-ggml.bin"
+CHATGLM_MODEL_PATH = Path(__file__).resolve().parent.parent / "chatglm-ggml.bin"
+CHATGLM2_MODEL_PATH = Path(__file__).resolve().parent.parent / "chatglm2-ggml.bin"
 
 
 def test_chatglm_version():
@@ -24,6 +24,10 @@ def test_chatglm_pipeline():
     stream_output = "".join(stream_output)
     assert stream_output == target
 
+    stream_output = pipeline.chat(history, do_sample=False, stream=True)
+    stream_output = "".join(stream_output)
+    assert stream_output == target
+
 
 @pytest.mark.skipif(not CHATGLM2_MODEL_PATH.exists(), reason="model file not found")
 def test_chatglm2_pipeline():
@@ -35,5 +39,9 @@ def test_chatglm2_pipeline():
     assert output == target
 
     stream_output = pipeline.stream_chat(history, do_sample=False)
+    stream_output = "".join(stream_output)
+    assert stream_output == target
+
+    stream_output = pipeline.chat(history, do_sample=False, stream=True)
     stream_output = "".join(stream_output)
     assert stream_output == target

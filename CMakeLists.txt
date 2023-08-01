@@ -83,14 +83,12 @@ if (CHATGLM_ENABLE_PYBIND)
 endif ()
 
 # lint
-set(PY_SOURCES
-    ${PROJECT_SOURCE_DIR}/chatglm_cpp/__init__.py
+file(GLOB PY_SOURCES
+    ${PROJECT_SOURCE_DIR}/chatglm_cpp/*.py
+    ${PROJECT_SOURCE_DIR}/examples/*.py
+    ${PROJECT_SOURCE_DIR}/tests/*.py
     ${PROJECT_SOURCE_DIR}/convert.py
-    ${PROJECT_SOURCE_DIR}/setup.py
-    ${PROJECT_SOURCE_DIR}/examples/cli_chat.py
-    ${PROJECT_SOURCE_DIR}/examples/web_demo.py
-    ${PROJECT_SOURCE_DIR}/tests/test_convert.py
-    ${PROJECT_SOURCE_DIR}/tests/test_chatglm_cpp.py)
+    ${PROJECT_SOURCE_DIR}/setup.py)
 add_custom_target(lint
     COMMAND clang-format -i ${CPP_SOURCES}
     COMMAND isort ${PY_SOURCES}

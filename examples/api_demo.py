@@ -1,17 +1,17 @@
 # Adapted from https://github.com/lloydzhou/rwkv.cpp/blob/master/rwkv/api.py
+import functools
 import json
 import logging
-import uvicorn
-import functools
-import chatglm_cpp
 from pathlib import Path
-from fastapi import FastAPI, Request, HTTPException, status
-from fastapi.middleware.cors import CORSMiddleware
 from threading import Lock
-from typing import List, Dict, Optional
-from pydantic import BaseModel, Field, BaseSettings
-from sse_starlette.sse import EventSourceResponse
+from typing import List
 
+import chatglm_cpp
+import uvicorn
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, BaseSettings, Field
+from sse_starlette.sse import EventSourceResponse
 
 DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "chatglm-ggml.bin"
 
@@ -19,13 +19,15 @@ DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "chatglm-ggml.bin"
 class Settings(BaseSettings):
     server_name: str = "ChatGLM CPP API Server"
     model: str = str(DEFAULT_MODEL_PATH)  # Path to chatglm model in ggml format
-    host: str = '0.0.0.0'
+    host: str = "0.0.0.0"
     port: int = 8000
 
 
 settings = Settings()
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+)
 pipeline = None
 completion_lock = Lock()
 requests_num = 0
@@ -58,7 +60,7 @@ def run_with_lock(method):
 async def startup_event():
     global pipeline
     pipeline = chatglm_cpp.Pipeline(settings.model)
-    logging.info('End Loading chatglm model')
+    logging.info("End Loading chatglm model")
 
 
 @run_with_lock
@@ -74,7 +76,7 @@ async def stream_chat(request, history, body):
         num_threads=16,
     ):
         # debug log
-        print(piece, end='', flush=True)
+        print(piece, end="", flush=True)
         yield piece
 
 
@@ -83,21 +85,21 @@ async def process_generate(history, chat_model, body, request):
     usage = {}
 
     if len(history) % 2 == 0:
-        history = ['hi'] + history
+        history = ["hi"] + history
 
     async def generate():
-        response = ''
+        response = ""
         async for delta in await stream_chat(request, history, body):
             response += delta
             if body.stream:
-                chunk = format_message('', delta, chunk=True, chat_model=chat_model)
+                chunk = format_message("", delta, chunk=True, chat_model=chat_model)
                 yield json.dumps(chunk)
         if body.stream:
-            result = format_message(response, '', chunk=True, chat_model=chat_model, finish_reason='stop')
+            result = format_message(response, "", chunk=True, chat_model=chat_model, finish_reason="stop")
             result.update(usage=usage)
             yield json.dumps(result)
         else:
-            result = format_message(response, response, chunk=False, chat_model=chat_model, finish_reason='stop')
+            result = format_message(response, response, chunk=False, chat_model=chat_model, finish_reason="stop")
             result.update(usage=usage)
             yield result
 
@@ -106,28 +108,32 @@ async def process_generate(history, chat_model, body, request):
     return await generate().__anext__()
 
 
-def format_message(response, delta, chunk=False, chat_model=False, model_name='chatglm2-6b', finish_reason=None):
+def format_message(response, delta, chunk=False, chat_model=False, model_name="chatglm2-6b", finish_reason=None):
     if not chat_model:
-        object = 'text_completion'
+        object = "text_completion"
     else:
         if chunk:
-            object = 'chat.completion.chunk'
+            object = "chat.completion.chunk"
         else:
-            object = 'chat.completion'
+            object = "chat.completion"
 
     return {
-        'object': object,
-        'response': response,
-        'model': model_name,
-        'choices': [{
-            'delta': {'content': delta},
-            'index': 0,
-            'finish_reason': finish_reason,
-        } if chat_model else {
-            'text': delta,
-            'index': 0,
-            'finish_reason': finish_reason,
-        }]
+        "object": object,
+        "response": response,
+        "model": model_name,
+        "choices": [
+            {
+                "delta": {"content": delta},
+                "index": 0,
+                "finish_reason": finish_reason,
+            }
+            if chat_model
+            else {
+                "text": delta,
+                "index": 0,
+                "finish_reason": finish_reason,
+            }
+        ],
     }
 
 
@@ -196,16 +202,16 @@ class CompletionBody(ModelConfigBody):
         }
 
 
-@app.post('/v1/completions')
-@app.post('/completions')
+@app.post("/v1/completions")
+@app.post("/completions")
 async def completions(body: CompletionBody, request: Request):
     return await process_generate([body.prompt], False, body, request)
 
 
-@app.post('/v1/chat/completions')
-@app.post('/chat/completions')
+@app.post("/v1/chat/completions")
+@app.post("/chat/completions")
 async def chat_completions(body: ChatCompletionBody, request: Request):
-    if len(body.messages) == 0 or body.messages[-1].role != 'user':
+    if len(body.messages) == 0 or body.messages[-1].role != "user":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "no question found")
 
     # history = [f'{message.role}: {message.content}' for message in body.messages]
@@ -215,4 +221,3 @@ async def chat_completions(body: ChatCompletionBody, request: Request):
 
 if __name__ == "__main__":
     uvicorn.run("api_demo:app", host=settings.host, port=settings.port)
-
