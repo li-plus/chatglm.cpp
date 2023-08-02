@@ -19,6 +19,7 @@ include_directories(third_party/ggml/include/ggml third_party/ggml/src)
 add_subdirectory(third_party/ggml)
 
 set(SPM_ENABLE_SHARED OFF CACHE BOOL "chatglm: disable sentencepiece shared libraries by default")
+set(SPM_ENABLE_TCMALLOC OFF CACHE BOOL "chatglm: disable tcmalloc by default")
 include_directories(third_party/sentencepiece/src)
 add_subdirectory(third_party/sentencepiece)
 
