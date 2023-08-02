@@ -27,6 +27,13 @@ classifiers = [
 ]
 dynamic = ["version"]
 
+[project.optional-dependencies]
+api = [
+    "fastapi",
+    "uvicorn",
+    "pydantic>=1,<2",
+]
+
 [project.urls]
 Homepage = "https://github.com/li-plus/chatglm.cpp"
 Repository = "https://github.com/li-plus/chatglm.cpp.git"

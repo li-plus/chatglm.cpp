@@ -147,6 +147,41 @@ For ChatGLM2, change the model path to `../chatglm2-ggml.bin` and everything wor
 
 ![web_demo](docs/web_demo.jpg)
 
+## API Server
+
+We support various kinds of API servers to integrate with popular frontends. Extra dependencies can be installed by:
+```sh
+pip install 'chatglm_cpp[api]'
+```
+Remember to add the corresponding `CMAKE_ARGS` to enable acceleration.
+
+**LangChain API**
+
+Start the api server for LangChain:
+```sh
+MODEL=./chatglm2-ggml.bin uvicorn chatglm_cpp.langchain_api:app --host 127.0.0.1 --port 8000
+```
+
+Test the api endpoint with `curl`:
+```sh
+curl http://127.0.0.1:8000 -H 'Content-Type: application/json' -d '{"prompt": "你好"}'
+```
+
+Run with LangChain:
+```python
+>>> from langchain.llms import ChatGLM
+>>> 
+>>> llm = ChatGLM(endpoint_url="http://127.0.0.1:8000")
+>>> llm.predict("你好")
+'你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。'
+```
+
+For more options, please refer to [examples/langchain_client.py](examples/langchain_client.py) and [LangChain ChatGLM Integration](https://python.langchain.com/docs/integrations/llms/chatglm).
+
+**OpenAI API**
+
+Coming soon!
+
 ## Using Docker
 
 ```sh

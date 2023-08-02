@@ -1,6 +1,7 @@
 import os
+import warnings
 from pathlib import Path
-from typing import Iterator, List
+from typing import Iterator, List, Union
 
 import chatglm_cpp._C as _C
 
@@ -12,7 +13,32 @@ class Pipeline(_C.Pipeline):
         model_path = Path(model_path)
         super().__init__(str(model_path))
 
-    def stream_chat(
+    def chat(
+        self,
+        history: List[str],
+        *,
+        max_length: int = 2048,
+        max_context_length: int = 512,
+        do_sample: bool = True,
+        top_k: int = 0,
+        top_p: float = 0.7,
+        temperature: float = 0.95,
+        num_threads: int = 0,
+        stream: bool = False,
+    ) -> Union[Iterator[str], str]:
+        chat_fn = self._stream_chat if stream else self._chat
+        return chat_fn(
+            history=history,
+            max_length=max_length,
+            max_context_length=max_context_length,
+            do_sample=do_sample,
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
+            num_threads=num_threads,
+        )
+
+    def _stream_chat(
         self,
         history: List[str],
         *,
@@ -67,7 +93,7 @@ class Pipeline(_C.Pipeline):
         output = self.tokenizer.decode(token_cache)
         yield output[print_len:]
 
-    def chat(
+    def _chat(
         self,
         history: List[str],
         *,
@@ -105,3 +131,31 @@ class Pipeline(_C.Pipeline):
 
         output = self.tokenizer.decode(output_ids[n_ctx:])
         return output
+
+    def stream_chat(
+        self,
+        history: List[str],
+        *,
+        max_length: int = 2048,
+        max_context_length: int = 512,
+        do_sample: bool = True,
+        top_k: int = 0,
+        top_p: float = 0.7,
+        temperature: float = 0.95,
+        num_threads: int = 0,
+    ) -> Iterator[str]:
+        warnings.warn(
+            "stream_chat is deprecated in favor of chat(..., stream=True), and will be removed in the next major version of chatglm-cpp",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._stream_chat(
+            history=history,
+            max_length=max_length,
+            max_context_length=max_context_length,
+            do_sample=do_sample,
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
+            num_threads=num_threads,
+        )
