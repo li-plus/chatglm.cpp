@@ -180,7 +180,21 @@ For more options, please refer to [examples/langchain_client.py](examples/langch
 
 **OpenAI API**
 
-Coming soon!
+Start an API server compatible with OpenAI chat completions protocol:
+```sh
+MODEL=./chatglm2-ggml.bin uvicorn chatglm_cpp.openai_api:app --host 127.0.0.1 --port 8000
+```
+
+Test your endpoint with `curl`:
+```sh
+curl http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' \
+    -d '{"messages": [{"role": "user", "content": "你好"}]}'
+```
+
+Use the OpenAI client to make streaming request:
+```sh
+OPENAI_API_BASE=http://127.0.0.1:8000/v1 python3 examples/openai_client.py --stream --prompt 你好
+```
 
 ## Using Docker
 
