@@ -493,6 +493,29 @@ std::string ChatGLMTokenizer::preprocess(const std::string &text) {
     return output;
 }
 
+static inline std::string replace_punctuations(const std::string &text) {
+    // reference: https://stackoverflow.com/questions/37989081/how-to-use-unicode-range-in-c-regex
+    static std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+    static const std::vector<std::pair<std::wregex, std::wstring>> punct_map{
+        {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff]),)")), converter.from_bytes("$1，")},
+        {std::wregex(converter.from_bytes(R"(,([\u4e00-\u9fff]))")), converter.from_bytes("，$1")},
+        {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff])!)")), converter.from_bytes("$1！")},
+        {std::wregex(converter.from_bytes(R"(!([\u4e00-\u9fff]))")), converter.from_bytes("！$1")},
+        {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff]):)")), converter.from_bytes("$1：")},
+        {std::wregex(converter.from_bytes(R"(:([\u4e00-\u9fff]))")), converter.from_bytes("：$1")},
+        {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff]);)")), converter.from_bytes("$1；")},
+        {std::wregex(converter.from_bytes(R"(;([\u4e00-\u9fff]))")), converter.from_bytes("；$1")},
+        {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff])\?)")), converter.from_bytes("$1？")},
+        {std::wregex(converter.from_bytes(R"(\?([\u4e00-\u9fff]))")), converter.from_bytes("？$1")},
+    };
+    std::wstring w_output = converter.from_bytes(text);
+    for (const auto &punct_pair : punct_map) {
+        w_output = std::regex_replace(w_output, punct_pair.first, punct_pair.second);
+    }
+    std::string output = converter.to_bytes(w_output);
+    return output;
+}
+
 std::string ChatGLMTokenizer::postprocess(const std::string &text) {
     std::string output;
 
@@ -512,29 +535,8 @@ std::string ChatGLMTokenizer::postprocess(const std::string &text) {
         output = regex_replace(output, pattern,
                                [](const std::smatch &sm) { return std::string(std::stoi(sm[1].str()), ' '); });
     }
-
-    // replace punctuations
-    // reference: https://stackoverflow.com/questions/37989081/how-to-use-unicode-range-in-c-regex
-    {
-        static std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-        static const std::vector<std::pair<std::wregex, std::wstring>> punct_map{
-            {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff]),)")), converter.from_bytes("$1，")},
-            {std::wregex(converter.from_bytes(R"(,([\u4e00-\u9fff]))")), converter.from_bytes("，$1")},
-            {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff])!)")), converter.from_bytes("$1！")},
-            {std::wregex(converter.from_bytes(R"(!([\u4e00-\u9fff]))")), converter.from_bytes("！$1")},
-            {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff]):)")), converter.from_bytes("$1：")},
-            {std::wregex(converter.from_bytes(R"(:([\u4e00-\u9fff]))")), converter.from_bytes("：$1")},
-            {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff]);)")), converter.from_bytes("$1；")},
-            {std::wregex(converter.from_bytes(R"(;([\u4e00-\u9fff]))")), converter.from_bytes("；$1")},
-            {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff])\?)")), converter.from_bytes("$1？")},
-            {std::wregex(converter.from_bytes(R"(\?([\u4e00-\u9fff]))")), converter.from_bytes("？$1")},
-        };
-        std::wstring w_output = converter.from_bytes(output);
-        for (const auto &punct_pair : punct_map) {
-            w_output = std::regex_replace(w_output, punct_pair.first, punct_pair.second);
-        }
-        output = converter.to_bytes(w_output);
-    }
+    // punctuations
+    output = replace_punctuations(output);
 
     return output;
 }
@@ -1021,6 +1023,7 @@ std::string ChatGLM2Tokenizer::decode(const std::vector<int> &ids) const {
 
     std::string text;
     sp.Decode(normal_ids, &text);
+    text = replace_punctuations(text);
     return text;
 }
 
