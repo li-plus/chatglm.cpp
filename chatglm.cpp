@@ -145,6 +145,18 @@ void tensor_to_cpu(ggml_tensor *tensor) {
 #endif
 }
 
+// Adapted from https://github.com/ggerganov/llama.cpp/blob/master/llama.cpp
+void ggml_graph_compute_helper(std::vector<uninitialized_char> &buf, ggml_cgraph *graph, int n_threads) {
+    struct ggml_cplan plan = ggml_graph_plan(graph, n_threads);
+
+    if (plan.work_size > 0) {
+        buf.resize(plan.work_size);
+        plan.work_data = (uint8_t *)buf.data();
+    }
+
+    ggml_graph_compute(graph, &plan);
+}
+
 // for debugging purpose
 static inline ggml_tensor *add_zero(ggml_context *ctx, ggml_tensor *tensor) {
     ggml_tensor *zeros = ggml_new_tensor(ctx, tensor->type, tensor->n_dims, tensor->ne);
@@ -598,11 +610,10 @@ int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int
     if (input_ids.size() == 1) {
         ggml_metal_graph_compute(ctx_.ctx_metal.get(), &ctx_.gf);
     } else {
-        ggml_graph_compute_with_ctx(ctx_.ctx_b.get(), &ctx_.gf, n_threads);
+        ggml_graph_compute_helper(ctx_.work_buffer, &ctx_.gf, n_threads);
     }
 #else
-    // TODO: upgrade to ggml_graph_compute with cplan
-    ggml_graph_compute_with_ctx(ctx_.ctx_b.get(), &ctx_.gf, n_threads);
+    ggml_graph_compute_helper(ctx_.work_buffer, &ctx_.gf, n_threads);
 #endif
 
 #ifdef GGML_PERF

@@ -188,22 +188,9 @@ TEST(Sampling, TopP) {
     }
 }
 
-static void ggml_graph_compute_helper(const std::vector<uninitialized_char> &buf, ggml_cgraph *graph, int n_threads) {
-    struct ggml_cplan plan = ggml_graph_plan(graph, n_threads);
-
-    if (plan.work_size > 0) {
-        CHATGLM_CHECK(plan.work_size <= buf.size())
-            << "not enough space in work_buf (needed " << plan.work_size << ", available " << buf.size() << ")";
-        plan.work_data = (uint8_t *)buf.data();
-    }
-
-    ggml_graph_compute(graph, &plan);
-}
-
 class ChatGLMTest : public ::testing::Test {
   protected:
     ModelContext ctx;
-    std::vector<uninitialized_char> work_buf;
 
     void SetUp() override {
         ctx.dtype = GGML_TYPE_F32;
@@ -214,14 +201,12 @@ class ChatGLMTest : public ::testing::Test {
         ctx.scratch = {0, ctx.scratch_buffer.size(), ctx.scratch_buffer.data()};
         ctx.init_device_context();
 
-        work_buf.resize(512 * MB);
-
         reset_cgraph();
     }
 
     void reset_cgraph() { ctx.gf = {}; }
 
-    void cpu_graph_compute(int n_threads) { ggml_graph_compute_helper(work_buf, &ctx.gf, n_threads); }
+    void cpu_graph_compute(int n_threads) { ggml_graph_compute_helper(ctx.work_buffer, &ctx.gf, n_threads); }
 
     void device_graph_compute(int n_threads) {
 #ifdef GGML_USE_METAL
