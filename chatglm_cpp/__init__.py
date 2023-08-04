@@ -5,7 +5,7 @@ from typing import Iterator, List, Union
 
 import chatglm_cpp._C as _C
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 
 class Pipeline(_C.Pipeline):

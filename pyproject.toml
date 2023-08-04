@@ -29,9 +29,8 @@ dynamic = ["version"]
 
 [project.optional-dependencies]
 api = [
-    "fastapi",
-    "uvicorn",
-    "pydantic>=1,<2",
+    "fastapi[all]",
+    "sse-starlette",
 ]
 
 [project.urls]
