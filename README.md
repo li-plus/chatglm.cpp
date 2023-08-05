@@ -75,16 +75,16 @@ In interactive mode, your chat history will serve as the context for the next-ro
 
 Run `./build/bin/main -h` to explore more options!
 
-**Try Another Model**
+**Try Other Models**
 
-ChatGLM2-6B:
+* ChatGLM2-6B
 ```sh
 python3 convert.py -i THUDM/chatglm2-6b -t q4_0 -o chatglm2-ggml.bin
 ./build/bin/main -m chatglm2-ggml.bin -p 你好 --top_p 0.8 --temp 0.8
 # 你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。
 ```
 
-CodeGeeX2:
+* CodeGeeX2
 ```sh
 $ python3 convert.py -i THUDM/codegeex2-6b -t q4_0 -o codegeex2-ggml.bin
 $ ./build/bin/main -m codegeex2-ggml.bin --temp 0 --mode generate -p "\
@@ -167,14 +167,31 @@ Run the Python example to chat with the quantized model:
 cd examples && python3 cli_chat.py -m ../chatglm-ggml.bin -i
 ```
 
-You may also launch a web demo to chat in your browser:
+Launch a web demo to chat in your browser:
 ```sh
 cd examples && python3 web_demo.py -m ../chatglm-ggml.bin
 ```
 
-For ChatGLM2, change the model path to `../chatglm2-ggml.bin` and everything works fine.
-
 ![web_demo](docs/web_demo.jpg)
+
+For other models:
+
+* ChatGLM2
+```sh
+python3 cli_chat.py -m ../chatglm2-ggml.bin -p 你好 --temp 0.8 --top_p 0.8  # CLI demo
+python3 web_demo.py -m ../chatglm2-ggml.bin --temp 0.8 --top_p 0.8  # web demo
+```
+
+* CodeGeeX2
+```sh
+# CLI demo
+python3 cli_chat.py -m ../codegeex2-ggml.bin --temp 0 --mode generate -p "\
+# language: Python
+# write a bubble sort function
+"
+# web demo
+python3 web_demo.py -m ../codegeex2-ggml.bin --temp 0 --max_length 512 --mode generate --plain
+```
 
 ## API Server
 
