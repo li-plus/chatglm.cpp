@@ -37,7 +37,7 @@ class ChatResponse(BaseModel):
                     "response": "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。",
                     "history": [["你好", "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。"]],
                     "status": 200,
-                    "time": "2023-01-01 00:00:00",
+                    "time": "2023-08-05 23:01:35",
                 }
             ]
         }

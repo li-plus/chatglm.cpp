@@ -36,6 +36,10 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
     max_tokens: int = Field(default=2048, ge=0)
 
+    model_config = {
+        "json_schema_extra": {"examples": [{"model": "default-model", "messages": [{"role": "user", "content": "你好"}]}]}
+    }
+
 
 class ChatCompletionResponseChoice(BaseModel):
     index: int = 0
@@ -55,6 +59,26 @@ class ChatCompletionResponse(BaseModel):
     object: Literal["chat.completion", "chat.completion.chunk"]
     created: int = Field(default_factory=lambda: int(time.time()))
     choices: Union[List[ChatCompletionResponseChoice], List[ChatCompletionResponseStreamChoice]]
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "id": "chatcmpl",
+                    "model": "default-model",
+                    "object": "chat.completion",
+                    "created": 1691166146,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                }
+            ]
+        }
+    }
 
 
 settings = Settings()
@@ -107,7 +131,7 @@ async def stream_chat_event_publisher(history, body):
 
 
 @app.post("/v1/chat/completions")
-async def create_chat_completion(body: ChatCompletionRequest, request: Request) -> ChatCompletionResponse:
+async def create_chat_completion(body: ChatCompletionRequest) -> ChatCompletionResponse:
     # ignore system messages
     history = [msg.content for msg in body.messages if msg.role != "system"]
     if len(history) % 2 != 1:

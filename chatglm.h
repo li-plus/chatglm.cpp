@@ -98,6 +98,8 @@ struct uninitialized_char {
     uninitialized_char() {}
 };
 
+void ggml_graph_compute_helper(std::vector<uninitialized_char> &buf, ggml_cgraph *graph, int n_threads);
+
 struct ModelContext {
     ggml_type dtype;
     unique_ggml_context_t ctx_w;  // weight
@@ -111,6 +113,7 @@ struct ModelContext {
     std::vector<uninitialized_char> compute_buffer; // BLAS buffer
     std::vector<uninitialized_char> scratch_buffer; // intermediate tensor buffer
     std::string_view weight_buffer;                 // mapped weight
+    std::vector<uninitialized_char> work_buffer;    // temporary buffer for graph computing
 
     void init_device_context();
 };
