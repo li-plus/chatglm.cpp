@@ -8,8 +8,20 @@
 #include <windows.h>
 #endif
 
+enum InferenceMode {
+    INFERENCE_MODE_CHAT,
+    INFERENCE_MODE_GENERATE,
+};
+
+static inline InferenceMode to_inference_mode(const std::string &s) {
+    static std::unordered_map<std::string, InferenceMode> m{{"chat", INFERENCE_MODE_CHAT},
+                                                            {"generate", INFERENCE_MODE_GENERATE}};
+    return m.at(s);
+}
+
 struct Args {
     std::string model_path = "chatglm-ggml.bin";
+    InferenceMode mode = INFERENCE_MODE_CHAT;
     std::string prompt = "你好";
     int max_length = 2048;
     int max_context_length = 512;
@@ -21,12 +33,13 @@ struct Args {
     bool verbose = false;
 };
 
-void usage(const char *prog) {
+static void usage(const char *prog) {
     std::cout << "Usage: " << prog << " [options]\n"
               << "\n"
               << "options:\n"
               << "  -h, --help              show this help message and exit\n"
               << "  -m, --model PATH        model path (default: chatglm-ggml.bin)\n"
+              << "  --mode                  inference mode chose from {chat, generate} (default: chat)\n"
               << "  -p, --prompt PROMPT     prompt to start generation with (default: 你好)\n"
               << "  -i, --interactive       run in interactive mode\n"
               << "  -l, --max_length N      max total length including prompt and output (default: 2048)\n"
@@ -50,6 +63,8 @@ static Args parse_args(int argc, char **argv) {
             exit(EXIT_SUCCESS);
         } else if (arg == "-m" || arg == "--model") {
             args.model_path = argv[++i];
+        } else if (arg == "--mode") {
+            args.mode = to_inference_mode(argv[++i]);
         } else if (arg == "-p" || arg == "--prompt") {
             args.prompt = argv[++i];
         } else if (arg == "-i" || arg == "--interactive") {
@@ -110,7 +125,7 @@ static bool get_utf8_line(std::string &line) {
 static bool get_utf8_line(std::string &line) { return !!std::getline(std::cin, line); }
 #endif
 
-void chat(const Args &args) {
+static void chat(Args &args) {
     ggml_time_init();
     int64_t start_load_us = ggml_time_us();
     chatglm::Pipeline pipeline(args.model_path);
@@ -161,6 +176,11 @@ void chat(const Args &args) {
         std::cout << std::endl;
     }
 
+    if (args.mode != INFERENCE_MODE_CHAT && args.interactive) {
+        std::cerr << "interactive demo is only supported for chat mode, falling back to non-interactive one\n";
+        args.interactive = false;
+    }
+
     if (args.interactive) {
         std::cout << R"(    ________          __  ________    __  ___                 )" << '\n'
                   << R"(   / ____/ /_  ____ _/ /_/ ____/ /   /  |/  /_________  ____  )" << '\n'
@@ -200,7 +220,11 @@ void chat(const Args &args) {
         }
         std::cout << "Bye\n";
     } else {
-        pipeline.chat({args.prompt}, gen_config, streamer.get());
+        if (args.mode == INFERENCE_MODE_CHAT) {
+            pipeline.chat({args.prompt}, gen_config, streamer.get());
+        } else {
+            pipeline.generate(args.prompt, gen_config, streamer.get());
+        }
         if (args.verbose) {
             std::cout << "\n" << perf_streamer->to_string() << "\n\n";
         }
@@ -208,8 +232,8 @@ void chat(const Args &args) {
 }
 
 int main(int argc, char **argv) {
-    Args args = parse_args(argc, argv);
     try {
+        Args args = parse_args(argc, argv);
         chat(args);
     } catch (std::exception &e) {
         std::cerr << e.what() << std::endl;

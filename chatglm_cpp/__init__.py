@@ -26,9 +26,9 @@ class Pipeline(_C.Pipeline):
         num_threads: int = 0,
         stream: bool = False,
     ) -> Union[Iterator[str], str]:
-        chat_fn = self._stream_chat if stream else self._chat
-        return chat_fn(
-            history=history,
+        prompt = self.tokenizer.build_prompt(history)
+        return self.generate(
+            prompt=prompt,
             max_length=max_length,
             max_context_length=max_context_length,
             do_sample=do_sample,
@@ -36,11 +36,12 @@ class Pipeline(_C.Pipeline):
             top_p=top_p,
             temperature=temperature,
             num_threads=num_threads,
+            stream=stream,
         )
 
-    def _stream_chat(
+    def generate(
         self,
-        history: List[str],
+        prompt: str,
         *,
         max_length: int = 2048,
         max_context_length: int = 512,
@@ -49,7 +50,8 @@ class Pipeline(_C.Pipeline):
         top_p: float = 0.7,
         temperature: float = 0.95,
         num_threads: int = 0,
-    ) -> Iterator[str]:
+        stream: bool = False,
+    ) -> Union[Iterator[str], str]:
         gen_config = _C.GenerationConfig(
             max_length=max_length,
             max_context_length=max_context_length,
@@ -60,7 +62,11 @@ class Pipeline(_C.Pipeline):
             num_threads=num_threads,
         )
 
-        input_ids = self.tokenizer.encode_history(history, max_context_length)
+        generate_fn = self._stream_generate if stream else self._generate
+        return generate_fn(prompt=prompt, gen_config=gen_config)
+
+    def _stream_generate(self, prompt: str, gen_config: _C.GenerationConfig) -> Iterator[str]:
+        input_ids = self.tokenizer.encode(prompt, gen_config.max_context_length)
 
         output_ids = input_ids
         n_past = 0
@@ -68,7 +74,7 @@ class Pipeline(_C.Pipeline):
 
         token_cache = []
         print_len = 0
-        while len(output_ids) < max_length:
+        while len(output_ids) < gen_config.max_length:
             next_token_id = self.model.generate_next_token(input_ids, gen_config, n_past, n_ctx)
             n_past += len(input_ids)
             input_ids = [next_token_id]
@@ -93,35 +99,14 @@ class Pipeline(_C.Pipeline):
         output = self.tokenizer.decode(token_cache)
         yield output[print_len:]
 
-    def _chat(
-        self,
-        history: List[str],
-        *,
-        max_length: int = 2048,
-        max_context_length: int = 512,
-        do_sample: bool = True,
-        top_k: int = 0,
-        top_p: float = 0.7,
-        temperature: float = 0.95,
-        num_threads: int = 0,
-    ) -> str:
-        gen_config = _C.GenerationConfig(
-            max_length=max_length,
-            max_context_length=max_context_length,
-            do_sample=do_sample,
-            top_k=top_k,
-            top_p=top_p,
-            temperature=temperature,
-            num_threads=num_threads,
-        )
-
-        input_ids = self.tokenizer.encode_history(history, max_context_length)
+    def _generate(self, prompt: str, gen_config: _C.GenerationConfig) -> str:
+        input_ids = self.tokenizer.encode(prompt, gen_config.max_context_length)
 
         output_ids = input_ids
         n_past = 0
         n_ctx = len(input_ids)
 
-        while len(output_ids) < max_length:
+        while len(output_ids) < gen_config.max_length:
             next_token_id = self.model.generate_next_token(input_ids, gen_config, n_past, n_ctx)
             n_past += len(input_ids)
             input_ids = [next_token_id]
@@ -149,7 +134,7 @@ class Pipeline(_C.Pipeline):
             DeprecationWarning,
             stacklevel=2,
         )
-        return self._stream_chat(
+        return self.chat(
             history=history,
             max_length=max_length,
             max_context_length=max_context_length,
@@ -158,4 +143,5 @@ class Pipeline(_C.Pipeline):
             top_p=top_p,
             temperature=temperature,
             num_threads=num_threads,
+            stream=True,
         )

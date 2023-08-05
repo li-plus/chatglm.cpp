@@ -32,13 +32,15 @@ git submodule update --init --recursive
 
 **Quantize Model**
 
-Use `convert.py` to transform ChatGLM-6B or ChatGLM2-6B into quantized GGML format. For example, to convert the fp16 base model to q4_0 (quantized int4) GGML model, run:
+Use `convert.py` to transform ChatGLM-6B or ChatGLM2-6B into quantized GGML format. For example, to convert the fp16 original model to q4_0 (quantized int4) GGML model, run:
 ```sh
-# For ChatGLM-6B
 python3 convert.py -i THUDM/chatglm-6b -t q4_0 -o chatglm-ggml.bin
-# For ChatGLM2-6B
-python3 convert.py -i THUDM/chatglm2-6b -t q4_0 -o chatglm2-ggml.bin
 ```
+
+The original model (`-i <model_name_or_path>`) can be a HuggingFace model name or a local path to your pre-downloaded model. Currently supported models are:
+* [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B): `THUDM/chatglm-6b`, `THUDM/chatglm-6b-int8`, `THUDM/chatglm-6b-int4`
+* [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B): `THUDM/chatglm2-6b`, `THUDM/chatglm2-6b-int4`
+* [CodeGeeX2](https://github.com/THUDM/CodeGeeX2): `THUDM/codegeex2-6b`, `THUDM/codegeex2-6b-int4`
 
 You are free to try any of the below quantization types by specifying `-t <type>`:
 * `q4_0`: 4-bit integer quantization with fp16 scales.
@@ -61,10 +63,8 @@ cmake --build build -j
 
 Now you may chat with the quantized ChatGLM-6B model by running:
 ```sh
-./build/bin/main -m chatglm-ggml.bin -p 你好                            # ChatGLM-6B
+./build/bin/main -m chatglm-ggml.bin -p 你好
 # 你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。
-./build/bin/main -m chatglm2-ggml.bin -p 你好 --top_p 0.8 --temp 0.8    # ChatGLM2-6B
-# 你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。
 ```
 
 To run the model in interactive mode, add the `-i` flag. For example:
@@ -74,6 +74,35 @@ To run the model in interactive mode, add the `-i` flag. For example:
 In interactive mode, your chat history will serve as the context for the next-round conversation.
 
 Run `./build/bin/main -h` to explore more options!
+
+**Try Other Models**
+
+* ChatGLM2-6B
+```sh
+python3 convert.py -i THUDM/chatglm2-6b -t q4_0 -o chatglm2-ggml.bin
+./build/bin/main -m chatglm2-ggml.bin -p 你好 --top_p 0.8 --temp 0.8
+# 你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。
+```
+
+* CodeGeeX2
+```sh
+$ python3 convert.py -i THUDM/codegeex2-6b -t q4_0 -o codegeex2-ggml.bin
+$ ./build/bin/main -m codegeex2-ggml.bin --temp 0 --mode generate -p "\
+# language: Python
+# write a bubble sort function
+"
+
+
+def bubble_sort(lst):
+    for i in range(len(lst) - 1):
+        for j in range(len(lst) - 1 - i):
+            if lst[j] > lst[j + 1]:
+                lst[j], lst[j + 1] = lst[j + 1], lst[j]
+    return lst
+
+
+print(bubble_sort([5, 4, 3, 2, 1]))
+```
 
 ## Using BLAS
 
@@ -138,20 +167,37 @@ Run the Python example to chat with the quantized model:
 cd examples && python3 cli_chat.py -m ../chatglm-ggml.bin -i
 ```
 
-You may also launch a web demo to chat in your browser:
+Launch a web demo to chat in your browser:
 ```sh
 cd examples && python3 web_demo.py -m ../chatglm-ggml.bin
 ```
 
-For ChatGLM2, change the model path to `../chatglm2-ggml.bin` and everything works fine.
-
 ![web_demo](docs/web_demo.jpg)
+
+For other models:
+
+* ChatGLM2
+```sh
+python3 cli_chat.py -m ../chatglm2-ggml.bin -p 你好 --temp 0.8 --top_p 0.8  # CLI demo
+python3 web_demo.py -m ../chatglm2-ggml.bin --temp 0.8 --top_p 0.8  # web demo
+```
+
+* CodeGeeX2
+```sh
+# CLI demo
+python3 cli_chat.py -m ../codegeex2-ggml.bin --temp 0 --mode generate -p "\
+# language: Python
+# write a bubble sort function
+"
+# web demo
+python3 web_demo.py -m ../codegeex2-ggml.bin --temp 0 --max_length 512 --mode generate --plain
+```
 
 ## API Server
 
 We support various kinds of API servers to integrate with popular frontends. Extra dependencies can be installed by:
 ```sh
-pip install 'chatglm_cpp[api]'
+pip install 'chatglm-cpp[api]'
 ```
 Remember to add the corresponding `CMAKE_ARGS` to enable acceleration.
 

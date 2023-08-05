@@ -65,9 +65,10 @@ struct BaseConfig {
 class BaseTokenizer {
   public:
     virtual ~BaseTokenizer() = default;
-    virtual std::vector<int> encode(const std::string &text) const = 0;
+    virtual std::vector<int> encode(const std::string &text, int max_length) const = 0;
     virtual std::string decode(const std::vector<int> &ids) const = 0;
     virtual std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const = 0;
+    virtual std::string build_prompt(const std::vector<std::string> &history) const = 0;
 };
 
 struct ggml_context_deleter_t {
@@ -351,13 +352,13 @@ class ChatGLMTokenizer : public BaseTokenizer {
   public:
     ChatGLMTokenizer(std::string_view serialized_model_proto);
 
-    std::vector<int> encode(const std::string &text) const override;
+    std::vector<int> encode(const std::string &text, int max_length) const override;
 
     std::string decode(const std::vector<int> &ids) const override;
 
     std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
 
-    static std::string build_prompt(const std::vector<std::string> &history);
+    std::string build_prompt(const std::vector<std::string> &history) const override;
 
   private:
     static std::string preprocess(const std::string &text);
@@ -459,13 +460,13 @@ class ChatGLM2Tokenizer : public BaseTokenizer {
   public:
     ChatGLM2Tokenizer(std::string_view serialized_model_proto);
 
-    std::vector<int> encode(const std::string &text) const override;
+    std::vector<int> encode(const std::string &text, int max_length) const override;
 
     std::string decode(const std::vector<int> &ids) const override;
 
     std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
 
-    static std::string build_prompt(const std::vector<std::string> &history);
+    std::string build_prompt(const std::vector<std::string> &history) const override;
 
     bool is_special_id(int id) const;
 
@@ -562,6 +563,9 @@ class ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGeneratio
 class Pipeline {
   public:
     Pipeline(const std::string &path);
+
+    std::string generate(const std::string &prompt, const GenerationConfig &gen_config,
+                         BaseStreamer *streamer = nullptr) const;
 
     std::string chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
                      BaseStreamer *streamer = nullptr) const;

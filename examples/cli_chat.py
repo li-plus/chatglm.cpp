@@ -21,6 +21,7 @@ WELCOME_MESSAGE = "Welcome to ChatGLM.cpp! Ask whatever you want. Type 'clear' t
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-m", "--model", default=DEFAULT_MODEL_PATH, type=Path, help="model path")
+    parser.add_argument("--mode", default="chat", type=str, choices=["chat", "generate"], help="inference mode")
     parser.add_argument("-p", "--prompt", default="你好", type=str, help="prompt to start generation with")
     parser.add_argument("-i", "--interactive", action="store_true", help="run in interactive mode")
     parser.add_argument(
@@ -35,17 +36,27 @@ def main():
 
     pipeline = chatglm_cpp.Pipeline(args.model)
 
+    if args.mode != "chat" and args.interactive:
+        print("interactive demo is only supported for chat mode, falling back to non-interactive one")
+        args.interactive = False
+
+    generation_kwargs = dict(
+        max_length=args.max_length,
+        max_context_length=args.max_context_length,
+        do_sample=args.temp > 0,
+        top_k=args.top_k,
+        top_p=args.top_p,
+        temperature=args.temp,
+        stream=True,
+    )
+
     if not args.interactive:
-        for piece in pipeline.chat(
-            [args.prompt],
-            max_length=args.max_length,
-            max_context_length=args.max_context_length,
-            do_sample=args.temp > 0,
-            top_k=args.top_k,
-            top_p=args.top_p,
-            temperature=args.temp,
-            stream=True,
-        ):
+        generator = (
+            pipeline.chat([args.prompt], **generation_kwargs)
+            if args.mode == "chat"
+            else pipeline.generate(args.prompt, **generation_kwargs)
+        )
+        for piece in generator:
             print(piece, sep="", end="", flush=True)
         print()
         return
@@ -70,16 +81,7 @@ def main():
         history.append(prompt)
         print(f"{pipeline.model.type_name} > ", sep="", end="")
         output = ""
-        for piece in pipeline.chat(
-            history,
-            max_length=args.max_length,
-            max_context_length=args.max_context_length,
-            do_sample=args.temp > 0,
-            top_k=args.top_k,
-            top_p=args.top_p,
-            temperature=args.temp,
-            stream=True,
-        ):
+        for piece in pipeline.chat(history, **generation_kwargs):
             print(piece, sep="", end="", flush=True)
             output += piece
         print()
