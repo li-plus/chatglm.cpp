@@ -37,11 +37,9 @@ if (GGML_PERF)
     add_compile_definitions(GGML_PERF)
 endif ()
 
-set(CPP_SOURCES
-    ${PROJECT_SOURCE_DIR}/chatglm.h
-    ${PROJECT_SOURCE_DIR}/chatglm.cpp
-    ${PROJECT_SOURCE_DIR}/chatglm_test.cpp
-    ${PROJECT_SOURCE_DIR}/chatglm_pybind.cpp)
+file(GLOB CPP_SOURCES
+    ${PROJECT_SOURCE_DIR}/*.h
+    ${PROJECT_SOURCE_DIR}/*.cpp)
 
 set_source_files_properties(${CPP_SOURCES} PROPERTIES COMPILE_FLAGS "-pedantic-errors")
 

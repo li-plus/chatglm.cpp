@@ -425,25 +425,25 @@ ChatGLMTokenizer::ChatGLMTokenizer(std::string_view serialized_model_proto) {
     pad_token_id = sp.PieceToId("<pad>");
 }
 
-std::vector<int> ChatGLMTokenizer::encode(const std::string &text) const {
+std::vector<int> ChatGLMTokenizer::encode(const std::string &text, int max_length) const {
     std::string input = preprocess(text);
     std::vector<int> ids;
     sp.Encode(input, &ids);
     ids.insert(ids.end(), {gmask_token_id, bos_token_id});
+    if ((int)ids.size() > max_length) {
+        // sliding window: always take the last max_length tokens
+        ids.erase(ids.begin(), ids.end() - max_length);
+    }
     return ids;
 }
 
 std::vector<int> ChatGLMTokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
     std::string prompt = build_prompt(history);
-    std::vector<int> input_ids = encode(prompt);
-    if ((int)input_ids.size() > max_length) {
-        // sliding window: always take the last max_length tokens
-        input_ids.erase(input_ids.begin(), input_ids.end() - max_length);
-    }
+    std::vector<int> input_ids = encode(prompt, max_length);
     return input_ids;
 }
 
-std::string ChatGLMTokenizer::build_prompt(const std::vector<std::string> &history) {
+std::string ChatGLMTokenizer::build_prompt(const std::vector<std::string> &history) const {
     CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
 
     std::ostringstream oss_prompt;
@@ -1019,10 +1019,15 @@ ChatGLM2Tokenizer::ChatGLM2Tokenizer(std::string_view serialized_model_proto) {
     eop_token_id = special_id++;
 }
 
-std::vector<int> ChatGLM2Tokenizer::encode(const std::string &text) const {
+std::vector<int> ChatGLM2Tokenizer::encode(const std::string &text, int max_length) const {
     std::vector<int> ids;
     sp.Encode(text, &ids);
     ids.insert(ids.begin(), {gmask_token_id, sop_token_id}); // special prefix
+    if ((int)ids.size() > max_length) {
+        // sliding window: drop the least recent history while keeping the two special prefix tokens
+        int num_drop = (int)ids.size() - max_length;
+        ids.erase(ids.begin() + 2, ids.begin() + 2 + num_drop);
+    }
     return ids;
 }
 
@@ -1040,16 +1045,11 @@ std::string ChatGLM2Tokenizer::decode(const std::vector<int> &ids) const {
 
 std::vector<int> ChatGLM2Tokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
     std::string prompt = build_prompt(history);
-    std::vector<int> input_ids = encode(prompt);
-    if ((int)input_ids.size() > max_length) {
-        // sliding window: drop the least recent history while keeping the special prefix tokens
-        int num_drop = (int)input_ids.size() - max_length;
-        input_ids.erase(input_ids.begin() + 2, input_ids.begin() + 2 + num_drop);
-    }
+    std::vector<int> input_ids = encode(prompt, max_length);
     return input_ids;
 }
 
-std::string ChatGLM2Tokenizer::build_prompt(const std::vector<std::string> &history) {
+std::string ChatGLM2Tokenizer::build_prompt(const std::vector<std::string> &history) const {
     CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
 
     std::ostringstream oss_prompt;
@@ -1375,14 +1375,20 @@ Pipeline::Pipeline(const std::string &path) {
     }
 }
 
-std::string Pipeline::chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
-                           BaseStreamer *streamer) const {
-    std::vector<int> input_ids = tokenizer->encode_history(history, gen_config.max_context_length);
+std::string Pipeline::generate(const std::string &prompt, const GenerationConfig &gen_config,
+                               BaseStreamer *streamer) const {
+    std::vector<int> input_ids = tokenizer->encode(prompt, gen_config.max_context_length);
     std::vector<int> output_ids = model->generate(input_ids, gen_config, streamer);
 
     std::vector<int> new_output_ids(output_ids.begin() + input_ids.size(), output_ids.end());
     std::string output = tokenizer->decode(new_output_ids);
     return output;
+}
+
+std::string Pipeline::chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
+                           BaseStreamer *streamer) const {
+    std::string prompt = tokenizer->build_prompt(history);
+    return generate(prompt, gen_config, streamer);
 }
 
 } // namespace chatglm

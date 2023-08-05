@@ -7,6 +7,24 @@ namespace chatglm {
 namespace py = pybind11;
 using namespace pybind11::literals;
 
+class PyBaseTokenizer : public BaseTokenizer {
+  public:
+    using BaseTokenizer::BaseTokenizer;
+
+    std::vector<int> encode(const std::string &text, int max_length) const override {
+        PYBIND11_OVERRIDE_PURE(std::vector<int>, BaseTokenizer, encode, text, max_length);
+    }
+    std::string decode(const std::vector<int> &ids) const override {
+        PYBIND11_OVERLOAD_PURE(std::string, BaseTokenizer, decode, ids);
+    }
+    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override {
+        PYBIND11_OVERLOAD_PURE(std::vector<int>, BaseTokenizer, encode_history, history, max_length);
+    }
+    std::string build_prompt(const std::vector<std::string> &history) const override {
+        PYBIND11_OVERLOAD_PURE(std::string, BaseTokenizer, build_prompt, history);
+    }
+};
+
 PYBIND11_MODULE(_C, m) {
     m.doc() = "ChatGLM.cpp python binding";
 
@@ -23,6 +41,12 @@ PYBIND11_MODULE(_C, m) {
         .def_readonly("pad_token_id", &BaseConfig::pad_token_id)
         .def_readonly("sep_token_id", &BaseConfig::sep_token_id);
 
+    py::class_<BaseTokenizer, PyBaseTokenizer>(m, "BaseTokenizer")
+        .def("encode", &BaseTokenizer::encode)
+        .def("decode", &BaseTokenizer::decode)
+        .def("encode_history", &BaseTokenizer::encode_history)
+        .def("build_prompt", &BaseTokenizer::build_prompt);
+
     py::class_<GenerationConfig>(m, "GenerationConfig")
         .def(py::init<int, int, bool, int, float, float, int>(), "max_length"_a = 2048, "max_context_length"_a = 512,
              "do_sample"_a = true, "top_k"_a = 0, "top_p"_a = 0.7, "temperature"_a = 0.95, "num_threads"_a = 0)
@@ -36,10 +60,7 @@ PYBIND11_MODULE(_C, m) {
 
     py::class_<ChatGLMConfig, BaseConfig>(m, "ChatGLMConfig");
 
-    py::class_<ChatGLMTokenizer>(m, "ChatGLMTokenizer")
-        .def("encode", &ChatGLMTokenizer::encode)
-        .def("decode", &ChatGLMTokenizer::decode)
-        .def("encode_history", &ChatGLMTokenizer::encode_history);
+    py::class_<ChatGLMTokenizer, BaseTokenizer>(m, "ChatGLMTokenizer");
 
     py::class_<ChatGLMForConditionalGeneration>(m, "ChatGLMForConditionalGeneration")
         .def_readonly("config", &ChatGLMForConditionalGeneration::config)
@@ -49,10 +70,7 @@ PYBIND11_MODULE(_C, m) {
     py::class_<ChatGLM2Config, BaseConfig>(m, "ChatGLM2Config")
         .def_readonly("num_kv_heads", &ChatGLM2Config::num_kv_heads);
 
-    py::class_<ChatGLM2Tokenizer>(m, "ChatGLM2Tokenizer")
-        .def("encode", &ChatGLM2Tokenizer::encode)
-        .def("decode", &ChatGLM2Tokenizer::decode)
-        .def("encode_history", &ChatGLM2Tokenizer::encode_history);
+    py::class_<ChatGLM2Tokenizer, BaseTokenizer>(m, "ChatGLM2Tokenizer");
 
     py::class_<ChatGLM2ForConditionalGeneration>(m, "ChatGLM2ForConditionalGeneration")
         .def_readonly("config", &ChatGLM2ForConditionalGeneration::config)
