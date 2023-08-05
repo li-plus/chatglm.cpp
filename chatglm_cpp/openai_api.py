@@ -154,3 +154,31 @@ async def create_chat_completion(body: ChatCompletionRequest) -> ChatCompletionR
         object="chat.completion",
         choices=[ChatCompletionResponseChoice(message=ChatMessage(role="assistant", content=output))],
     )
+
+
+class ModelCard(BaseModel):
+    id: str
+    object: Literal["model"] = "model"
+    owned_by: str = "owner"
+    permission: List = []
+
+
+class ModelList(BaseModel):
+    object: Literal["list"] = "list"
+    data: List[ModelCard] = []
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "object": "list",
+                    "data": [{"id": "gpt-3.5-turbo", "object": "model", "owned_by": "owner", "permission": []}],
+                }
+            ]
+        }
+    }
+
+
+@app.get("/v1/models")
+async def list_models() -> ModelList:
+    return ModelList(data=[ModelCard(id="gpt-3.5-turbo")])
