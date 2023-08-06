@@ -9,7 +9,6 @@ from pathlib import Path
 from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 
-
 # Convert distutils Windows platform specifiers to CMake -A arguments
 PLAT_TO_CMAKE = {
     "win32": "Win32",
@@ -92,9 +91,7 @@ class CMakeBuild(build_ext):
 
             # Multi-config generators have a different way to specify configs
             if not single_config:
-                cmake_args += [
-                    f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"
-                ]
+                cmake_args += [f"-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{cfg.upper()}={extdir}"]
                 build_args += ["--config", cfg]
 
         if sys.platform.startswith("darwin"):
@@ -105,23 +102,22 @@ class CMakeBuild(build_ext):
 
         # Set CMAKE_BUILD_PARALLEL_LEVEL to control the parallel build level
         # across all generators.
-        if "CMAKE_BUILD_PARALLEL_LEVEL" not in os.environ:
-            # self.parallel is a Python 3 only way to set parallel jobs by hand
-            # using -j in the build_ext call, not supported by pip or PyPA-build.
-            if hasattr(self, "parallel") and self.parallel:
-                # CMake 3.12+ only.
-                build_args += [f"-j{self.parallel}"]
+        # if "CMAKE_BUILD_PARALLEL_LEVEL" not in os.environ:
+        #     # self.parallel is a Python 3 only way to set parallel jobs by hand
+        #     # using -j in the build_ext call, not supported by pip or PyPA-build.
+        #     if hasattr(self, "parallel") and self.parallel:
+        #         # CMake 3.12+ only.
+        #         build_args += [f"-j{self.parallel}"]
+
+        # Compile in parallel by default
+        build_args += [f"-j"]
 
         build_temp = Path(self.build_temp) / ext.name
         if not build_temp.exists():
             build_temp.mkdir(parents=True)
 
-        subprocess.run(
-            ["cmake", ext.sourcedir, *cmake_args], cwd=build_temp, check=True
-        )
-        subprocess.run(
-            ["cmake", "--build", ".", *build_args], cwd=build_temp, check=True
-        )
+        subprocess.run(["cmake", ext.sourcedir, *cmake_args], cwd=build_temp, check=True)
+        subprocess.run(["cmake", "--build", ".", *build_args], cwd=build_temp, check=True)
 
 
 HERE = Path(__file__).resolve().parent
