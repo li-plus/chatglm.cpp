@@ -11,10 +11,16 @@ C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B) and [Cha
 
 ## Features
 
+Highlights:
 * [x] Pure C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp).
 * [x] Accelerated memory-efficient CPU inference with int4/int8 quantization, optimized KV cache and parallel computing.
 * [x] Streaming generation with typewriter effect.
 * [x] Python binding, web demo, and more possibilities.
+
+Support Matrix:
+* Hardwares: x86/arm CPU, NVIDIA GPU, Apple Silicon GPU
+* Platforms: Linux, MacOS, Windows
+* Models: ChatGLM, ChatGLM2, CodeGeeX2
 
 ## Getting Started
 
@@ -58,7 +64,7 @@ For LoRA model, add `-l <lora_model_name_or_path>` flag to merge your LoRA weigh
 Compile the project using CMake:
 ```sh
 cmake -B build
-cmake --build build -j
+cmake --build build -j --config Release
 ```
 
 Now you may chat with the quantized ChatGLM-6B model by running:

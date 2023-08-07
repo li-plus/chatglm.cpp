@@ -141,10 +141,6 @@ static void chat(Args &args) {
     chatglm::GenerationConfig gen_config(args.max_length, args.max_context_length, args.temp > 0, args.top_k,
                                          args.top_p, args.temp, args.num_threads);
 
-#if defined(_WIN32)
-    _setmode(_fileno(stdin), _O_WTEXT);
-#endif
-
     if (args.verbose) {
         std::cout << "system info: | "
                   << "AVX = " << ggml_cpu_has_avx() << " | "
@@ -232,6 +228,11 @@ static void chat(Args &args) {
 }
 
 int main(int argc, char **argv) {
+#if defined(_WIN32)
+    SetConsoleOutputCP(CP_UTF8);
+    _setmode(_fileno(stdin), _O_WTEXT);
+#endif
+
     try {
         Args args = parse_args(argc, argv);
         chat(args);
