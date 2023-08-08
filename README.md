@@ -67,6 +67,26 @@ cmake -B build
 cmake --build build -j --config Release
 ```
 
+If you are in Windows and Encountering below error:
+
+```sh
+CMake Error at CMakeLists.txt:2 (project):
+  Running
+
+   'nmake' '-?'
+
+  failed with:
+
+   The system cannot find the file specified
+```
+
+Please try firstly remove `build` folder and try with following command:
+
+```sh
+cmake -B build -G "MinGW Makefiles"
+cmake --build build -j --config Release
+```
+
 Now you may chat with the quantized ChatGLM-6B model by running:
 ```sh
 ./build/bin/main -m chatglm-ggml.bin -p 你好
