@@ -116,7 +116,7 @@ static void append_utf8(char32_t ch, std::string &out) {
 
 static bool get_utf8_line(std::string &line) {
     std::wstring prompt;
-    std::wcin >> prompt;
+    std::getline(std::wcin, prompt);
     for (auto wc : prompt)
         append_utf8(wc, line);
     return true;
