@@ -39,7 +39,7 @@ class LogMessageFatal {
 
 std::string to_string(ggml_tensor *tensor, bool with_data = true);
 
-void tensor_assign_buffers(ggml_tensor *tensor, bool scratch = true, bool force_inplace = false);
+void tensor_assign_buffers(ggml_tensor *tensor);
 
 void tensor_to_device(ggml_tensor *tensor);
 

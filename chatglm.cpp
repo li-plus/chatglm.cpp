@@ -109,19 +109,9 @@ std::string to_string(ggml_tensor *tensor, bool with_data) {
     return oss.str();
 }
 
-void tensor_assign_buffers(ggml_tensor *tensor, bool scratch, bool force_inplace) {
+void tensor_assign_buffers(ggml_tensor *tensor) {
 #ifdef GGML_USE_CUBLAS
-    if (scratch) {
-        CHATGLM_CHECK(!force_inplace);
-        ggml_cuda_assign_buffers(tensor);
-    } else {
-        if (force_inplace) {
-            ggml_cuda_assign_buffers_force_inplace(tensor);
-        } else {
-            // BE CAREFUL TO USE THIS!
-            ggml_cuda_assign_buffers_no_scratch(tensor);
-        }
-    }
+    ggml_cuda_assign_buffers(tensor);
 #endif
 }
 
@@ -794,7 +784,7 @@ ggml_tensor *GLMSelfAttention::forward(ModelContext *ctx, ggml_tensor *hidden_st
     query_layer = ggml_rope_inplace(gctx, query_layer, n_past, rope_dim, 4, n_ctx); // [qlen, heads, head_size]
     tensor_assign_buffers(query_layer);
     query_layer = ggml_permute(gctx, query_layer, 0, 2, 1, 3); // [heads, qlen, head_size]
-    tensor_assign_buffers(query_layer, false, true);
+    tensor_assign_buffers(query_layer);
 
     ggml_tensor *key_layer =
         ggml_view_3d(gctx, qkv, head_size, num_attention_heads, qlen, 3 * head_size * ggml_element_size(qkv),
@@ -806,13 +796,13 @@ ggml_tensor *GLMSelfAttention::forward(ModelContext *ctx, ggml_tensor *hidden_st
     key_layer = ggml_rope_inplace(gctx, key_layer, n_past, rope_dim, 4, n_ctx); // [qlen, heads, head_size]
     tensor_assign_buffers(key_layer);
     key_layer = ggml_permute(gctx, key_layer, 0, 2, 1, 3); // [heads, qlen, head_size]
-    tensor_assign_buffers(key_layer, false, true);
+    tensor_assign_buffers(key_layer);
 
     ggml_tensor *value_layer = ggml_view_3d(gctx, qkv, head_size, num_attention_heads, qlen,
                                             3 * head_size * ggml_element_size(qkv), qkv->nb[1],
                                             2 * head_size * ggml_element_size(qkv)); // [qlen, heads, head_size]
     value_layer = ggml_permute(gctx, value_layer, 1, 2, 0, 3);                       // [heads, head_size, qlen]
-    tensor_assign_buffers(value_layer, false, true);
+    tensor_assign_buffers(value_layer);
 
     // store key & value to cache
     ggml_tensor *k_cache_view =

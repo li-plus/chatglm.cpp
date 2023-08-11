@@ -1,17 +1,28 @@
-import os
+import tempfile
 import warnings
 from pathlib import Path
-from typing import Iterator, List, Union
+from typing import Iterator, List, Optional, Union
 
 import chatglm_cpp._C as _C
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"
 
 
 class Pipeline(_C.Pipeline):
-    def __init__(self, model_path: os.PathLike) -> None:
-        model_path = Path(model_path)
-        super().__init__(str(model_path))
+    def __init__(self, model_path: str, *, dtype: Optional[str] = None) -> None:
+        if Path(model_path).is_file():
+            # load ggml model
+            super().__init__(str(model_path))
+        else:
+            # convert hf model to ggml format
+            from chatglm_cpp.convert import convert
+
+            if dtype is None:
+                dtype = "q4_0"  # default dtype
+
+            with tempfile.NamedTemporaryFile("wb") as f:
+                convert(f, model_path, dtype=dtype)
+                super().__init__(f.name)
 
     def chat(
         self,

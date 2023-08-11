@@ -7,6 +7,7 @@ import struct
 import sys
 from enum import Enum
 from pathlib import Path
+from typing import BinaryIO, Optional
 
 import torch
 from tabulate import tabulate
@@ -156,7 +157,7 @@ def dump_tensor(f, name: str, tensor: torch.Tensor, ggml_type: GGMLType):
 
 def dump_state_dict(f, weight_names, state_dict, quantization_bit, ggml_type):
     tensor_info = []
-    for name in tqdm(weight_names, desc="Dumping model state"):
+    for name in tqdm(weight_names, desc="Processing model states"):
         tensor = state_dict[name]
         if tensor.ndim == 2:
             # 2d weight: should quantize it if needed
@@ -191,16 +192,12 @@ def dump_state_dict(f, weight_names, state_dict, quantization_bit, ggml_type):
 
 class BaseConverter:
     @classmethod
-    def convert(cls, model, tokenizer, ggml_type, save_path):
-        # convert all weights to fp16
-        with open(save_path, "wb") as f:
-            f.write(b"ggml")  # magic
-            f.write(struct.pack("ii", cls.MODEL_TYPE.value, 1))  # model type & version
-            cls.dump_config(f, model.config, ggml_type)
-            cls.dump_tokenizer(f, tokenizer)
-            cls.dump_model(f, model, ggml_type)
-
-        print(f"{cls.MODEL_TYPE.name} GGML model saved to {save_path}")
+    def convert(cls, f, model, tokenizer, ggml_type):
+        f.write(b"ggml")  # magic
+        f.write(struct.pack("ii", cls.MODEL_TYPE.value, 1))  # model type & version
+        cls.dump_config(f, model.config, ggml_type)
+        cls.dump_tokenizer(f, tokenizer)
+        cls.dump_model(f, model, ggml_type)
 
 
 class ChatGLMConverter(BaseConverter):
@@ -323,6 +320,24 @@ class ChatGLM2Converter(BaseConverter):
         dump_state_dict(f, weight_names, model.state_dict(), model.config.quantization_bit, ggml_type)
 
 
+def convert(f: BinaryIO, model_name_or_path: str, lora_model_name_or_path: Optional[str] = None, dtype: str = "q4_0"):
+    ggml_type = GGMLType[dtype.upper()]
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
+    model = AutoModel.from_pretrained(model_name_or_path, trust_remote_code=True)
+    if lora_model_name_or_path is not None:
+        from peft import PeftModel
+
+        model = PeftModel.from_pretrained(model, lora_model_name_or_path)
+        model = model.merge_and_unload()
+
+    # TODO: check model & tokenizer class name
+    if hasattr(model.config, "multi_query_attention"):
+        ChatGLM2Converter.convert(f, model, tokenizer, ggml_type)
+    else:
+        ChatGLMConverter.convert(f, model, tokenizer, ggml_type)
+
+
 def main():
     parser = argparse.ArgumentParser("chatglm-convert")
     parser.add_argument(
@@ -352,19 +367,10 @@ def main():
     )
     args = parser.parse_args()
 
-    ggml_type = GGMLType[args.type.upper()]
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
-    model = AutoModel.from_pretrained(args.model_name_or_path, trust_remote_code=True)
-    if args.lora_model_name_or_path is not None:
-        from peft import PeftModel
+    with open(args.save_path, "wb") as f:
+        convert(f, args.model_name_or_path, dtype=args.type)
 
-        model = PeftModel.from_pretrained(model, args.lora_model_name_or_path)
-        model = model.merge_and_unload()
-
-    if hasattr(model.config, "multi_query_attention"):
-        ChatGLM2Converter.convert(model, tokenizer, ggml_type, args.save_path)
-    else:
-        ChatGLMConverter.convert(model, tokenizer, ggml_type, args.save_path)
+    print(f"GGML model saved to {args.save_path}")
 
 
 if __name__ == "__main__":
