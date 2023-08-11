@@ -40,7 +40,7 @@ git submodule update --init --recursive
 
 Use `convert.py` to transform ChatGLM-6B or ChatGLM2-6B into quantized GGML format. For example, to convert the fp16 original model to q4_0 (quantized int4) GGML model, run:
 ```sh
-python3 convert.py -i THUDM/chatglm-6b -t q4_0 -o chatglm-ggml.bin
+python3 chatglm_cpp/convert.py -i THUDM/chatglm-6b -t q4_0 -o chatglm-ggml.bin
 ```
 
 The original model (`-i <model_name_or_path>`) can be a HuggingFace model name or a local path to your pre-downloaded model. Currently supported models are:
@@ -85,26 +85,26 @@ Run `./build/bin/main -h` to explore more options!
 
 * ChatGLM2-6B
 ```sh
-python3 convert.py -i THUDM/chatglm2-6b -t q4_0 -o chatglm2-ggml.bin
+python3 chatglm_cpp/convert.py -i THUDM/chatglm2-6b -t q4_0 -o chatglm2-ggml.bin
 ./build/bin/main -m chatglm2-ggml.bin -p 你好 --top_p 0.8 --temp 0.8
 # 你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。
 ```
 
 * CodeGeeX2
 ```sh
-$ python3 convert.py -i THUDM/codegeex2-6b -t q4_0 -o codegeex2-ggml.bin
+$ python3 chatglm_cpp/convert.py -i THUDM/codegeex2-6b -t q4_0 -o codegeex2-ggml.bin
 $ ./build/bin/main -m codegeex2-ggml.bin --temp 0 --mode generate -p "\
 # language: Python
 # write a bubble sort function
 "
 
 
-def bubble_sort(lst):
-    for i in range(len(lst) - 1):
-        for j in range(len(lst) - 1 - i):
-            if lst[j] > lst[j + 1]:
-                lst[j], lst[j + 1] = lst[j + 1], lst[j]
-    return lst
+def bubble_sort(list):
+    for i in range(len(list) - 1):
+        for j in range(len(list) - 1):
+            if list[j] > list[j + 1]:
+                list[j], list[j + 1] = list[j + 1], list[j]
+    return list
 
 
 print(bubble_sort([5, 4, 3, 2, 1]))
@@ -145,6 +145,8 @@ cmake -B build -DGGML_METAL=ON && cmake --build build -j
 
 The Python binding provides high-level `chat` and `stream_chat` interface similar to the original Hugging Face ChatGLM(2)-6B.
 
+**Installation**
+
 Install from PyPI (recommended): will trigger compilation on your platform.
 ```sh
 pip install -U chatglm-cpp
@@ -168,14 +170,25 @@ pip install git+https://github.com/li-plus/chatglm.cpp.git@main
 pip install .
 ```
 
-Run the Python example to chat with the quantized model:
+**Using pre-converted ggml models**
+
+Here is a simple demo that uses `chatglm_cpp.Pipeline` to load the GGML model and chat with it. First enter the examples folder (`cd examples`) and launch a Python interactive shell:
+```python
+>>> import chatglm_cpp
+>>> 
+>>> pipeline = chatglm_cpp.Pipeline("../chatglm-ggml.bin")
+>>> pipeline.chat(["你好"])
+'你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。'
+```
+
+To chat in stream, run the below Python example:
 ```sh
-cd examples && python3 cli_chat.py -m ../chatglm-ggml.bin -i
+python3 cli_chat.py -m ../chatglm-ggml.bin -i
 ```
 
 Launch a web demo to chat in your browser:
 ```sh
-cd examples && python3 web_demo.py -m ../chatglm-ggml.bin
+python3 web_demo.py -m ../chatglm-ggml.bin
 ```
 
 ![web_demo](docs/web_demo.jpg)
@@ -197,6 +210,25 @@ python3 cli_chat.py -m ../codegeex2-ggml.bin --temp 0 --mode generate -p "\
 "
 # web demo
 python3 web_demo.py -m ../codegeex2-ggml.bin --temp 0 --max_length 512 --mode generate --plain
+```
+
+**Load and optimize Hugging Face LLMs in one line of code**
+
+Sometimes it might be inconvenient to convert and save the intermediate GGML models beforehand. Here is an option to directly load from the original Hugging Face model, quantize it into GGML models in a minute, and start serving. All you need is to replace the GGML model path with the Hugging Face model name or path.
+```python
+>>> import chatglm_cpp
+>>> 
+>>> pipeline = chatglm_cpp.Pipeline("THUDM/chatglm-6b", dtype="q4_0")
+Loading checkpoint shards: 100%|█████████████████████████████████████████████| 8/8 [00:10<00:00,  1.27s/it]
+Processing model states: 100%|███████████████████████████████████████████| 339/339 [00:23<00:00, 14.73it/s]
+...
+>>> pipeline.chat(["你好"])
+'你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。'
+```
+
+Likewise, replace the GGML model path with Hugging Face model in any example script, and it just works. For example:
+```sh
+python3 cli_chat.py -m THUDM/chatglm-6b -p 你好 -i
 ```
 
 ## API Server
