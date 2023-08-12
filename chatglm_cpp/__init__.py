@@ -5,7 +5,7 @@ from typing import Iterator, List, Optional, Union
 
 import chatglm_cpp._C as _C
 
-__version__ = "0.2.4"
+__version__ = "0.2.5"
 
 
 class Pipeline(_C.Pipeline):
@@ -34,6 +34,7 @@ class Pipeline(_C.Pipeline):
         top_k: int = 0,
         top_p: float = 0.7,
         temperature: float = 0.95,
+        repetition_penalty: float = 1.0,
         num_threads: int = 0,
         stream: bool = False,
     ) -> Union[Iterator[str], str]:
@@ -46,6 +47,7 @@ class Pipeline(_C.Pipeline):
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
+            repetition_penalty=repetition_penalty,
             num_threads=num_threads,
             stream=stream,
         )
@@ -60,6 +62,7 @@ class Pipeline(_C.Pipeline):
         top_k: int = 0,
         top_p: float = 0.7,
         temperature: float = 0.95,
+        repetition_penalty: float = 1.0,
         num_threads: int = 0,
         stream: bool = False,
     ) -> Union[Iterator[str], str]:
@@ -70,6 +73,7 @@ class Pipeline(_C.Pipeline):
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
+            repetition_penalty=repetition_penalty,
             num_threads=num_threads,
         )
 
@@ -79,17 +83,15 @@ class Pipeline(_C.Pipeline):
     def _stream_generate(self, prompt: str, gen_config: _C.GenerationConfig) -> Iterator[str]:
         input_ids = self.tokenizer.encode(prompt, gen_config.max_context_length)
 
-        output_ids = input_ids
         n_past = 0
         n_ctx = len(input_ids)
 
         token_cache = []
         print_len = 0
-        while len(output_ids) < gen_config.max_length:
+        while len(input_ids) < gen_config.max_length:
             next_token_id = self.model.generate_next_token(input_ids, gen_config, n_past, n_ctx)
-            n_past += len(input_ids)
-            input_ids = [next_token_id]
-            output_ids.append(next_token_id)
+            n_past = len(input_ids)
+            input_ids.append(next_token_id)
 
             token_cache.append(next_token_id)
             output = self.tokenizer.decode(token_cache)
@@ -113,19 +115,17 @@ class Pipeline(_C.Pipeline):
     def _generate(self, prompt: str, gen_config: _C.GenerationConfig) -> str:
         input_ids = self.tokenizer.encode(prompt, gen_config.max_context_length)
 
-        output_ids = input_ids
         n_past = 0
         n_ctx = len(input_ids)
 
-        while len(output_ids) < gen_config.max_length:
+        while len(input_ids) < gen_config.max_length:
             next_token_id = self.model.generate_next_token(input_ids, gen_config, n_past, n_ctx)
-            n_past += len(input_ids)
-            input_ids = [next_token_id]
-            output_ids.append(next_token_id)
+            n_past = len(input_ids)
+            input_ids.append(next_token_id)
             if next_token_id == self.model.config.eos_token_id:
                 break
 
-        output = self.tokenizer.decode(output_ids[n_ctx:])
+        output = self.tokenizer.decode(input_ids[n_ctx:])
         return output
 
     def stream_chat(
@@ -138,6 +138,7 @@ class Pipeline(_C.Pipeline):
         top_k: int = 0,
         top_p: float = 0.7,
         temperature: float = 0.95,
+        repetition_penalty: float = 1.0,
         num_threads: int = 0,
     ) -> Iterator[str]:
         warnings.warn(
@@ -153,6 +154,7 @@ class Pipeline(_C.Pipeline):
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
+            repetition_penalty=repetition_penalty,
             num_threads=num_threads,
             stream=True,
         )

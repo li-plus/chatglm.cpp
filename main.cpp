@@ -29,6 +29,7 @@ struct Args {
     int top_k = 0;
     float top_p = 0.7;
     float temp = 0.95;
+    float repeat_penalty = 1.0;
     int num_threads = 0;
     bool verbose = false;
 };
@@ -48,6 +49,7 @@ static void usage(const char *prog) {
               << "  --top_k N               top-k sampling (default: 0)\n"
               << "  --top_p N               top-p sampling (default: 0.7)\n"
               << "  --temp N                temperature (default: 0.95)\n"
+              << "  --repeat_penalty N      penalize repeat sequence of tokens (default: 1.0, 1.0 = disabled)\n"
               << "  -t, --threads N         number of threads for inference\n"
               << "  -v, --verbose           display verbose output including config/system/performance info\n";
 }
@@ -79,6 +81,8 @@ static Args parse_args(int argc, char **argv) {
             args.top_p = std::stof(argv[++i]);
         } else if (arg == "--temp") {
             args.temp = std::stof(argv[++i]);
+        } else if (arg == "--repeat_penalty") {
+            args.repeat_penalty = std::stof(argv[++i]);
         } else if (arg == "-t" || arg == "--threads") {
             args.num_threads = std::stoi(argv[++i]);
         } else if (arg == "-v" || arg == "--verbose") {
@@ -139,7 +143,7 @@ static void chat(Args &args) {
         std::vector<std::shared_ptr<chatglm::BaseStreamer>>{text_streamer, perf_streamer});
 
     chatglm::GenerationConfig gen_config(args.max_length, args.max_context_length, args.temp > 0, args.top_k,
-                                         args.top_p, args.temp, args.num_threads);
+                                         args.top_p, args.temp, args.repeat_penalty, args.num_threads);
 
     if (args.verbose) {
         std::cout << "system info: | "

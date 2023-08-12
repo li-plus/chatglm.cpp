@@ -15,6 +15,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <thread>
+#include <unordered_set>
 
 #ifdef __has_include
 #if __has_include(<unistd.h>)
@@ -444,14 +445,15 @@ int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int
     if (n_threads <= 0) {
         n_threads = get_default_num_threads(); // default thread num
     }
-    if (input_ids.size() >= 32 && ggml_cpu_has_blas() && !ggml_cpu_has_gpublas()) {
+    int curr_input_ids_size = input_ids.size() - n_past;
+    if (curr_input_ids_size >= 32 && ggml_cpu_has_blas() && !ggml_cpu_has_gpublas()) {
         n_threads = 1; // use 1 thread if BLAS is enabled
     }
 
-    ggml_tensor *input_ids_tensor = ggml_new_tensor_1d(ctx_.ctx_b.get(), GGML_TYPE_I32, input_ids.size());
-    memcpy(input_ids_tensor->data, input_ids.data(), ggml_nbytes(input_ids_tensor));
+    ggml_tensor *curr_input_ids = ggml_new_tensor_1d(ctx_.ctx_b.get(), GGML_TYPE_I32, curr_input_ids_size);
+    memcpy(curr_input_ids->data, input_ids.data() + n_past, ggml_nbytes(curr_input_ids));
 
-    ggml_tensor *lm_logits = forward(&ctx_, input_ids_tensor, n_past, n_ctx);
+    ggml_tensor *lm_logits = forward(&ctx_, curr_input_ids, n_past, n_ctx);
     lm_logits->backend = GGML_BACKEND_CPU;
 
     ggml_build_forward_expand(&ctx_.gf, lm_logits);
@@ -471,6 +473,12 @@ int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int
 
     int vocab_size = lm_logits->ne[0];
     float *next_token_logits = (float *)lm_logits->data;
+
+    // logits pre-process
+    if (gen_config.repetition_penalty != 1.f) {
+        sampling_repetition_penalty(next_token_logits, next_token_logits + vocab_size, input_ids,
+                                    gen_config.repetition_penalty);
+    }
 
     int next_token_id;
     if (gen_config.do_sample) {
@@ -514,6 +522,20 @@ int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int
     }
 
     return next_token_id;
+}
+
+void BaseModelForConditionalGeneration::sampling_repetition_penalty(float *first, float *last,
+                                                                    const std::vector<int> &input_ids, float penalty) {
+    CHATGLM_CHECK(penalty > 0) << "penalty must be a positive float, but got " << penalty;
+    std::unordered_set<int> unique_input_ids(input_ids.begin(), input_ids.end());
+    for (int id : unique_input_ids) {
+        CHATGLM_CHECK(first <= first + id && first + id < last) << "invalid input id " << id;
+        if (first[id] > 0) {
+            first[id] /= penalty;
+        } else {
+            first[id] *= penalty;
+        }
+    }
 }
 
 void BaseModelForConditionalGeneration::sampling_temperature(float *first, float *last, float temp) {
@@ -572,8 +594,6 @@ std::vector<int> BaseModelForConditionalGeneration::generate(const std::vector<i
         << "requested max_length (" << gen_config.max_length << ") is larger than model's max_length ("
         << config_.max_length << ")";
 
-    std::vector<int> curr_input_ids(input_ids);
-
     std::vector<int> output_ids;
     output_ids.reserve(gen_config.max_length);
     output_ids = input_ids;
@@ -585,10 +605,9 @@ std::vector<int> BaseModelForConditionalGeneration::generate(const std::vector<i
     const int n_ctx = input_ids.size();
 
     while ((int)output_ids.size() < gen_config.max_length) {
-        int next_token_id = generate_next_token(curr_input_ids, gen_config, n_past, n_ctx);
+        int next_token_id = generate_next_token(output_ids, gen_config, n_past, n_ctx);
 
-        n_past += curr_input_ids.size();
-        curr_input_ids = {next_token_id};
+        n_past = output_ids.size();
         output_ids.emplace_back(next_token_id);
 
         if (streamer) {

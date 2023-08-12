@@ -109,6 +109,21 @@ static std::vector<int> extract_sorted_ids(std::vector<TokenIdScore> &token_scor
     return token_ids;
 }
 
+TEST(Sampling, RepetitionPenalty) {
+    constexpr float penalty = 1.2;
+    std::vector<float> logits{0.96, 1.2, -2, -0.8, 0, 2.4, -1};
+    std::vector<int> input_ids{0, 2, 5, 2};
+    // reference
+    std::vector<float> target{0.8, 1.2, -2.4, -0.8, 0, 2, -1};
+    // test
+    BaseModelForConditionalGeneration::sampling_repetition_penalty(logits.data(), logits.data() + logits.size(),
+                                                                   input_ids, penalty);
+    // compare
+    for (size_t i = 0; i < logits.size(); i++) {
+        EXPECT_FLOAT_EQ(logits[i], target[i]);
+    }
+}
+
 TEST(Sampling, Temperature) {
     constexpr float temp = 0.7;
     std::vector<float> logits(64);

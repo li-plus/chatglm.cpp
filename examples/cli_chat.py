@@ -31,6 +31,7 @@ def main():
     parser.add_argument("--top_k", default=0, type=int, help="top-k sampling")
     parser.add_argument("--top_p", default=0.7, type=float, help="top-p sampling")
     parser.add_argument("--temp", default=0.95, type=float, help="temperature")
+    parser.add_argument("--repeat_penalty", default=1.0, type=float, help="penalize repeat sequence of tokens")
     parser.add_argument("-t", "--threads", default=0, type=int, help="number of threads for inference")
     args = parser.parse_args()
 
@@ -47,6 +48,7 @@ def main():
         top_k=args.top_k,
         top_p=args.top_p,
         temperature=args.temp,
+        repetition_penalty=args.repeat_penalty,
         stream=True,
     )
 
