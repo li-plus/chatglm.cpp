@@ -374,19 +374,6 @@ class ChatGLMTokenizer : public BaseTokenizer {
     int pad_token_id;
 };
 
-class GLMMLP {
-  public:
-    GLMMLP() = default;
-    GLMMLP(ModelContext *ctx, int hidden_size)
-        : dense_h_to_4h(ctx, hidden_size, 4 * hidden_size), dense_4h_to_h(ctx, 4 * hidden_size, hidden_size) {}
-
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const;
-
-  public:
-    Linear dense_h_to_4h;
-    Linear dense_4h_to_h;
-};
-
 class GLMSelfAttention {
   public:
     // TODO: kv cache type
@@ -401,6 +388,19 @@ class GLMSelfAttention {
     int num_attention_heads;
     ggml_tensor *k_cache; // [n_head, maxlen, head_size]
     ggml_tensor *v_cache; // [n_head, head_size, maxlen]
+};
+
+class GLMMLP {
+  public:
+    GLMMLP() = default;
+    GLMMLP(ModelContext *ctx, int hidden_size)
+        : dense_h_to_4h(ctx, hidden_size, 4 * hidden_size), dense_4h_to_h(ctx, 4 * hidden_size, hidden_size) {}
+
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const;
+
+  public:
+    Linear dense_h_to_4h;
+    Linear dense_4h_to_h;
 };
 
 class GLMBlock {

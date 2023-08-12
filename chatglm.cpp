@@ -402,147 +402,6 @@ ggml_tensor *RMSNorm::forward(ModelContext *ctx, ggml_tensor *input, float eps) 
     return output;
 }
 
-// ===== ChatGLM-6B =====
-
-ChatGLMTokenizer::ChatGLMTokenizer(std::string_view serialized_model_proto) {
-    const auto status = sp.LoadFromSerializedProto(serialized_model_proto);
-    CHATGLM_CHECK(status.ok()) << status.ToString();
-
-    bos_token_id = sp.PieceToId("<sop>");
-    eos_token_id = sp.PieceToId("<eop>");
-    mask_token_id = sp.PieceToId("[MASK]");
-    gmask_token_id = sp.PieceToId("[gMASK]");
-    pad_token_id = sp.PieceToId("<pad>");
-}
-
-std::vector<int> ChatGLMTokenizer::encode(const std::string &text, int max_length) const {
-    std::string input = preprocess(text);
-    std::vector<int> ids;
-    sp.Encode(input, &ids);
-    ids.insert(ids.end(), {gmask_token_id, bos_token_id});
-    if ((int)ids.size() > max_length) {
-        // sliding window: always take the last max_length tokens
-        ids.erase(ids.begin(), ids.end() - max_length);
-    }
-    return ids;
-}
-
-std::vector<int> ChatGLMTokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
-    std::string prompt = build_prompt(history);
-    std::vector<int> input_ids = encode(prompt, max_length);
-    return input_ids;
-}
-
-std::string ChatGLMTokenizer::build_prompt(const std::vector<std::string> &history) const {
-    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
-
-    std::ostringstream oss_prompt;
-    if (history.size() == 1) {
-        oss_prompt << history.front();
-    } else {
-        for (size_t i = 0; i < history.size(); i += 2) {
-            oss_prompt << "[Round " << i / 2 << "]\n问：" << history[i] << "\n答：";
-            if (i < history.size() - 1) {
-                oss_prompt << history[i + 1] << "\n";
-            }
-        }
-    }
-    return oss_prompt.str();
-}
-
-std::string ChatGLMTokenizer::decode(const std::vector<int> &ids) const {
-    std::string text;
-    sp.Decode(ids, &text);
-    text = postprocess(text);
-    return text;
-}
-
-static std::string regex_replace(const std::string &input, const std::regex &regex,
-                                 std::function<std::string(const std::smatch &)> format) {
-    std::ostringstream oss;
-    int last_index = 0;
-    for (auto it = std::sregex_iterator(input.begin(), input.end(), regex); it != std::sregex_iterator(); it++) {
-        oss << it->prefix() << format(*it);
-        last_index = it->position() + it->length();
-    }
-    oss << input.substr(last_index);
-    return oss.str();
-}
-
-std::string ChatGLMTokenizer::preprocess(const std::string &text) {
-    std::string output;
-
-    // newline token
-    {
-        static const std::regex newline_regex("\n");
-        output = std::regex_replace(text, newline_regex, "<n>");
-    }
-    // tab token
-    {
-        static const std::regex tab_regex("\t");
-        output = std::regex_replace(output, tab_regex, "<|tab|>");
-    }
-    // blank tokens
-    {
-        static const std::regex pattern(R"([ ]{2,80})");
-        output = regex_replace(output, pattern, [](const std::smatch &sm) {
-            std::ostringstream oss;
-            oss << "<|blank_" << sm.str().size() << "|>";
-            return oss.str();
-        });
-    }
-
-    return output;
-}
-
-static inline std::string replace_punctuations(const std::string &text) {
-    // reference: https://stackoverflow.com/questions/37989081/how-to-use-unicode-range-in-c-regex
-    static std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-    static const std::vector<std::pair<std::wregex, std::wstring>> punct_map{
-        {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff]),)")), converter.from_bytes("$1，")},
-        {std::wregex(converter.from_bytes(R"(,([\u4e00-\u9fff]))")), converter.from_bytes("，$1")},
-        {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff])!)")), converter.from_bytes("$1！")},
-        {std::wregex(converter.from_bytes(R"(!([\u4e00-\u9fff]))")), converter.from_bytes("！$1")},
-        {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff]):)")), converter.from_bytes("$1：")},
-        {std::wregex(converter.from_bytes(R"(:([\u4e00-\u9fff]))")), converter.from_bytes("：$1")},
-        {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff]);)")), converter.from_bytes("$1；")},
-        {std::wregex(converter.from_bytes(R"(;([\u4e00-\u9fff]))")), converter.from_bytes("；$1")},
-        {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff])\?)")), converter.from_bytes("$1？")},
-        {std::wregex(converter.from_bytes(R"(\?([\u4e00-\u9fff]))")), converter.from_bytes("？$1")},
-    };
-    std::wstring w_output = converter.from_bytes(text);
-    for (const auto &punct_pair : punct_map) {
-        w_output = std::regex_replace(w_output, punct_pair.first, punct_pair.second);
-    }
-    std::string output = converter.to_bytes(w_output);
-    return output;
-}
-
-std::string ChatGLMTokenizer::postprocess(const std::string &text) {
-    std::string output;
-
-    // newline token
-    {
-        static const std::regex pattern(R"(<n>)");
-        output = std::regex_replace(text, pattern, "\n");
-    }
-    // tab token
-    {
-        static const std::regex pattern(R"(<\|tab\|>)");
-        output = std::regex_replace(output, pattern, "\t");
-    }
-    // blank tokens
-    {
-        static const std::regex pattern(R"(<\|blank_(\d+)\|>)");
-        output = regex_replace(output, pattern,
-                               [](const std::smatch &sm) { return std::string(std::stoi(sm[1].str()), ' '); });
-    }
-    // punctuations
-    output = replace_punctuations(output);
-
-    return output;
-}
-
 // Adapted from https://github.com/ggerganov/llama.cpp/blob/master/examples/common.cpp
 int get_num_physical_cores() {
     unsigned int n_threads = std::thread::hardware_concurrency();
@@ -748,11 +607,144 @@ std::vector<int> BaseModelForConditionalGeneration::generate(const std::vector<i
     return output_ids;
 }
 
-ggml_tensor *GLMMLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) const {
-    ggml_tensor *output = dense_h_to_4h.forward(ctx, hidden_states);
-    output = ggml_gelu_inplace(ctx->ctx_b.get(), output);
-    tensor_assign_buffers(output);
-    output = dense_4h_to_h.forward(ctx, output);
+// ===== ChatGLM-6B =====
+
+ChatGLMTokenizer::ChatGLMTokenizer(std::string_view serialized_model_proto) {
+    const auto status = sp.LoadFromSerializedProto(serialized_model_proto);
+    CHATGLM_CHECK(status.ok()) << status.ToString();
+
+    bos_token_id = sp.PieceToId("<sop>");
+    eos_token_id = sp.PieceToId("<eop>");
+    mask_token_id = sp.PieceToId("[MASK]");
+    gmask_token_id = sp.PieceToId("[gMASK]");
+    pad_token_id = sp.PieceToId("<pad>");
+}
+
+std::vector<int> ChatGLMTokenizer::encode(const std::string &text, int max_length) const {
+    std::string input = preprocess(text);
+    std::vector<int> ids;
+    sp.Encode(input, &ids);
+    ids.insert(ids.end(), {gmask_token_id, bos_token_id});
+    if ((int)ids.size() > max_length) {
+        // sliding window: always take the last max_length tokens
+        ids.erase(ids.begin(), ids.end() - max_length);
+    }
+    return ids;
+}
+
+std::vector<int> ChatGLMTokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
+    std::string prompt = build_prompt(history);
+    std::vector<int> input_ids = encode(prompt, max_length);
+    return input_ids;
+}
+
+std::string ChatGLMTokenizer::build_prompt(const std::vector<std::string> &history) const {
+    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
+
+    std::ostringstream oss_prompt;
+    if (history.size() == 1) {
+        oss_prompt << history.front();
+    } else {
+        for (size_t i = 0; i < history.size(); i += 2) {
+            oss_prompt << "[Round " << i / 2 << "]\n问：" << history[i] << "\n答：";
+            if (i < history.size() - 1) {
+                oss_prompt << history[i + 1] << "\n";
+            }
+        }
+    }
+    return oss_prompt.str();
+}
+
+std::string ChatGLMTokenizer::decode(const std::vector<int> &ids) const {
+    std::string text;
+    sp.Decode(ids, &text);
+    text = postprocess(text);
+    return text;
+}
+
+static std::string regex_replace(const std::string &input, const std::regex &regex,
+                                 std::function<std::string(const std::smatch &)> format) {
+    std::ostringstream oss;
+    int last_index = 0;
+    for (auto it = std::sregex_iterator(input.begin(), input.end(), regex); it != std::sregex_iterator(); it++) {
+        oss << it->prefix() << format(*it);
+        last_index = it->position() + it->length();
+    }
+    oss << input.substr(last_index);
+    return oss.str();
+}
+
+std::string ChatGLMTokenizer::preprocess(const std::string &text) {
+    std::string output;
+
+    // newline token
+    {
+        static const std::regex newline_regex("\n");
+        output = std::regex_replace(text, newline_regex, "<n>");
+    }
+    // tab token
+    {
+        static const std::regex tab_regex("\t");
+        output = std::regex_replace(output, tab_regex, "<|tab|>");
+    }
+    // blank tokens
+    {
+        static const std::regex pattern(R"([ ]{2,80})");
+        output = regex_replace(output, pattern, [](const std::smatch &sm) {
+            std::ostringstream oss;
+            oss << "<|blank_" << sm.str().size() << "|>";
+            return oss.str();
+        });
+    }
+
+    return output;
+}
+
+static inline std::string replace_punctuations(const std::string &text) {
+    // reference: https://stackoverflow.com/questions/37989081/how-to-use-unicode-range-in-c-regex
+    static std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+    static const std::vector<std::pair<std::wregex, std::wstring>> punct_map{
+        {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff]),)")), converter.from_bytes("$1，")},
+        {std::wregex(converter.from_bytes(R"(,([\u4e00-\u9fff]))")), converter.from_bytes("，$1")},
+        {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff])!)")), converter.from_bytes("$1！")},
+        {std::wregex(converter.from_bytes(R"(!([\u4e00-\u9fff]))")), converter.from_bytes("！$1")},
+        {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff]):)")), converter.from_bytes("$1：")},
+        {std::wregex(converter.from_bytes(R"(:([\u4e00-\u9fff]))")), converter.from_bytes("：$1")},
+        {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff]);)")), converter.from_bytes("$1；")},
+        {std::wregex(converter.from_bytes(R"(;([\u4e00-\u9fff]))")), converter.from_bytes("；$1")},
+        {std::wregex(converter.from_bytes(R"(([\u4e00-\u9fff])\?)")), converter.from_bytes("$1？")},
+        {std::wregex(converter.from_bytes(R"(\?([\u4e00-\u9fff]))")), converter.from_bytes("？$1")},
+    };
+    std::wstring w_output = converter.from_bytes(text);
+    for (const auto &punct_pair : punct_map) {
+        w_output = std::regex_replace(w_output, punct_pair.first, punct_pair.second);
+    }
+    std::string output = converter.to_bytes(w_output);
+    return output;
+}
+
+std::string ChatGLMTokenizer::postprocess(const std::string &text) {
+    std::string output;
+
+    // newline token
+    {
+        static const std::regex pattern(R"(<n>)");
+        output = std::regex_replace(text, pattern, "\n");
+    }
+    // tab token
+    {
+        static const std::regex pattern(R"(<\|tab\|>)");
+        output = std::regex_replace(output, pattern, "\t");
+    }
+    // blank tokens
+    {
+        static const std::regex pattern(R"(<\|blank_(\d+)\|>)");
+        output = regex_replace(output, pattern,
+                               [](const std::smatch &sm) { return std::string(std::stoi(sm[1].str()), ' '); });
+    }
+    // punctuations
+    output = replace_punctuations(output);
+
     return output;
 }
 
@@ -856,6 +848,14 @@ ggml_tensor *GLMSelfAttention::forward(ModelContext *ctx, ggml_tensor *hidden_st
 
     ggml_tensor *attn_output = dense.forward(ctx, context_layer);
     return attn_output;
+}
+
+ggml_tensor *GLMMLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) const {
+    ggml_tensor *output = dense_h_to_4h.forward(ctx, hidden_states);
+    output = ggml_gelu_inplace(ctx->ctx_b.get(), output);
+    tensor_assign_buffers(output);
+    output = dense_4h_to_h.forward(ctx, output);
+    return output;
 }
 
 ggml_tensor *GLMBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
