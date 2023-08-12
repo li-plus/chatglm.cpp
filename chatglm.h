@@ -281,12 +281,13 @@ struct GenerationConfig {
     int top_k;
     float top_p;
     float temperature;
+    float repetition_penalty;
     int num_threads;
 
     GenerationConfig(int max_length = 2048, int max_context_length = 512, bool do_sample = true, int top_k = 0,
-                     float top_p = 0.7, float temperature = 0.95, int num_threads = 0)
+                     float top_p = 0.7, float temperature = 0.95, float repetition_penalty = 1.f, int num_threads = 0)
         : max_length(max_length), max_context_length(max_context_length), do_sample(do_sample), top_k(top_k),
-          top_p(top_p), temperature(temperature), num_threads(num_threads) {}
+          top_p(top_p), temperature(temperature), repetition_penalty(repetition_penalty), num_threads(num_threads) {}
 };
 
 enum ModelType {
@@ -331,6 +332,10 @@ class BaseModelForConditionalGeneration {
     int generate_next_token(const std::vector<int> &input_ids, const GenerationConfig &gen_config, int n_past,
                             int n_ctx);
 
+    // logits processor
+    static void sampling_repetition_penalty(float *first, float *last, const std::vector<int> &input_ids,
+                                            float penalty);
+    // logits warper
     static void sampling_temperature(float *first, float *last, float temp);
     static void sampling_top_k(TokenIdScore *first, TokenIdScore *kth, TokenIdScore *last);
     static TokenIdScore *sampling_top_p(TokenIdScore *first, TokenIdScore *last, float top_p);
@@ -374,19 +379,6 @@ class ChatGLMTokenizer : public BaseTokenizer {
     int pad_token_id;
 };
 
-class GLMMLP {
-  public:
-    GLMMLP() = default;
-    GLMMLP(ModelContext *ctx, int hidden_size)
-        : dense_h_to_4h(ctx, hidden_size, 4 * hidden_size), dense_4h_to_h(ctx, 4 * hidden_size, hidden_size) {}
-
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const;
-
-  public:
-    Linear dense_h_to_4h;
-    Linear dense_4h_to_h;
-};
-
 class GLMSelfAttention {
   public:
     // TODO: kv cache type
@@ -401,6 +393,19 @@ class GLMSelfAttention {
     int num_attention_heads;
     ggml_tensor *k_cache; // [n_head, maxlen, head_size]
     ggml_tensor *v_cache; // [n_head, head_size, maxlen]
+};
+
+class GLMMLP {
+  public:
+    GLMMLP() = default;
+    GLMMLP(ModelContext *ctx, int hidden_size)
+        : dense_h_to_4h(ctx, hidden_size, 4 * hidden_size), dense_4h_to_h(ctx, 4 * hidden_size, hidden_size) {}
+
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const;
+
+  public:
+    Linear dense_h_to_4h;
+    Linear dense_4h_to_h;
 };
 
 class GLMBlock {

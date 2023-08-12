@@ -15,6 +15,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <thread>
+#include <unordered_set>
 
 #ifdef __has_include
 #if __has_include(<unistd.h>)
@@ -402,6 +403,229 @@ ggml_tensor *RMSNorm::forward(ModelContext *ctx, ggml_tensor *input, float eps) 
     return output;
 }
 
+// Adapted from https://github.com/ggerganov/llama.cpp/blob/master/examples/common.cpp
+int get_num_physical_cores() {
+    unsigned int n_threads = std::thread::hardware_concurrency();
+    return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
+}
+
+int get_default_num_threads() {
+#if defined(GGML_USE_CUBLAS) || defined(GGML_USE_METAL)
+    return 1;
+#else
+    return std::min(get_num_physical_cores(), 16);
+#endif
+}
+
+std::string to_string(ModelType model_type) {
+    switch (model_type) {
+    case MODEL_TYPE_CHATGLM:
+        return "ChatGLM";
+    case MODEL_TYPE_CHATGLM2:
+        return "ChatGLM2";
+    default:
+        CHATGLM_THROW << "unknown model type " << model_type;
+    }
+}
+
+BaseModelForConditionalGeneration::BaseModelForConditionalGeneration(ModelType model_type, BaseConfig config,
+                                                                     size_t mem_size, size_t scratch_size)
+    : model_type_(model_type), config_(config) {
+    ctx_.compute_buffer.resize(mem_size);
+    ctx_.scratch_buffer.resize(scratch_size);
+    ctx_.scratch = {0, ctx_.scratch_buffer.size(), ctx_.scratch_buffer.data()};
+}
+
+int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int> &input_ids,
+                                                           const GenerationConfig &gen_config, int n_past, int n_ctx) {
+    ctx_.ctx_b = make_unique_ggml_context(ctx_.compute_buffer.size(), ctx_.compute_buffer.data(), false);
+    ctx_.gf = {};
+
+    int n_threads = gen_config.num_threads; // user defined
+    if (n_threads <= 0) {
+        n_threads = get_default_num_threads(); // default thread num
+    }
+    int curr_input_ids_size = input_ids.size() - n_past;
+    if (curr_input_ids_size >= 32 && ggml_cpu_has_blas() && !ggml_cpu_has_gpublas()) {
+        n_threads = 1; // use 1 thread if BLAS is enabled
+    }
+
+    ggml_tensor *curr_input_ids = ggml_new_tensor_1d(ctx_.ctx_b.get(), GGML_TYPE_I32, curr_input_ids_size);
+    memcpy(curr_input_ids->data, input_ids.data() + n_past, ggml_nbytes(curr_input_ids));
+
+    ggml_tensor *lm_logits = forward(&ctx_, curr_input_ids, n_past, n_ctx);
+    lm_logits->backend = GGML_BACKEND_CPU;
+
+    ggml_build_forward_expand(&ctx_.gf, lm_logits);
+#ifdef GGML_USE_METAL
+    if (input_ids.size() == 1) {
+        ggml_metal_graph_compute(ctx_.ctx_metal.get(), &ctx_.gf);
+    } else {
+        ggml_graph_compute_helper(ctx_.work_buffer, &ctx_.gf, n_threads);
+    }
+#else
+    ggml_graph_compute_helper(ctx_.work_buffer, &ctx_.gf, n_threads);
+#endif
+
+#ifdef GGML_PERF
+    ggml_graph_print(&ctx_.gf);
+#endif
+
+    int vocab_size = lm_logits->ne[0];
+    float *next_token_logits = (float *)lm_logits->data;
+
+    // logits pre-process
+    if (gen_config.repetition_penalty != 1.f) {
+        sampling_repetition_penalty(next_token_logits, next_token_logits + vocab_size, input_ids,
+                                    gen_config.repetition_penalty);
+    }
+
+    int next_token_id;
+    if (gen_config.do_sample) {
+        // temperature sampling
+        if (gen_config.temperature > 0) {
+            sampling_temperature(next_token_logits, next_token_logits + vocab_size, gen_config.temperature);
+        }
+
+        std::vector<TokenIdScore> token_scores(vocab_size);
+        for (int i = 0; i < vocab_size; i++) {
+            token_scores[i] = TokenIdScore(i, next_token_logits[i]);
+        }
+
+        // top_k sampling
+        if (0 < gen_config.top_k && gen_config.top_k < (int)token_scores.size()) {
+            sampling_top_k(token_scores.data(), token_scores.data() + gen_config.top_k,
+                           token_scores.data() + token_scores.size());
+            token_scores.resize(gen_config.top_k);
+        }
+
+        // top_p sampling
+        if (0.f < gen_config.top_p && gen_config.top_p < 1.f) {
+            auto pos = sampling_top_p(token_scores.data(), token_scores.data() + token_scores.size(), gen_config.top_p);
+            token_scores.resize(pos - token_scores.data());
+        }
+
+        // sample next token
+        sampling_softmax_inplace(token_scores.data(), token_scores.data() + token_scores.size());
+        for (size_t i = 0; i < token_scores.size(); i++) {
+            next_token_logits[i] = token_scores[i].score;
+        }
+
+        thread_local std::random_device rd;
+        thread_local std::mt19937 gen(rd());
+
+        std::discrete_distribution<> dist(next_token_logits, next_token_logits + token_scores.size());
+        next_token_id = token_scores[dist(gen)].id;
+    } else {
+        // greedy search
+        next_token_id = std::max_element(next_token_logits, next_token_logits + vocab_size) - next_token_logits;
+    }
+
+    return next_token_id;
+}
+
+void BaseModelForConditionalGeneration::sampling_repetition_penalty(float *first, float *last,
+                                                                    const std::vector<int> &input_ids, float penalty) {
+    CHATGLM_CHECK(penalty > 0) << "penalty must be a positive float, but got " << penalty;
+    std::unordered_set<int> unique_input_ids(input_ids.begin(), input_ids.end());
+    for (int id : unique_input_ids) {
+        CHATGLM_CHECK(first <= first + id && first + id < last) << "invalid input id " << id;
+        if (first[id] > 0) {
+            first[id] /= penalty;
+        } else {
+            first[id] *= penalty;
+        }
+    }
+}
+
+void BaseModelForConditionalGeneration::sampling_temperature(float *first, float *last, float temp) {
+    float inv_temp = 1.f / temp;
+    for (float *it = first; it != last; it++) {
+        *it *= inv_temp;
+    }
+}
+
+void BaseModelForConditionalGeneration::sampling_top_k(TokenIdScore *first, TokenIdScore *kth, TokenIdScore *last) {
+    std::nth_element(first, kth, last, std::greater<TokenIdScore>());
+}
+
+TokenIdScore *BaseModelForConditionalGeneration::sampling_top_p(TokenIdScore *first, TokenIdScore *last, float top_p) {
+    // fast top_p in expected O(n) time complexity
+    sampling_softmax_inplace(first, last);
+
+    while (first + 1 < last) {
+        float pivot_score = (last - 1)->score; // use mid score?
+        TokenIdScore *mid =
+            std::partition(first, last - 1, [pivot_score](const TokenIdScore &x) { return x.score > pivot_score; });
+        std::swap(*mid, *(last - 1));
+
+        float prefix_sum =
+            std::accumulate(first, mid, 0.f, [](float sum, const TokenIdScore &x) { return sum + x.score; });
+        if (prefix_sum >= top_p) {
+            last = mid;
+        } else if (prefix_sum + mid->score < top_p) {
+            first = mid + 1;
+            top_p -= prefix_sum + mid->score;
+        } else {
+            return mid + 1;
+        }
+    }
+    return last;
+}
+
+void BaseModelForConditionalGeneration::sampling_softmax_inplace(TokenIdScore *first, TokenIdScore *last) {
+    float max_score = std::max_element(first, last)->score;
+    float sum = 0.f;
+    for (TokenIdScore *p = first; p != last; p++) {
+        float s = std::exp(p->score - max_score);
+        p->score = s;
+        sum += s;
+    }
+    float inv_sum = 1.f / sum;
+    for (TokenIdScore *p = first; p != last; p++) {
+        p->score *= inv_sum;
+    }
+}
+
+std::vector<int> BaseModelForConditionalGeneration::generate(const std::vector<int> &input_ids,
+                                                             const GenerationConfig &gen_config,
+                                                             BaseStreamer *streamer) {
+    CHATGLM_CHECK(gen_config.max_length <= config_.max_length)
+        << "requested max_length (" << gen_config.max_length << ") is larger than model's max_length ("
+        << config_.max_length << ")";
+
+    std::vector<int> output_ids;
+    output_ids.reserve(gen_config.max_length);
+    output_ids = input_ids;
+    if (streamer) {
+        streamer->put(input_ids);
+    }
+
+    int n_past = 0;
+    const int n_ctx = input_ids.size();
+
+    while ((int)output_ids.size() < gen_config.max_length) {
+        int next_token_id = generate_next_token(output_ids, gen_config, n_past, n_ctx);
+
+        n_past = output_ids.size();
+        output_ids.emplace_back(next_token_id);
+
+        if (streamer) {
+            streamer->put({next_token_id});
+        }
+
+        if (next_token_id == config_.eos_token_id) {
+            break;
+        }
+    }
+
+    if (streamer) {
+        streamer->end();
+    }
+
+    return output_ids;
+}
+
 // ===== ChatGLM-6B =====
 
 ChatGLMTokenizer::ChatGLMTokenizer(std::string_view serialized_model_proto) {
@@ -543,219 +767,6 @@ std::string ChatGLMTokenizer::postprocess(const std::string &text) {
     return output;
 }
 
-// Adapted from https://github.com/ggerganov/llama.cpp/blob/master/examples/common.cpp
-int get_num_physical_cores() {
-    unsigned int n_threads = std::thread::hardware_concurrency();
-    return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
-}
-
-int get_default_num_threads() {
-#if defined(GGML_USE_CUBLAS) || defined(GGML_USE_METAL)
-    return 1;
-#else
-    return std::min(get_num_physical_cores(), 16);
-#endif
-}
-
-std::string to_string(ModelType model_type) {
-    switch (model_type) {
-    case MODEL_TYPE_CHATGLM:
-        return "ChatGLM";
-    case MODEL_TYPE_CHATGLM2:
-        return "ChatGLM2";
-    default:
-        CHATGLM_THROW << "unknown model type " << model_type;
-    }
-}
-
-BaseModelForConditionalGeneration::BaseModelForConditionalGeneration(ModelType model_type, BaseConfig config,
-                                                                     size_t mem_size, size_t scratch_size)
-    : model_type_(model_type), config_(config) {
-    ctx_.compute_buffer.resize(mem_size);
-    ctx_.scratch_buffer.resize(scratch_size);
-    ctx_.scratch = {0, ctx_.scratch_buffer.size(), ctx_.scratch_buffer.data()};
-}
-
-int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int> &input_ids,
-                                                           const GenerationConfig &gen_config, int n_past, int n_ctx) {
-    ctx_.ctx_b = make_unique_ggml_context(ctx_.compute_buffer.size(), ctx_.compute_buffer.data(), false);
-    ctx_.gf = {};
-
-    int n_threads = gen_config.num_threads; // user defined
-    if (n_threads <= 0) {
-        n_threads = get_default_num_threads(); // default thread num
-    }
-    if (input_ids.size() >= 32 && ggml_cpu_has_blas() && !ggml_cpu_has_gpublas()) {
-        n_threads = 1; // use 1 thread if BLAS is enabled
-    }
-
-    ggml_tensor *input_ids_tensor = ggml_new_tensor_1d(ctx_.ctx_b.get(), GGML_TYPE_I32, input_ids.size());
-    memcpy(input_ids_tensor->data, input_ids.data(), ggml_nbytes(input_ids_tensor));
-
-    ggml_tensor *lm_logits = forward(&ctx_, input_ids_tensor, n_past, n_ctx);
-    lm_logits->backend = GGML_BACKEND_CPU;
-
-    ggml_build_forward_expand(&ctx_.gf, lm_logits);
-#ifdef GGML_USE_METAL
-    if (input_ids.size() == 1) {
-        ggml_metal_graph_compute(ctx_.ctx_metal.get(), &ctx_.gf);
-    } else {
-        ggml_graph_compute_helper(ctx_.work_buffer, &ctx_.gf, n_threads);
-    }
-#else
-    ggml_graph_compute_helper(ctx_.work_buffer, &ctx_.gf, n_threads);
-#endif
-
-#ifdef GGML_PERF
-    ggml_graph_print(&ctx_.gf);
-#endif
-
-    int vocab_size = lm_logits->ne[0];
-    float *next_token_logits = (float *)lm_logits->data;
-
-    int next_token_id;
-    if (gen_config.do_sample) {
-        // temperature sampling
-        if (gen_config.temperature > 0) {
-            sampling_temperature(next_token_logits, next_token_logits + vocab_size, gen_config.temperature);
-        }
-
-        std::vector<TokenIdScore> token_scores(vocab_size);
-        for (int i = 0; i < vocab_size; i++) {
-            token_scores[i] = TokenIdScore(i, next_token_logits[i]);
-        }
-
-        // top_k sampling
-        if (0 < gen_config.top_k && gen_config.top_k < (int)token_scores.size()) {
-            sampling_top_k(token_scores.data(), token_scores.data() + gen_config.top_k,
-                           token_scores.data() + token_scores.size());
-            token_scores.resize(gen_config.top_k);
-        }
-
-        // top_p sampling
-        if (0.f < gen_config.top_p && gen_config.top_p < 1.f) {
-            auto pos = sampling_top_p(token_scores.data(), token_scores.data() + token_scores.size(), gen_config.top_p);
-            token_scores.resize(pos - token_scores.data());
-        }
-
-        // sample next token
-        sampling_softmax_inplace(token_scores.data(), token_scores.data() + token_scores.size());
-        for (size_t i = 0; i < token_scores.size(); i++) {
-            next_token_logits[i] = token_scores[i].score;
-        }
-
-        thread_local std::random_device rd;
-        thread_local std::mt19937 gen(rd());
-
-        std::discrete_distribution<> dist(next_token_logits, next_token_logits + token_scores.size());
-        next_token_id = token_scores[dist(gen)].id;
-    } else {
-        // greedy search
-        next_token_id = std::max_element(next_token_logits, next_token_logits + vocab_size) - next_token_logits;
-    }
-
-    return next_token_id;
-}
-
-void BaseModelForConditionalGeneration::sampling_temperature(float *first, float *last, float temp) {
-    float inv_temp = 1.f / temp;
-    for (float *it = first; it != last; it++) {
-        *it *= inv_temp;
-    }
-}
-
-void BaseModelForConditionalGeneration::sampling_top_k(TokenIdScore *first, TokenIdScore *kth, TokenIdScore *last) {
-    std::nth_element(first, kth, last, std::greater<TokenIdScore>());
-}
-
-TokenIdScore *BaseModelForConditionalGeneration::sampling_top_p(TokenIdScore *first, TokenIdScore *last, float top_p) {
-    // fast top_p in expected O(n) time complexity
-    sampling_softmax_inplace(first, last);
-
-    while (first + 1 < last) {
-        float pivot_score = (last - 1)->score; // use mid score?
-        TokenIdScore *mid =
-            std::partition(first, last - 1, [pivot_score](const TokenIdScore &x) { return x.score > pivot_score; });
-        std::swap(*mid, *(last - 1));
-
-        float prefix_sum =
-            std::accumulate(first, mid, 0.f, [](float sum, const TokenIdScore &x) { return sum + x.score; });
-        if (prefix_sum >= top_p) {
-            last = mid;
-        } else if (prefix_sum + mid->score < top_p) {
-            first = mid + 1;
-            top_p -= prefix_sum + mid->score;
-        } else {
-            return mid + 1;
-        }
-    }
-    return last;
-}
-
-void BaseModelForConditionalGeneration::sampling_softmax_inplace(TokenIdScore *first, TokenIdScore *last) {
-    float max_score = std::max_element(first, last)->score;
-    float sum = 0.f;
-    for (TokenIdScore *p = first; p != last; p++) {
-        float s = std::exp(p->score - max_score);
-        p->score = s;
-        sum += s;
-    }
-    float inv_sum = 1.f / sum;
-    for (TokenIdScore *p = first; p != last; p++) {
-        p->score *= inv_sum;
-    }
-}
-
-std::vector<int> BaseModelForConditionalGeneration::generate(const std::vector<int> &input_ids,
-                                                             const GenerationConfig &gen_config,
-                                                             BaseStreamer *streamer) {
-    CHATGLM_CHECK(gen_config.max_length <= config_.max_length)
-        << "requested max_length (" << gen_config.max_length << ") is larger than model's max_length ("
-        << config_.max_length << ")";
-
-    std::vector<int> curr_input_ids(input_ids);
-
-    std::vector<int> output_ids;
-    output_ids.reserve(gen_config.max_length);
-    output_ids = input_ids;
-    if (streamer) {
-        streamer->put(input_ids);
-    }
-
-    int n_past = 0;
-    const int n_ctx = input_ids.size();
-
-    while ((int)output_ids.size() < gen_config.max_length) {
-        int next_token_id = generate_next_token(curr_input_ids, gen_config, n_past, n_ctx);
-
-        n_past += curr_input_ids.size();
-        curr_input_ids = {next_token_id};
-        output_ids.emplace_back(next_token_id);
-
-        if (streamer) {
-            streamer->put({next_token_id});
-        }
-
-        if (next_token_id == config_.eos_token_id) {
-            break;
-        }
-    }
-
-    if (streamer) {
-        streamer->end();
-    }
-
-    return output_ids;
-}
-
-ggml_tensor *GLMMLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) const {
-    ggml_tensor *output = dense_h_to_4h.forward(ctx, hidden_states);
-    output = ggml_gelu_inplace(ctx->ctx_b.get(), output);
-    tensor_assign_buffers(output);
-    output = dense_4h_to_h.forward(ctx, output);
-    return output;
-}
-
 GLMSelfAttention::GLMSelfAttention(ModelContext *ctx, int hidden_size, int num_attention_heads, int max_length)
     : query_key_value(ctx, hidden_size, 3 * hidden_size), dense(ctx, hidden_size, hidden_size),
       num_attention_heads(num_attention_heads),
@@ -856,6 +867,14 @@ ggml_tensor *GLMSelfAttention::forward(ModelContext *ctx, ggml_tensor *hidden_st
 
     ggml_tensor *attn_output = dense.forward(ctx, context_layer);
     return attn_output;
+}
+
+ggml_tensor *GLMMLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) const {
+    ggml_tensor *output = dense_h_to_4h.forward(ctx, hidden_states);
+    output = ggml_gelu_inplace(ctx->ctx_b.get(), output);
+    tensor_assign_buffers(output);
+    output = dense_4h_to_h.forward(ctx, output);
+    return output;
 }
 
 ggml_tensor *GLMBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
