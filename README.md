@@ -3,6 +3,7 @@
 [![CMake](https://github.com/li-plus/chatglm.cpp/actions/workflows/cmake.yml/badge.svg)](https://github.com/li-plus/chatglm.cpp/actions/workflows/cmake.yml)
 [![Python package](https://github.com/li-plus/chatglm.cpp/actions/workflows/python-package.yml/badge.svg)](https://github.com/li-plus/chatglm.cpp/actions/workflows/python-package.yml)
 [![PyPI](https://img.shields.io/pypi/v/chatglm-cpp)](https://pypi.org/project/chatglm-cpp/)
+![Python](https://img.shields.io/pypi/pyversions/chatglm-cpp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B) and [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B) for real-time chatting on your MacBook.
@@ -317,9 +318,31 @@ ChatGLM2-6B:
 
 ## Development
 
-* To perform unit tests, add the CMake flag `-DCHATGLM_ENABLE_TESTING=ON`, recompile, and run `./build/bin/chatglm_test`. For benchmark only, run `./build/bin/chatglm_test --gtest_filter=ChatGLM.benchmark`.
-* To format the code, run `cmake --build build --target lint`. You should have `clang-format`, `black` and `isort` pre-installed.
-* To check performance issue, add the CMake flag `-DGGML_PERF=ON`. It will show timing for each graph operation when running the model.
+**Unit Test & Benchmark**
+
+To perform unit tests, add this CMake flag `-DCHATGLM_ENABLE_TESTING=ON` to enable testing. Recompile and run the unit test (including benchmark).
+```sh
+mkdir -p build && cd build
+cmake .. -DCHATGLM_ENABLE_TESTING=ON && make -j
+./bin/chatglm_test
+```
+
+For benchmark only:
+```sh
+./bin/chatglm_test --gtest_filter='Benchmark.*'
+```
+
+**Lint**
+
+To format the code, run `make lint` inside the `build` folder. You should have `clang-format`, `black` and `isort` pre-installed.
+
+**Performance**
+
+To detect the performance bottleneck, add the CMake flag `-DGGML_PERF=ON`:
+```sh
+cmake .. -DGGML_PERF=ON && make -j
+```
+This will print timing for each graph operation when running the model.
 
 ## Acknowledgements
 
