@@ -44,11 +44,11 @@ jobs:
       - uses: actions/upload-artifact@v3
         if: runner.os == 'Linux'
         with:
-          name: 'linux-cuda-wheels'
+          name: 'linux-wheels'
           path: ./dist/*.whl
 
       - uses: actions/upload-artifact@v3
         if: runner.os == 'Windows'
         with:
-          name: 'windows-cuda-wheels'
+          name: 'windows-wheels'
           path: ./dist/*.whl
