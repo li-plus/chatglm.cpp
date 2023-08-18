@@ -20,19 +20,10 @@ jobs:
 
       - uses: actions/setup-python@v3
         with:
-          python-version: ${{ matrix.pyver }}
-
-      - name: Setup Miniconda
-        uses: conda-incubator/setup-miniconda@v2.2.0
+          python-version: ${{ matrix.pyver }}steps:
+      - uses: actions/checkout@v3
         with:
-          activate-environment: "build"
-          python-version: ${{ matrix.pyver }}
-          mamba-version: "*"
-          use-mamba: false
-          channels: conda-forge,defaults
-          channel-priority: true
-          add-pip-as-python-dependency: true
-          auto-activate-base: false
+          submodules: true
 
       - name: Install Dependencies
         run: |
