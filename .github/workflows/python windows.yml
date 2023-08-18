@@ -16,14 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          ref: 'main'
+          submodules: true
 
       - uses: actions/setup-python@v3
         with:
-          python-version: ${{ matrix.pyver }}steps:
-      - uses: actions/checkout@v3
-        with:
-          submodules: true
+          python-version: ${{ matrix.pyver }}
+      
 
       - name: Install Dependencies
         run: |
