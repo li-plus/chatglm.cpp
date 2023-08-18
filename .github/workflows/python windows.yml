@@ -1,7 +1,9 @@
 name: Build chatglm Wheels 
 
 on: workflow_dispatch
-
+env:
+  # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
+  BUILD_TYPE: Release
 jobs:
   build_wheels:
     name: Build wheels for ${{ matrix.os }} and Python ${{ matrix.python }}
