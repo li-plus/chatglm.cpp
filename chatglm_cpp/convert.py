@@ -12,7 +12,7 @@ from typing import BinaryIO, Optional
 import torch
 from tabulate import tabulate
 from tqdm import tqdm
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoTokenizer
 
 GGML_QK8_0 = 32
 GGML_QK4_0 = 32
@@ -40,6 +40,8 @@ class GGMLType(Enum):
 class ModelType(Enum):
     CHATGLM = 1
     CHATGLM2 = 2
+    BAICHUAN7B = 1024
+    BAICHUAN13B = 1025
 
 
 def quantize_q8_0(tensor: torch.Tensor) -> torch.CharTensor:
@@ -320,22 +322,88 @@ class ChatGLM2Converter(BaseConverter):
         dump_state_dict(f, weight_names, model.state_dict(), model.config.quantization_bit, ggml_type)
 
 
+class Baichuan13BConverter(BaseConverter):
+    MODEL_TYPE = ModelType.BAICHUAN13B
+
+    @staticmethod
+    def dump_config(f, config, ggml_type):
+        assert config.hidden_act == "silu", "unimplemented: hidden_act must be silu"
+
+        config_values = [
+            ggml_type.value,
+            config.vocab_size,
+            config.hidden_size,
+            config.num_attention_heads,
+            config.num_hidden_layers,
+            config.intermediate_size,
+            config.model_max_length,
+            config.bos_token_id if config.bos_token_id is not None else -1,
+            config.eos_token_id if config.eos_token_id is not None else -1,
+            config.pad_token_id if config.pad_token_id is not None else -1,
+            config.sep_token_id if config.sep_token_id is not None else -1,
+        ]
+
+        f.write(struct.pack("i" * len(config_values), *config_values))
+
+    @staticmethod
+    def dump_tokenizer(f, tokenizer):
+        serialized_model_proto = tokenizer.sp_model.serialized_model_proto()
+        f.write(struct.pack("i", len(serialized_model_proto)))
+        f.write(serialized_model_proto)
+
+    @staticmethod
+    def dump_model(f, model, ggml_type):
+        weight_names = ["model.embed_tokens.weight"]
+        for i in range(model.config.num_hidden_layers):
+            weight_names += [
+                f"model.layers.{i}.input_layernorm.weight",
+                f"model.layers.{i}.self_attn.W_pack.weight",
+                f"model.layers.{i}.self_attn.o_proj.weight",
+                f"model.layers.{i}.post_attention_layernorm.weight",
+                f"model.layers.{i}.mlp.gate_proj.weight",
+                f"model.layers.{i}.mlp.down_proj.weight",
+                f"model.layers.{i}.mlp.up_proj.weight",
+            ]
+        weight_names += [
+            "model.norm.weight",
+            "lm_head.weight",
+        ]
+        dump_state_dict(f, weight_names, model.state_dict(), quantization_bit=None, ggml_type=ggml_type)
+
+
 def convert(f: BinaryIO, model_name_or_path: str, lora_model_name_or_path: Optional[str] = None, dtype: str = "q4_0"):
     ggml_type = GGMLType[dtype.upper()]
 
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
-    model = AutoModel.from_pretrained(model_name_or_path, trust_remote_code=True)
+
+    config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+    if "AutoModel" in config.auto_map:
+        auto_model_class = AutoModel
+    elif "AutoModelForCausalLM" in config.auto_map:
+        auto_model_class = AutoModelForCausalLM
+    else:
+        raise RuntimeError(f"Cannot find auto model class to load {model_name_or_path}")
+
+    model = auto_model_class.from_pretrained(model_name_or_path, trust_remote_code=True)
+
     if lora_model_name_or_path is not None:
         from peft import PeftModel
 
         model = PeftModel.from_pretrained(model, lora_model_name_or_path)
         model = model.merge_and_unload()
 
-    # TODO: check model & tokenizer class name
-    if hasattr(model.config, "multi_query_attention"):
-        ChatGLM2Converter.convert(f, model, tokenizer, ggml_type)
+    if model.config.model_type == "chatglm":
+        if hasattr(model.config, "multi_query_attention"):
+            ChatGLM2Converter.convert(f, model, tokenizer, ggml_type)
+        else:
+            ChatGLMConverter.convert(f, model, tokenizer, ggml_type)
+    elif model.config.model_type == "baichuan":
+        if model.config.hidden_size == 5120:
+            Baichuan13BConverter.convert(f, model, tokenizer, ggml_type)
+        else:
+            raise RuntimeError(f"Baichuan-7B is not yet supported")
     else:
-        ChatGLMConverter.convert(f, model, tokenizer, ggml_type)
+        raise RuntimeError(f"Unknown model type {model.config.model_type}")
 
 
 def main():

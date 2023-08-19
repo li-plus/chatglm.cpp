@@ -48,6 +48,7 @@ The original model (`-i <model_name_or_path>`) can be a HuggingFace model name o
 * [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B): `THUDM/chatglm-6b`, `THUDM/chatglm-6b-int8`, `THUDM/chatglm-6b-int4`
 * [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B): `THUDM/chatglm2-6b`, `THUDM/chatglm2-6b-int4`
 * [CodeGeeX2](https://github.com/THUDM/CodeGeeX2): `THUDM/codegeex2-6b`, `THUDM/codegeex2-6b-int4`
+* [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B): `baichuan-inc/Baichuan-13B-Chat`
 
 You are free to try any of the below quantization types by specifying `-t <type>`:
 * `q4_0`: 4-bit integer quantization with fp16 scales.
@@ -109,6 +110,13 @@ def bubble_sort(list):
 
 
 print(bubble_sort([5, 4, 3, 2, 1]))
+```
+
+* Baichuan-13B-Chat
+```sh
+python3 chatglm_cpp/convert.py -i baichuan-inc/Baichuan-13B-Chat -t q4_0 -o baichuan13bchat-ggml.bin
+./build/bin/main -m baichuan13bchat-ggml.bin -p 你好呀 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1
+# 你好！很高兴见到你。请问有什么我可以帮助你的吗？
 ```
 
 ## Using BLAS
@@ -211,6 +219,12 @@ python3 cli_chat.py -m ../codegeex2-ggml.bin --temp 0 --mode generate -p "\
 "
 # web demo
 python3 web_demo.py -m ../codegeex2-ggml.bin --temp 0 --max_length 512 --mode generate --plain
+```
+
+* Baichuan-13B-Chat
+```sh
+python3 cli_chat.py -m ../baichuan13bchat-ggml.bin -p 你好呀 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1 # CLI demo
+python3 web_demo.py -m ../baichuan13bchat-ggml.bin --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1   # web demo
 ```
 
 **Load and optimize Hugging Face LLMs in one line of code**
