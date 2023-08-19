@@ -53,12 +53,12 @@ def test_codegeex2_pipeline():
     prompt = "# language: Python\n# write a bubble sort function\n"
     target = """
 
-def bubble_sort(lst):
-    for i in range(len(lst) - 1):
-        for j in range(len(lst) - 1 - i):
-            if lst[j] > lst[j + 1]:
-                lst[j], lst[j + 1] = lst[j + 1], lst[j]
-    return lst
+def bubble_sort(list):
+    for i in range(len(list) - 1):
+        for j in range(len(list) - 1):
+            if list[j] > list[j + 1]:
+                list[j], list[j + 1] = list[j + 1], list[j]
+    return list
 
 
 print(bubble_sort([5, 4, 3, 2, 1]))"""

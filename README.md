@@ -220,8 +220,8 @@ Sometimes it might be inconvenient to convert and save the intermediate GGML mod
 >>> import chatglm_cpp
 >>> 
 >>> pipeline = chatglm_cpp.Pipeline("THUDM/chatglm-6b", dtype="q4_0")
-Loading checkpoint shards: 100%|█████████████████████████████████████████████| 8/8 [00:10<00:00,  1.27s/it]
-Processing model states: 100%|███████████████████████████████████████████| 339/339 [00:23<00:00, 14.73it/s]
+Loading checkpoint shards: 100%|█████████████████████████████████████| 8/8 [00:10<00:00,  1.27s/it]
+Processing model states: 100%|███████████████████████████████████| 339/339 [00:23<00:00, 14.73it/s]
 ...
 >>> pipeline.chat(["你好"])
 '你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。'
@@ -265,7 +265,7 @@ For more options, please refer to [examples/langchain_client.py](examples/langch
 
 **OpenAI API**
 
-Start an API server compatible with OpenAI chat completions protocol:
+Start an API server compatible with [OpenAI chat completions protocol](https://platform.openai.com/docs/api-reference/chat):
 ```sh
 MODEL=./chatglm2-ggml.bin uvicorn chatglm_cpp.openai_api:app --host 127.0.0.1 --port 8000
 ```
@@ -276,7 +276,17 @@ curl http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/jso
     -d '{"messages": [{"role": "user", "content": "你好"}]}'
 ```
 
-Use the OpenAI client to make streaming request:
+Use the OpenAI client to chat with your model:
+```python
+>>> import openai
+>>> 
+>>> openai.api_base = "http://127.0.0.1:8000/v1"
+>>> response = openai.ChatCompletion.create(model="default-model", messages=[{"role": "user", "content": "你好"}])
+>>> response["choices"][0]["message"]["content"]
+'你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。'
+```
+
+For stream response, check out the example client script:
 ```sh
 OPENAI_API_BASE=http://127.0.0.1:8000/v1 python3 examples/openai_client.py --stream --prompt 你好
 ```
@@ -285,9 +295,19 @@ With this API server as backend, ChatGLM.cpp models can be seamlessly integrated
 
 ## Using Docker
 
+Building docker image locally and start a container to run inference on CPU:
 ```sh
-docker run -it --rm -v [model path]:/opt/ chulinx/chatglm /chatglm -m /opt/chatglm2-ggml.bin -p "你好啊"
-你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。
+docker build . --network=host -t chatglm-cpp
+docker run -it --rm -v $PWD:/opt chatglm-cpp ./build/bin/main -m /opt/chatglm-ggml.bin -p "你好"    # cpp demo
+docker run -it --rm -v $PWD:/opt chatglm-cpp python3 examples/cli_chat.py -m /opt/chatglm-ggml.bin -p "你好"    # python demo
+```
+
+For CUDA support, make sure [nvidia-docker](https://github.com/NVIDIA/nvidia-docker) is installed. Then run:
+```sh
+docker build . --network=host -t chatglm-cpp \
+    --build-arg BASE_IMAGE=nvidia/cuda:12.2.0-devel-ubuntu20.04 \
+    --build-arg CMAKE_ARGS="-DGGML_CUBLAS=ON"
+docker run -it --rm --gpus all -v $PWD:/chatglm.cpp/models chatglm-cpp ./build/bin/main -m models/chatglm-ggml.bin -p "你好"
 ```
 
 ## Performance

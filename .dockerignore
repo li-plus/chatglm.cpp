@@ -1,5 +1,11 @@
-CMakeCache.txt
+.git/
+.github/
+.hypothesis/
+.pytest_cache/
+build/
+chatglm_cpp.egg-info/
+dist/
+docker/
+.dockerignore
 *.bin
-examples/*.bin
-data/
-third_party/
+**/__pycache__/
