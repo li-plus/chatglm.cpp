@@ -1,0 +1,54 @@
+name: Build chatglm Wheels 
+
+on: workflow_dispatch
+env:
+  # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
+  BUILD_TYPE: Release
+jobs:
+  build_wheels:
+    name: Build wheels for ${{ matrix.os }} and Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        pyver: ["3.8", "3.9", "3.10", "3.11"]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: true
+
+      - uses: actions/setup-python@v3
+        with:
+          python-version: ${{ matrix.pyver }}
+      
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade build setuptools wheel ninja cmake
+      - name: Configure CMake
+        # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
+        # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
+        run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCHATGLM_ENABLE_TESTING=ON
+
+      - name: Build
+        # Build your program with the given configuration
+        run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}} -j
+
+      - name: Build Wheel
+        run: |
+          python setup.py sdist bdist_wheel
+
+      - uses: actions/upload-artifact@v3
+        if: runner.os == 'Linux'
+        with:
+          name: 'linux-wheels'
+          path: ./dist/*.whl
+
+      - uses: actions/upload-artifact@v3
+        if: runner.os == 'Windows'
+        with:
+          name: 'windows-wheels'
+          path: ./dist/*.whl
