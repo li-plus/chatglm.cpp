@@ -295,9 +295,19 @@ With this API server as backend, ChatGLM.cpp models can be seamlessly integrated
 
 ## Using Docker
 
+Building docker image locally and start a container to run inference on CPU:
 ```sh
-docker run -it --rm -v [model path]:/opt/ chulinx/chatglm /chatglm -m /opt/chatglm2-ggml.bin -p "你好啊"
-你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。
+docker build . --network=host -t chatglm-cpp
+docker run -it --rm -v $PWD:/opt chatglm-cpp ./build/bin/main -m /opt/chatglm-ggml.bin -p "你好"    # cpp demo
+docker run -it --rm -v $PWD:/opt chatglm-cpp python3 examples/cli_chat.py -m /opt/chatglm-ggml.bin -p "你好"    # python demo
+```
+
+For CUDA support, make sure [nvidia-docker](https://github.com/NVIDIA/nvidia-docker) is installed. Then run:
+```sh
+docker build . --network=host -t chatglm-cpp \
+    --build-arg BASE_IMAGE=nvidia/cuda:12.2.0-devel-ubuntu20.04 \
+    --build-arg CMAKE_ARGS="-DGGML_CUBLAS=ON"
+docker run -it --rm --gpus all -v $PWD:/chatglm.cpp/models chatglm-cpp ./build/bin/main -m models/chatglm-ggml.bin -p "你好"
 ```
 
 ## Performance
