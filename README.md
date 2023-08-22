@@ -220,8 +220,8 @@ Sometimes it might be inconvenient to convert and save the intermediate GGML mod
 >>> import chatglm_cpp
 >>> 
 >>> pipeline = chatglm_cpp.Pipeline("THUDM/chatglm-6b", dtype="q4_0")
-Loading checkpoint shards: 100%|█████████████████████████████████████| 8/8 [00:10<00:00,  1.27s/it]
-Processing model states: 100%|███████████████████████████████████| 339/339 [00:23<00:00, 14.73it/s]
+Loading checkpoint shards: 100%|██████████████████████████████████| 8/8 [00:10<00:00,  1.27s/it]
+Processing model states: 100%|████████████████████████████████| 339/339 [00:23<00:00, 14.73it/s]
 ...
 >>> pipeline.chat(["你好"])
 '你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。'
@@ -295,20 +295,39 @@ With this API server as backend, ChatGLM.cpp models can be seamlessly integrated
 
 ## Using Docker
 
+**Option 1: Building Locally**
+
 Building docker image locally and start a container to run inference on CPU:
 ```sh
-docker build . --network=host -t chatglm-cpp
-docker run -it --rm -v $PWD:/opt chatglm-cpp ./build/bin/main -m /opt/chatglm-ggml.bin -p "你好"    # cpp demo
-docker run -it --rm -v $PWD:/opt chatglm-cpp python3 examples/cli_chat.py -m /opt/chatglm-ggml.bin -p "你好"    # python demo
+docker build . --network=host -t chatglm.cpp
+# cpp demo
+docker run -it --rm -v $PWD:/opt chatglm.cpp ./build/bin/main -m /opt/chatglm-ggml.bin -p "你好"
+# python demo
+docker run -it --rm -v $PWD:/opt chatglm.cpp python3 examples/cli_chat.py -m /opt/chatglm-ggml.bin -p "你好"
+# langchain api server
+docker run -it --rm -v $PWD:/opt -p 8000:8000 -e MODEL=/opt/chatglm-ggml.bin chatglm.cpp \
+    uvicorn chatglm_cpp.langchain_api:app --host 0.0.0.0 --port 8000
+# openai api server
+docker run -it --rm -v $PWD:/opt -p 8000:8000 -e MODEL=/opt/chatglm-ggml.bin chatglm.cpp \
+    uvicorn chatglm_cpp.openai_api:app --host 0.0.0.0 --port 8000
 ```
 
 For CUDA support, make sure [nvidia-docker](https://github.com/NVIDIA/nvidia-docker) is installed. Then run:
 ```sh
-docker build . --network=host -t chatglm-cpp \
+docker build . --network=host -t chatglm.cpp-cuda \
     --build-arg BASE_IMAGE=nvidia/cuda:12.2.0-devel-ubuntu20.04 \
     --build-arg CMAKE_ARGS="-DGGML_CUBLAS=ON"
-docker run -it --rm --gpus all -v $PWD:/chatglm.cpp/models chatglm-cpp ./build/bin/main -m models/chatglm-ggml.bin -p "你好"
+docker run -it --rm --gpus all -v $PWD:/chatglm.cpp/models chatglm.cpp-cuda ./build/bin/main -m models/chatglm-ggml.bin -p "你好"
 ```
+
+**Option 2: Pulling from GHCR**
+
+Pre-built image for CPU inference is published on GitHub Container Registry (GHCR). Download it with the below script and use it in the same way:
+```sh
+docker pull ghcr.io/li-plus/chatglm.cpp:main
+```
+
+Visit [container/chatglm.cpp](https://github.com/li-plus/chatglm.cpp/pkgs/container/chatglm.cpp) for more information.
 
 ## Performance
 

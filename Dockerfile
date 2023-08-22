@@ -52,5 +52,7 @@ COPY --from=build /chatglm.cpp/dist/ /chatglm.cpp/dist/
 ADD examples examples
 
 RUN \
-    python3 -m pip install --no-cache-dir dist/*.whl && \
+    python3 -m pip install --upgrade -i https://pypi.tuna.tsinghua.edu.cn/simple pip && \
+    python3 -m pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
+    python3 -m pip install --no-cache-dir -f dist 'chatglm-cpp[api]' && \
     rm -rf dist

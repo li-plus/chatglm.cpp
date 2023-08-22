@@ -5,7 +5,7 @@
 build/
 chatglm_cpp.egg-info/
 dist/
-docker/
 .dockerignore
 *.bin
+Dockerfile
 **/__pycache__/
