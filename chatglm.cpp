@@ -458,11 +458,7 @@ int BaseModelForConditionalGeneration::generate_next_token(const std::vector<int
 
     ggml_build_forward_expand(&ctx_.gf, lm_logits);
 #ifdef GGML_USE_METAL
-    if (input_ids.size() == 1) {
-        ggml_metal_graph_compute(ctx_.ctx_metal.get(), &ctx_.gf);
-    } else {
-        ggml_graph_compute_helper(ctx_.work_buffer, &ctx_.gf, n_threads);
-    }
+    ggml_metal_graph_compute(ctx_.ctx_metal.get(), &ctx_.gf);
 #else
     ggml_graph_compute_helper(ctx_.work_buffer, &ctx_.gf, n_threads);
 #endif
@@ -1190,6 +1186,11 @@ ggml_tensor *GLM2MLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) con
 #ifdef GGML_USE_CUBLAS
     x0 = ggml_cont(gctx, x0);
     tensor_assign_buffers(x0);
+#elif defined(GGML_USE_METAL)
+    if (x0->ne[1] > 1) {
+        x0 = ggml_cont(gctx, x0);
+        tensor_assign_buffers(x0);
+    }
 #endif
     x0 = ggml_silu_inplace(gctx, x0);
     tensor_assign_buffers(x0);
@@ -1199,6 +1200,11 @@ ggml_tensor *GLM2MLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) con
 #ifdef GGML_USE_CUBLAS
     x1 = ggml_cont(gctx, x1);
     tensor_assign_buffers(x1);
+#elif defined(GGML_USE_METAL)
+    if (x1->ne[1] > 1) {
+        x1 = ggml_cont(gctx, x1);
+        tensor_assign_buffers(x1);
+    }
 #endif
 
     output = ggml_mul_inplace(gctx, x0, x1);

@@ -680,7 +680,7 @@ TEST_F(ChatGLMTest, GLM2Block) {
         EXPECT_EQ(out_y1->backend, x1->backend);
         out_y1->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y1);
-        cpu_graph_compute(get_num_threads());
+        device_graph_compute(get_num_threads());
 
         expect_all_close(ref_y1, out_y1, eps);
     }
@@ -759,7 +759,7 @@ TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
             ggml_tensor *self_attn_y = model.forward(&ctx, self_attn_x, 0);
             ggml_build_forward_expand(&ctx.gf, self_attn_y);
             std::cout << "[Benchmark] GLM2Block " << ggml_type_name(dtype)
-                      << " self attn time: " << perf_cpu_graph_compute() << " ms\n";
+                      << " self attn time: " << perf_device_graph_compute() << " ms\n";
         }
 
         // cross attention
