@@ -320,14 +320,23 @@ docker build . --network=host -t chatglm.cpp-cuda \
 docker run -it --rm --gpus all -v $PWD:/chatglm.cpp/models chatglm.cpp-cuda ./build/bin/main -m models/chatglm-ggml.bin -p "你好"
 ```
 
-**Option 2: Pulling from GHCR**
+**Option 2: Using Pre-built Image**
 
-Pre-built image for CPU inference is published on GitHub Container Registry (GHCR). Download it with the below script and use it in the same way:
+The pre-built image for CPU inference is published on both [Docker Hub](https://hub.docker.com/repository/docker/liplusx/chatglm.cpp) and [GitHub Container Registry (GHCR)](https://github.com/li-plus/chatglm.cpp/pkgs/container/chatglm.cpp).
+
+To pull from Docker Hub and run demo:
 ```sh
-docker pull ghcr.io/li-plus/chatglm.cpp:main
+docker run -it --rm -v $PWD:/opt liplusx/chatglm.cpp:main \
+    ./build/bin/main -m /opt/chatglm-ggml.bin -p "你好"
 ```
 
-Visit [container/chatglm.cpp](https://github.com/li-plus/chatglm.cpp/pkgs/container/chatglm.cpp) for more information.
+To pull from GHCR and run demo:
+```sh
+docker run -it --rm -v $PWD:/opt ghcr.io/li-plus/chatglm.cpp:main \
+    ./build/bin/main -m /opt/chatglm-ggml.bin -p "你好"
+```
+
+Python demo and API servers are also supported in pre-built image. Use it in the same way as **Option 1**.
 
 ## Performance
 
