@@ -35,7 +35,7 @@ struct Args {
     bool verbose = false;
 };
 
-static void usage(const char *prog) {
+static void usage(const std::string &prog) {
     std::cout << "Usage: " << prog << " [options]\n"
               << "\n"
               << "options:\n"
@@ -62,7 +62,7 @@ static Args parse_args(const std::vector<std::string> &argv) {
         const std::string &arg = argv[i];
 
         if (arg == "-h" || arg == "--help") {
-            usage(argv[0].c_str());
+            usage(argv[0]);
             exit(EXIT_SUCCESS);
         } else if (arg == "-m" || arg == "--model") {
             args.model_path = argv[++i];
@@ -90,7 +90,7 @@ static Args parse_args(const std::vector<std::string> &argv) {
             args.verbose = true;
         } else {
             std::cerr << "Unknown argument: " << arg << std::endl;
-            usage(argv[0].c_str());
+            usage(argv[0]);
             exit(EXIT_FAILURE);
         }
     }
