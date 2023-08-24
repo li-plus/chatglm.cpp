@@ -1,6 +1,7 @@
 #include "chatglm.h"
 #include <iomanip>
 #include <iostream>
+#include <codecvt>
 
 #if defined(_WIN32)
 #include <fcntl.h>
@@ -54,14 +55,14 @@ static void usage(const char *prog) {
               << "  -v, --verbose           display verbose output including config/system/performance info\n";
 }
 
-static Args parse_args(int argc, char **argv) {
+static Args parse_args(const std::vector<std::string>& argv) {
     Args args;
 
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
+    for (size_t i = 1; i < argv.size(); i++) {
+        const std::string &arg = argv[i];
 
         if (arg == "-h" || arg == "--help") {
-            usage(argv[0]);
+            usage(argv[0].c_str());
             exit(EXIT_SUCCESS);
         } else if (arg == "-m" || arg == "--model") {
             args.model_path = argv[++i];
@@ -89,12 +90,35 @@ static Args parse_args(int argc, char **argv) {
             args.verbose = true;
         } else {
             std::cerr << "Unknown argument: " << arg << std::endl;
-            usage(argv[0]);
+            usage(argv[0].c_str());
             exit(EXIT_FAILURE);
         }
     }
 
     return args;
+}
+
+static Args parse_args(int argc, char **argv) {
+    std::vector<std::string> argv_vec;
+    argv_vec.reserve(argc);
+
+#ifdef _WIN32
+    LPWSTR *wargs = CommandLineToArgvW(GetCommandLineW(), &argc);
+    CHATGLM_CHECK(wargs) << "failed to retrieve command line arguments";
+
+    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+    for (int i = 0; i < argc; i++) {
+        argv_vec.emplace_back(converter.to_bytes(wargs[i]));
+    }
+
+    LocalFree(wargs);
+#else
+    for (int i = 0; i < argc; i++) {
+        argv_vec.emplace_back(argv[i]);
+    }
+#endif
+
+    return parse_args(argv_vec);
 }
 
 #if defined(_WIN32)
