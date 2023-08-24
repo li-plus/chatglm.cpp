@@ -55,7 +55,7 @@ static void usage(const char *prog) {
               << "  -v, --verbose           display verbose output including config/system/performance info\n";
 }
 
-static Args parse_args(const std::vector<std::string>& argv) {
+static Args parse_args(const std::vector<std::string> &argv) {
     Args args;
 
     for (size_t i = 1; i < argv.size(); i++) {
@@ -122,15 +122,15 @@ static Args parse_args(int argc, char **argv) {
 }
 
 static bool get_utf8_line(std::string &line) {
-    #ifdef _WIN32
+#ifdef _WIN32
     std::wstring wline;
     bool ret = !!std::getline(std::wcin, wline);
     std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
     line = converter.to_bytes(wline);
-        return ret;
-    #else 
+    return ret;
+#else
     return !!std::getline(std::cin, line);
-    #endif
+#endif
 }
 
 static void chat(Args &args) {
