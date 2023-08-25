@@ -39,11 +39,11 @@ class LogMessageFatal {
 
 std::string to_string(ggml_tensor *tensor, bool with_data = true);
 
-void tensor_assign_buffers(ggml_tensor *tensor);
+ggml_tensor *tensor_assign_buffers(ggml_tensor *tensor);
 
-void tensor_to_device(ggml_tensor *tensor);
+ggml_tensor *tensor_to_device(ggml_tensor *tensor);
 
-void tensor_to_cpu(ggml_tensor *tensor);
+ggml_tensor *tensor_to_cpu(ggml_tensor *tensor);
 
 struct BaseConfig {
     // common attributes
