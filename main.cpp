@@ -2,7 +2,8 @@
 #include <iomanip>
 #include <iostream>
 
-#if defined(_WIN32)
+#ifdef _WIN32
+#include <codecvt>
 #include <fcntl.h>
 #include <io.h>
 #include <windows.h>
@@ -34,7 +35,7 @@ struct Args {
     bool verbose = false;
 };
 
-static void usage(const char *prog) {
+static void usage(const std::string &prog) {
     std::cout << "Usage: " << prog << " [options]\n"
               << "\n"
               << "options:\n"
@@ -54,11 +55,11 @@ static void usage(const char *prog) {
               << "  -v, --verbose           display verbose output including config/system/performance info\n";
 }
 
-static Args parse_args(int argc, char **argv) {
+static Args parse_args(const std::vector<std::string> &argv) {
     Args args;
 
-    for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
+    for (size_t i = 1; i < argv.size(); i++) {
+        const std::string &arg = argv[i];
 
         if (arg == "-h" || arg == "--help") {
             usage(argv[0]);
@@ -97,37 +98,40 @@ static Args parse_args(int argc, char **argv) {
     return args;
 }
 
-#if defined(_WIN32)
-static void append_utf8(char32_t ch, std::string &out) {
-    if (ch <= 0x7F) {
-        out.push_back(static_cast<unsigned char>(ch));
-    } else if (ch <= 0x7FF) {
-        out.push_back(static_cast<unsigned char>(0xC0 | ((ch >> 6) & 0x1F)));
-        out.push_back(static_cast<unsigned char>(0x80 | (ch & 0x3F)));
-    } else if (ch <= 0xFFFF) {
-        out.push_back(static_cast<unsigned char>(0xE0 | ((ch >> 12) & 0x0F)));
-        out.push_back(static_cast<unsigned char>(0x80 | ((ch >> 6) & 0x3F)));
-        out.push_back(static_cast<unsigned char>(0x80 | (ch & 0x3F)));
-    } else if (ch <= 0x10FFFF) {
-        out.push_back(static_cast<unsigned char>(0xF0 | ((ch >> 18) & 0x07)));
-        out.push_back(static_cast<unsigned char>(0x80 | ((ch >> 12) & 0x3F)));
-        out.push_back(static_cast<unsigned char>(0x80 | ((ch >> 6) & 0x3F)));
-        out.push_back(static_cast<unsigned char>(0x80 | (ch & 0x3F)));
-    } else {
-        // Invalid Unicode code point
+static Args parse_args(int argc, char **argv) {
+    std::vector<std::string> argv_vec;
+    argv_vec.reserve(argc);
+
+#ifdef _WIN32
+    LPWSTR *wargs = CommandLineToArgvW(GetCommandLineW(), &argc);
+    CHATGLM_CHECK(wargs) << "failed to retrieve command line arguments";
+
+    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+    for (int i = 0; i < argc; i++) {
+        argv_vec.emplace_back(converter.to_bytes(wargs[i]));
     }
+
+    LocalFree(wargs);
+#else
+    for (int i = 0; i < argc; i++) {
+        argv_vec.emplace_back(argv[i]);
+    }
+#endif
+
+    return parse_args(argv_vec);
 }
 
 static bool get_utf8_line(std::string &line) {
-    std::wstring prompt;
-    std::getline(std::wcin, prompt);
-    for (auto wc : prompt)
-        append_utf8(wc, line);
-    return true;
-}
+#ifdef _WIN32
+    std::wstring wline;
+    bool ret = !!std::getline(std::wcin, wline);
+    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+    line = converter.to_bytes(wline);
+    return ret;
 #else
-static bool get_utf8_line(std::string &line) { return !!std::getline(std::cin, line); }
+    return !!std::getline(std::cin, line);
 #endif
+}
 
 static void chat(Args &args) {
     ggml_time_init();
@@ -232,7 +236,7 @@ static void chat(Args &args) {
 }
 
 int main(int argc, char **argv) {
-#if defined(_WIN32)
+#ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
     _setmode(_fileno(stdin), _O_WTEXT);
 #endif
