@@ -293,14 +293,26 @@ TEST_F(ChatGLMTest, Linear) {
     ptr = read_tensor_data(ptr, ref);
     ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
 
+    // GEMV data
+    ggml_tensor *vx = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, 32);
+    memcpy(vx->data, x->data, 32 * sizeof(float));
+    ggml_tensor *vref = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, 16);
+    memcpy(vref->data, ref->data, 16 * sizeof(float));
+
     tensor_to_device(x);
+    tensor_to_device(vx);
+
+    struct TestCase {
+        ggml_tensor *x;
+        ggml_tensor *ref;
+    };
+    std::vector<TestCase> cases{{x, ref}, {vx, vref}};
 
     struct TestConfig {
         ggml_type dtype;
         float atol;
         float rtol;
     };
-
     std::vector<TestConfig> test_configs{
         {GGML_TYPE_F32, 1e-5, 0},
         {GGML_TYPE_F16, 5e-3, 0},
@@ -308,8 +320,6 @@ TEST_F(ChatGLMTest, Linear) {
     };
 
     for (const auto &config : test_configs) {
-        reset_cgraph();
-
         ctx.dtype = config.dtype;
         Linear model(&ctx, 32, 16);
 
@@ -327,20 +337,24 @@ TEST_F(ChatGLMTest, Linear) {
         tensor_to_device(model.weight);
         tensor_to_device(model.bias);
 
-        ggml_tensor *out = model.forward(&ctx, x);
-        EXPECT_EQ(out->backend, x->backend);
-        out->backend = GGML_BACKEND_CPU;
+        for (const auto &c : cases) {
+            reset_cgraph();
+            ggml_tensor *out = model.forward(&ctx, c.x);
+            EXPECT_EQ(out->backend, c.x->backend);
+            out->backend = GGML_BACKEND_CPU;
 
-        ggml_build_forward_expand(&ctx.gf, out);
-        device_graph_compute(get_num_threads());
+            ggml_build_forward_expand(&ctx.gf, out);
+            device_graph_compute(get_num_threads());
 
-        EXPECT_EQ(out->type, GGML_TYPE_F32);
-        expect_all_close(ref, out, config.atol, config.rtol);
+            EXPECT_EQ(out->type, GGML_TYPE_F32);
+            expect_all_close(c.ref, out, config.atol, config.rtol);
+        }
 
         tensor_to_cpu(model.weight);
         tensor_to_cpu(model.bias);
     }
     tensor_to_cpu(x);
+    tensor_to_cpu(vx);
 }
 
 TEST_F(ChatGLMTest, BenchmarkLinear) {
