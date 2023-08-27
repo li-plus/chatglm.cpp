@@ -17,13 +17,15 @@ static inline int get_num_threads() {
     return num_threads;
 }
 
-static inline void expect_all_close(ggml_tensor *a, ggml_tensor *b, float atol = 1e-5) {
+static inline void expect_all_close(ggml_tensor *a, ggml_tensor *b, float atol = 1e-5f, float rtol = 0.f) {
     ASSERT_EQ(a->type, b->type);
     ASSERT_EQ(a->type, GGML_TYPE_F32);
     ASSERT_EQ(ggml_nelements(a), ggml_nelements(b));
     int64_t numel = ggml_nelements(a);
     for (int64_t i = 0; i < numel; i++) {
-        EXPECT_LT(std::abs(((float *)a->data)[i] - ((float *)b->data)[i]), atol);
+        float ai = ((float *)a->data)[i];
+        float bi = ((float *)b->data)[i];
+        EXPECT_LT(std::abs(ai - bi), atol + rtol * std::abs(bi)) << "diff " << ai << " vs " << bi;
     }
 }
 
@@ -293,34 +295,34 @@ TEST_F(ChatGLMTest, Linear) {
 
     tensor_to_device(x);
 
-    // fp32
-    {
-        ctx.dtype = GGML_TYPE_F32;
-        Linear model(&ctx, 32, 16);
-        model.weight->data = w->data;
-        model.bias->data = b->data;
-        tensor_to_device(model.weight);
-        tensor_to_device(model.bias);
+    struct TestConfig {
+        ggml_type dtype;
+        float atol;
+        float rtol;
+    };
 
-        ggml_tensor *out = model.forward(&ctx, x);
-        EXPECT_EQ(out->backend, x->backend);
-        out->backend = GGML_BACKEND_CPU;
+    std::vector<TestConfig> test_configs{
+        {GGML_TYPE_F32, 1e-5, 0},
+        {GGML_TYPE_F16, 5e-3, 0},
+        {GGML_TYPE_Q4_0, 0.8, 0.2},
+    };
 
-        ggml_build_forward_expand(&ctx.gf, out);
-        device_graph_compute(get_num_threads());
-
-        expect_all_close(ref, out);
-
-        tensor_to_cpu(model.weight);
-        tensor_to_cpu(model.bias);
-    }
-    // fp16
-    {
+    for (const auto &config : test_configs) {
         reset_cgraph();
 
-        ctx.dtype = GGML_TYPE_F16;
+        ctx.dtype = config.dtype;
         Linear model(&ctx, 32, 16);
-        ggml_fp32_to_fp16_row((float *)w->data, (ggml_fp16_t *)model.weight->data, ggml_nelements(model.weight));
+
+        if (config.dtype == GGML_TYPE_F32) {
+            model.weight->data = w->data;
+        } else if (config.dtype == GGML_TYPE_F16) {
+            ggml_fp32_to_fp16_row((float *)w->data, (ggml_fp16_t *)model.weight->data, ggml_nelements(model.weight));
+        } else if (config.dtype == GGML_TYPE_Q4_0) {
+            int64_t hist[16]{};
+            ggml_quantize_q4_0((float *)w->data, model.weight->data, ggml_nelements(w), w->ne[0], hist);
+        } else {
+            CHATGLM_THROW << "unsupported dtype " << config.dtype;
+        }
         model.bias->data = b->data;
         tensor_to_device(model.weight);
         tensor_to_device(model.bias);
@@ -333,7 +335,7 @@ TEST_F(ChatGLMTest, Linear) {
         device_graph_compute(get_num_threads());
 
         EXPECT_EQ(out->type, GGML_TYPE_F32);
-        expect_all_close(ref, out, 8e-3);
+        expect_all_close(ref, out, config.atol, config.rtol);
 
         tensor_to_cpu(model.weight);
         tensor_to_cpu(model.bias);
