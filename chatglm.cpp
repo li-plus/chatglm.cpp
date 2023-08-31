@@ -379,10 +379,10 @@ ggml_tensor *Linear::forward(ModelContext *ctx, ggml_tensor *input) const {
     return output;
 }
 
-ggml_tensor *LayerNorm::forward(ModelContext *ctx, ggml_tensor *input) const {
+ggml_tensor *LayerNorm::forward(ModelContext *ctx, ggml_tensor *input, float eps) const {
     // input: [seqlen, normalized_shape]
     ggml_context *gctx = ctx->ctx_b.get();
-    ggml_tensor *output = tensor_assign_buffers(ggml_norm_inplace(gctx, input));
+    ggml_tensor *output = tensor_assign_buffers(ggml_norm_inplace(gctx, input, eps));
     output = tensor_assign_buffers(ggml_mul_inplace(gctx, output, weight));
     output = tensor_assign_buffers(ggml_add_inplace(gctx, output, bias));
     return output;
@@ -1284,10 +1284,9 @@ ggml_tensor *ChatGLM2ForCausalLM::forward(ModelContext *ctx, ggml_tensor *input_
     ggml_tensor *transformer_outputs = transformer.forward(ctx, input_ids, n_past);
     // NOTE: only compute next_token_logits for the last token
     if (input_ids->ne[0] > 1) {
-        transformer_outputs =
+        transformer_outputs = tensor_assign_buffers(
             ggml_view_1d(ctx->ctx_b.get(), transformer_outputs, config.hidden_size,
-                         (input_ids->ne[0] - 1) * config.hidden_size * ggml_element_size(transformer_outputs));
-        tensor_assign_buffers(transformer_outputs);
+                         (input_ids->ne[0] - 1) * config.hidden_size * ggml_element_size(transformer_outputs)));
     }
     ggml_tensor *lm_logits = lm_head.forward(ctx, transformer_outputs);
     return lm_logits;
@@ -1370,15 +1369,13 @@ ggml_tensor *Baichuan13BSelfAttention::forward(ModelContext *ctx, ggml_tensor *h
                      0); // [qlen, heads, head_size]
     query_layer = ggml_permute(gctx, query_layer, 0, 2, 1, 3);
 #ifdef GGML_USE_CUBLAS
-    query_layer = ggml_cont(gctx, query_layer);
-    tensor_assign_buffers(query_layer);
+    query_layer = tensor_assign_buffers(ggml_cont(gctx, query_layer));
 #endif
 
     ggml_tensor *key_layer =
         ggml_view_3d(gctx, qkv, head_size, num_attention_heads, qlen, head_size * ggml_element_size(qkv), qkv->nb[1],
-                     hidden_size * ggml_element_size(qkv)); // [qlen, heads, head_size]
-    key_layer = ggml_permute(gctx, key_layer, 0, 2, 1, 3);  // [heads, qlen, head_size]
-    tensor_assign_buffers(key_layer);
+                     hidden_size * ggml_element_size(qkv));                       // [qlen, heads, head_size]
+    key_layer = tensor_assign_buffers(ggml_permute(gctx, key_layer, 0, 2, 1, 3)); // [heads, qlen, head_size]
 
     // #ifdef GGML_USE_CUBLAS
     //     key_layer = ggml_cont(gctx, key_layer);
@@ -1387,53 +1384,43 @@ ggml_tensor *Baichuan13BSelfAttention::forward(ModelContext *ctx, ggml_tensor *h
 
     ggml_tensor *value_layer =
         ggml_view_3d(gctx, qkv, head_size, num_attention_heads, qlen, head_size * ggml_element_size(qkv), qkv->nb[1],
-                     2 * hidden_size * ggml_element_size(qkv)); // [qlen, heads, head_size]
-    value_layer = ggml_permute(gctx, value_layer, 1, 2, 0, 3);  // [heads, head_size, qlen]
-    tensor_assign_buffers(value_layer);
+                     2 * hidden_size * ggml_element_size(qkv));                       // [qlen, heads, head_size]
+    value_layer = tensor_assign_buffers(ggml_permute(gctx, value_layer, 1, 2, 0, 3)); // [heads, head_size, qlen]
 
     // store key & value to cache
-    ggml_tensor *k_cache_view =
+    ggml_tensor *k_cache_view = tensor_assign_buffers(
         ggml_view_3d(gctx, k_cache, head_size, qlen, num_attention_heads, k_cache->nb[1], k_cache->nb[2],
-                     n_past * head_size * ggml_element_size(k_cache)); // [heads, qlen, head_size]
-    tensor_assign_buffers(k_cache_view);
+                     n_past * head_size * ggml_element_size(k_cache))); // [heads, qlen, head_size]
     ggml_build_forward_expand(&ctx->gf, ggml_cpy(gctx, key_layer, k_cache_view));
-    ggml_tensor *v_cache_view =
+    ggml_tensor *v_cache_view = tensor_assign_buffers(
         ggml_view_3d(gctx, v_cache, qlen, head_size, num_attention_heads, v_cache->nb[1], v_cache->nb[2],
-                     n_past * ggml_element_size(v_cache)); // [heads, head_size, qlen]
-    tensor_assign_buffers(v_cache_view);
+                     n_past * ggml_element_size(v_cache))); // [heads, head_size, qlen]
     ggml_build_forward_expand(&ctx->gf, ggml_cpy(gctx, value_layer, v_cache_view));
 
     // concat key & value with past kv
-    key_layer =
-        ggml_view_3d(gctx, k_cache, head_size, n_past + qlen, num_attention_heads, k_cache->nb[1], k_cache->nb[2],
-                     0); // [heads, klen, head_size]
-    tensor_assign_buffers(key_layer);
-    value_layer =
-        ggml_view_3d(gctx, v_cache, n_past + qlen, head_size, num_attention_heads, v_cache->nb[1], v_cache->nb[2],
-                     0); // [heads, head_size, klen]
-    tensor_assign_buffers(value_layer);
+    key_layer = tensor_assign_buffers(ggml_view_3d(gctx, k_cache, head_size, n_past + qlen, num_attention_heads,
+                                                   k_cache->nb[1], k_cache->nb[2],
+                                                   0)); // [heads, klen, head_size]
+    value_layer = tensor_assign_buffers(ggml_view_3d(gctx, v_cache, n_past + qlen, head_size, num_attention_heads,
+                                                     v_cache->nb[1], v_cache->nb[2],
+                                                     0)); // [heads, head_size, klen]
 
     // attention
-    ggml_tensor *attn_scores = ggml_mul_mat(gctx, key_layer, query_layer); // [heads, qlen, klen]
-    tensor_assign_buffers(attn_scores);
-    attn_scores = ggml_scale_inplace(gctx, attn_scores, ggml_new_f32(gctx, 1.f / std::sqrt(head_size)));
-    tensor_assign_buffers(attn_scores);
-    attn_scores = ggml_alibi(gctx, attn_scores, n_past, num_attention_heads, 8);
-    tensor_assign_buffers(attn_scores);
+    ggml_tensor *attn_scores = tensor_assign_buffers(ggml_mul_mat(gctx, key_layer, query_layer)); // [heads, qlen, klen]
+    attn_scores =
+        tensor_assign_buffers(ggml_scale_inplace(gctx, attn_scores, ggml_new_f32(gctx, 1.f / std::sqrt(head_size))));
+    attn_scores = tensor_assign_buffers(ggml_alibi(gctx, attn_scores, n_past, num_attention_heads, 8));
     if (n_past == 0) {
-        attn_scores = ggml_diag_mask_inf_inplace(gctx, attn_scores, n_past);
-        tensor_assign_buffers(attn_scores);
+        attn_scores = tensor_assign_buffers(ggml_diag_mask_inf_inplace(gctx, attn_scores, n_past));
     }
-    ggml_tensor *attn_probs = ggml_soft_max_inplace(gctx, attn_scores); // [heads, qlen, klen]
-    tensor_assign_buffers(attn_probs);
+    ggml_tensor *attn_probs = tensor_assign_buffers(ggml_soft_max_inplace(gctx, attn_scores)); // [heads, qlen, klen]
 
-    ggml_tensor *context_layer = ggml_mul_mat(gctx, value_layer, attn_probs); // [heads, qlen, head_size]
-    tensor_assign_buffers(context_layer);
+    ggml_tensor *context_layer =
+        tensor_assign_buffers(ggml_mul_mat(gctx, value_layer, attn_probs)); // [heads, qlen, head_size]
 
-    context_layer = ggml_cont(gctx, ggml_permute(gctx, context_layer, 0, 2, 1, 3)); // [qlen, heads, head_size]
-    tensor_assign_buffers(context_layer);
-    context_layer = ggml_reshape_2d(gctx, context_layer, hidden_size, qlen); // [qlen, hidden]
-    tensor_assign_buffers(context_layer);
+    context_layer = tensor_assign_buffers(
+        ggml_cont(gctx, ggml_permute(gctx, context_layer, 0, 2, 1, 3))); // [qlen, heads, head_size]
+    context_layer = tensor_assign_buffers(ggml_reshape_2d(gctx, context_layer, hidden_size, qlen)); // [qlen, hidden]
 
     ggml_tensor *attn_output = dense.forward(ctx, context_layer);
     return attn_output;
@@ -1443,12 +1430,10 @@ ggml_tensor *Baichuan13BMLP::forward(ModelContext *ctx, ggml_tensor *hidden_stat
     ggml_context *gctx = ctx->ctx_b.get();
 
     ggml_tensor *gate = gate_proj.forward(ctx, hidden_states);
-    gate = ggml_silu_inplace(gctx, gate);
-    tensor_assign_buffers(gate);
+    gate = tensor_assign_buffers(ggml_silu_inplace(gctx, gate));
     ggml_tensor *up = up_proj.forward(ctx, hidden_states);
 
-    ggml_tensor *output = ggml_mul_inplace(gctx, gate, up);
-    tensor_assign_buffers(output);
+    ggml_tensor *output = tensor_assign_buffers(ggml_mul_inplace(gctx, gate, up));
     output = down_proj.forward(ctx, output);
     return output;
 }
@@ -1459,14 +1444,12 @@ ggml_tensor *Baichuan13BBlock::forward(ModelContext *ctx, ggml_tensor *hidden_st
     ggml_tensor *residual = hidden_states;
     hidden_states = input_layernorm.forward(ctx, hidden_states, 1e-6);
     hidden_states = attention.forward(ctx, hidden_states, n_past);
-    hidden_states = ggml_add_inplace(gctx, hidden_states, residual);
-    tensor_assign_buffers(hidden_states);
+    hidden_states = tensor_assign_buffers(ggml_add_inplace(gctx, hidden_states, residual));
 
     residual = hidden_states;
     hidden_states = post_attention_layernorm.forward(ctx, hidden_states);
     hidden_states = mlp.forward(ctx, hidden_states);
-    hidden_states = ggml_add_inplace(gctx, hidden_states, residual);
-    tensor_assign_buffers(hidden_states);
+    hidden_states = tensor_assign_buffers(ggml_add_inplace(gctx, hidden_states, residual));
 
     return hidden_states;
 }
@@ -1562,10 +1545,9 @@ ggml_tensor *Baichuan13BForCausalLM::forward(ModelContext *ctx, ggml_tensor *inp
     ggml_tensor *transformer_outputs = transformer.forward(ctx, input_ids, n_past);
     // NOTE: only compute next_token_logits for the last token
     if (input_ids->ne[0] > 1) {
-        transformer_outputs =
+        transformer_outputs = tensor_assign_buffers(
             ggml_view_1d(ctx->ctx_b.get(), transformer_outputs, config.hidden_size,
-                         (input_ids->ne[0] - 1) * config.hidden_size * ggml_element_size(transformer_outputs));
-        tensor_assign_buffers(transformer_outputs);
+                         (input_ids->ne[0] - 1) * config.hidden_size * ggml_element_size(transformer_outputs)));
     }
     ggml_tensor *lm_logits = lm_head.forward(ctx, transformer_outputs);
     return lm_logits;

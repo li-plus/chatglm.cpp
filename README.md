@@ -21,7 +21,7 @@ Highlights:
 Support Matrix:
 * Hardwares: x86/arm CPU, NVIDIA GPU, Apple Silicon GPU
 * Platforms: Linux, MacOS, Windows
-* Models: ChatGLM, ChatGLM2, CodeGeeX2
+* Models: ChatGLM, ChatGLM2, CodeGeeX2, Baichuan-13B
 
 ## Getting Started
 
@@ -361,22 +361,31 @@ Environment:
 
 ChatGLM-6B:
 
-|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   | F32   |
-|--------------------------------|-------|-------|-------|-------|-------|-------|-------|
-| ms/token (CPU @ Platinum 8260) | 74    | 77    | 86    | 89    | 114   | 189   | 357   |
-| ms/token (CUDA @ V100 SXM2)    | 10.0  | 9.8   | 10.7  | 10.6  | 14.6  | 19.8  | 34.2  |
-| file size                      | 3.3GB | 3.7GB | 4.0GB | 4.4GB | 6.2GB | 12GB  | 23GB  |
-| mem usage                      | 4.0GB | 4.4GB | 4.7GB | 5.1GB | 6.9GB | 13GB  | 24GB  |
+|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
+|--------------------------------|-------|-------|-------|-------|-------|-------|
+| ms/token (CPU @ Platinum 8260) | 74    | 77    | 86    | 89    | 114   | 189   |
+| ms/token (CUDA @ V100 SXM2)    | 8.1   | 8.7   | 9.4   | 9.5   | 12.0  | 19.1  |
+| file size                      | 3.3G  | 3.7G  | 4.0G  | 4.4G  | 6.2G  | 12G   |
+| mem usage                      | 4.0G  | 4.4G  | 4.7G  | 5.1G  | 6.9G  | 13G   |
 
-ChatGLM2-6B:
+ChatGLM2-6B / CodeGeeX2:
 
-|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   | F32   |
-|--------------------------------|-------|-------|-------|-------|-------|-------|-------|
-| ms/token (CPU @ Platinum 8260) | 64    | 71    | 79    | 83    | 106   | 189   | 372   |
-| ms/token (CUDA @ V100 SXM2)    | 9.7   | 9.4   | 10.3  | 10.2  | 14.0  | 19.1  | 33.0  |
-| ms/token (MPS @ M2 Ultra)      | 11.0  | 11.7  | N/A   | N/A   | N/A   | 32.1  | N/A   |
-| file size                      | 3.3GB | 3.7GB | 4.0GB | 4.4GB | 6.2GB | 12GB  | 24GB  |
-| mem usage                      | 3.4GB | 3.8GB | 4.1GB | 4.5GB | 6.2GB | 12GB  | 23GB  |
+|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
+|--------------------------------|-------|-------|-------|-------|-------|-------|
+| ms/token (CPU @ Platinum 8260) | 64    | 71    | 79    | 83    | 106   | 189   |
+| ms/token (CUDA @ V100 SXM2)    | 7.9   | 8.3   | 9.2   | 9.2   | 11.7  | 18.5  |
+| ms/token (MPS @ M2 Ultra)      | 11.0  | 11.7  | N/A   | N/A   | N/A   | 32.1  |
+| file size                      | 3.3G  | 3.7G  | 4.0G  | 4.4G  | 6.2G  | 12G   |
+| mem usage                      | 3.4G  | 3.8G  | 4.1G  | 4.5G  | 6.2G  | 12G   |
+
+Baichuan-13B:
+
+|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
+|--------------------------------|-------|-------|-------|-------|-------|-------|
+| ms/token (CPU @ Platinum 8260) | 161.7 | 175.8 | 189.9 | 192.3 | 255.6 | 459.6 |
+| ms/token (CUDA @ V100 SXM2)    | 13.7  | 15.1  | 16.3  | 16.9  | 21.9  | 36.8  |
+| file size                      | 7.0G  | 7.8G  | 8.5G  | 9.3G  | 14G   | 25G   |
+| mem usage                      | 7.8G  | 8.8G  | 9.5G  | 10G   | 14G   | 25G   |
 
 ## Development
 

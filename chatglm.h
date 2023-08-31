@@ -154,7 +154,7 @@ class LayerNorm {
         : weight(ggml_new_tensor_1d(ctx->ctx_w.get(), GGML_TYPE_F32, normalized_shape)),
           bias(ggml_new_tensor_1d(ctx->ctx_w.get(), GGML_TYPE_F32, normalized_shape)) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input, float eps = 1e-5f) const;
 
   public:
     ggml_tensor *weight; // [normalized_shape]

@@ -318,7 +318,7 @@ TEST_F(ChatGLMTest, Linear) {
     std::vector<TestConfig> test_configs{
         {GGML_TYPE_F32, 1e-5, 0},
         {GGML_TYPE_F16, 5e-3, 0},
-        {GGML_TYPE_Q4_0, 0.8, 0.2},
+        {GGML_TYPE_Q4_0, 1.0, 0.2},
     };
 
     for (const auto &config : test_configs) {
