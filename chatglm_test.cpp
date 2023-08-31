@@ -29,13 +29,9 @@ static inline void expect_all_close(ggml_tensor *a, ggml_tensor *b, float atol =
     }
 }
 
-static inline size_t tensor_nbytes_nopad(const ggml_tensor *tensor) {
-    return ggml_nelements(tensor) * ggml_type_size(tensor->type) / ggml_blck_size(tensor->type);
-}
-
 static inline char *read_tensor_data(char *ptr, ggml_tensor *tensor) {
-    memcpy(tensor->data, ptr, tensor_nbytes_nopad(tensor));
-    return ptr + tensor_nbytes_nopad(tensor);
+    memcpy(tensor->data, ptr, ggml_nbytes(tensor));
+    return ptr + ggml_nbytes(tensor);
 }
 
 static inline float random() { return rand() / (float)RAND_MAX; }

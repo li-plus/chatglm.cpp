@@ -662,8 +662,8 @@ class Baichuan13BForCausalLM : public BaseModelForCausalLM {
     ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
 
   public:
-    static constexpr size_t MEM_SIZE = 512 * MB;      // 2k context
-    static constexpr size_t SCRATCH_SIZE = 1280 * MB; // 2k context
+    static constexpr size_t MEM_SIZE = 512 * MB;
+    static constexpr size_t SCRATCH_SIZE = 1280 * MB;
 
     Baichuan13BConfig config;
     Baichuan13BModel transformer;

@@ -1377,11 +1377,6 @@ ggml_tensor *Baichuan13BSelfAttention::forward(ModelContext *ctx, ggml_tensor *h
                      hidden_size * ggml_element_size(qkv));                       // [qlen, heads, head_size]
     key_layer = tensor_assign_buffers(ggml_permute(gctx, key_layer, 0, 2, 1, 3)); // [heads, qlen, head_size]
 
-    // #ifdef GGML_USE_CUBLAS
-    //     key_layer = ggml_cont(gctx, key_layer);
-    //     tensor_assign_buffers(key_layer);
-    // #endif
-
     ggml_tensor *value_layer =
         ggml_view_3d(gctx, qkv, head_size, num_attention_heads, qlen, head_size * ggml_element_size(qkv), qkv->nb[1],
                      2 * hidden_size * ggml_element_size(qkv));                       // [qlen, heads, head_size]
