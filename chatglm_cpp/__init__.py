@@ -5,7 +5,7 @@ from typing import Iterator, List, Optional, Union
 
 import chatglm_cpp._C as _C
 
-__version__ = "0.2.5"
+__version__ = "0.2.6"
 
 
 class Pipeline(_C.Pipeline):
@@ -38,9 +38,9 @@ class Pipeline(_C.Pipeline):
         num_threads: int = 0,
         stream: bool = False,
     ) -> Union[Iterator[str], str]:
-        prompt = self.tokenizer.build_prompt(history)
-        return self.generate(
-            prompt=prompt,
+        input_ids = self.tokenizer.encode_history(history, max_context_length)
+        return self._generate(
+            input_ids=input_ids,
             max_length=max_length,
             max_context_length=max_context_length,
             do_sample=do_sample,
@@ -66,6 +66,34 @@ class Pipeline(_C.Pipeline):
         num_threads: int = 0,
         stream: bool = False,
     ) -> Union[Iterator[str], str]:
+        input_ids = self.tokenizer.encode(prompt, max_context_length)
+        return self._generate(
+            input_ids=input_ids,
+            max_length=max_length,
+            max_context_length=max_context_length,
+            do_sample=do_sample,
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
+            repetition_penalty=repetition_penalty,
+            num_threads=num_threads,
+            stream=stream,
+        )
+
+    def _generate(
+        self,
+        input_ids: List[int],
+        *,
+        max_length: int = 2048,
+        max_context_length: int = 512,
+        do_sample: bool = True,
+        top_k: int = 0,
+        top_p: float = 0.7,
+        temperature: float = 0.95,
+        repetition_penalty: float = 1.0,
+        num_threads: int = 0,
+        stream: bool = False,
+    ) -> Union[Iterator[str], str]:
         gen_config = _C.GenerationConfig(
             max_length=max_length,
             max_context_length=max_context_length,
@@ -77,12 +105,11 @@ class Pipeline(_C.Pipeline):
             num_threads=num_threads,
         )
 
-        generate_fn = self._stream_generate if stream else self._generate
-        return generate_fn(prompt=prompt, gen_config=gen_config)
+        generate_fn = self._stream_generate if stream else self._sync_generate
+        return generate_fn(input_ids=input_ids, gen_config=gen_config)
 
-    def _stream_generate(self, prompt: str, gen_config: _C.GenerationConfig) -> Iterator[str]:
-        input_ids = self.tokenizer.encode(prompt, gen_config.max_context_length)
-
+    def _stream_generate(self, input_ids: List[int], gen_config: _C.GenerationConfig) -> Iterator[str]:
+        input_ids = [x for x in input_ids]  # make a copy
         n_past = 0
         n_ctx = len(input_ids)
 
@@ -112,9 +139,8 @@ class Pipeline(_C.Pipeline):
         output = self.tokenizer.decode(token_cache)
         yield output[print_len:]
 
-    def _generate(self, prompt: str, gen_config: _C.GenerationConfig) -> str:
-        input_ids = self.tokenizer.encode(prompt, gen_config.max_context_length)
-
+    def _sync_generate(self, input_ids: List[int], gen_config: _C.GenerationConfig) -> str:
+        input_ids = [x for x in input_ids]  # make a copy
         n_past = 0
         n_ctx = len(input_ids)
 

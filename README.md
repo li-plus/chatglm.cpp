@@ -6,7 +6,7 @@
 ![Python](https://img.shields.io/pypi/pyversions/chatglm-cpp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B) and [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B) for real-time chatting on your MacBook.
+C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B) and [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B) and more LLMs for real-time chatting on your MacBook.
 
 ![demo](docs/demo.gif)
 
@@ -16,12 +16,12 @@ Highlights:
 * [x] Pure C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp).
 * [x] Accelerated memory-efficient CPU inference with int4/int8 quantization, optimized KV cache and parallel computing.
 * [x] Streaming generation with typewriter effect.
-* [x] Python binding, web demo, and more possibilities.
+* [x] Python binding, web demo, api servers and more possibilities.
 
 Support Matrix:
 * Hardwares: x86/arm CPU, NVIDIA GPU, Apple Silicon GPU
 * Platforms: Linux, MacOS, Windows
-* Models: ChatGLM, ChatGLM2, CodeGeeX2
+* Models: [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [CodeGeeX2](https://github.com/THUDM/CodeGeeX2), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B)
 
 ## Getting Started
 
@@ -45,9 +45,10 @@ python3 chatglm_cpp/convert.py -i THUDM/chatglm-6b -t q4_0 -o chatglm-ggml.bin
 ```
 
 The original model (`-i <model_name_or_path>`) can be a HuggingFace model name or a local path to your pre-downloaded model. Currently supported models are:
-* [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B): `THUDM/chatglm-6b`, `THUDM/chatglm-6b-int8`, `THUDM/chatglm-6b-int4`
-* [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B): `THUDM/chatglm2-6b`, `THUDM/chatglm2-6b-int4`
-* [CodeGeeX2](https://github.com/THUDM/CodeGeeX2): `THUDM/codegeex2-6b`, `THUDM/codegeex2-6b-int4`
+* ChatGLM-6B: `THUDM/chatglm-6b`, `THUDM/chatglm-6b-int8`, `THUDM/chatglm-6b-int4`
+* ChatGLM2-6B: `THUDM/chatglm2-6b`, `THUDM/chatglm2-6b-int4`
+* CodeGeeX2: `THUDM/codegeex2-6b`, `THUDM/codegeex2-6b-int4`
+* Baichuan-13B: `baichuan-inc/Baichuan-13B-Chat`
 
 You are free to try any of the below quantization types by specifying `-t <type>`:
 * `q4_0`: 4-bit integer quantization with fp16 scales.
@@ -109,6 +110,13 @@ def bubble_sort(list):
 
 
 print(bubble_sort([5, 4, 3, 2, 1]))
+```
+
+* Baichuan-13B-Chat
+```sh
+python3 chatglm_cpp/convert.py -i baichuan-inc/Baichuan-13B-Chat -t q4_0 -o baichuan13bchat-ggml.bin
+./build/bin/main -m baichuan13bchat-ggml.bin -p 你好呀 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1
+# 你好！很高兴见到你。请问有什么我可以帮助你的吗？
 ```
 
 ## Using BLAS
@@ -196,7 +204,7 @@ python3 web_demo.py -m ../chatglm-ggml.bin
 
 For other models:
 
-* ChatGLM2
+* ChatGLM2-6B
 ```sh
 python3 cli_chat.py -m ../chatglm2-ggml.bin -p 你好 --temp 0.8 --top_p 0.8  # CLI demo
 python3 web_demo.py -m ../chatglm2-ggml.bin --temp 0.8 --top_p 0.8  # web demo
@@ -211,6 +219,12 @@ python3 cli_chat.py -m ../codegeex2-ggml.bin --temp 0 --mode generate -p "\
 "
 # web demo
 python3 web_demo.py -m ../codegeex2-ggml.bin --temp 0 --max_length 512 --mode generate --plain
+```
+
+* Baichuan-13B-Chat
+```sh
+python3 cli_chat.py -m ../baichuan13bchat-ggml.bin -p 你好呀 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1 # CLI demo
+python3 web_demo.py -m ../baichuan13bchat-ggml.bin --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1   # web demo
 ```
 
 **Load and optimize Hugging Face LLMs in one line of code**
@@ -347,22 +361,31 @@ Environment:
 
 ChatGLM-6B:
 
-|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   | F32   |
-|--------------------------------|-------|-------|-------|-------|-------|-------|-------|
-| ms/token (CPU @ Platinum 8260) | 74    | 77    | 86    | 89    | 114   | 189   | 357   |
-| ms/token (CUDA @ V100 SXM2)    | 10.0  | 9.8   | 10.7  | 10.6  | 14.6  | 19.8  | 34.2  |
-| file size                      | 3.3GB | 3.7GB | 4.0GB | 4.4GB | 6.2GB | 12GB  | 23GB  |
-| mem usage                      | 4.0GB | 4.4GB | 4.7GB | 5.1GB | 6.9GB | 13GB  | 24GB  |
+|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
+|--------------------------------|-------|-------|-------|-------|-------|-------|
+| ms/token (CPU @ Platinum 8260) | 74    | 77    | 86    | 89    | 114   | 189   |
+| ms/token (CUDA @ V100 SXM2)    | 8.1   | 8.7   | 9.4   | 9.5   | 12.0  | 19.1  |
+| file size                      | 3.3G  | 3.7G  | 4.0G  | 4.4G  | 6.2G  | 12G   |
+| mem usage                      | 4.0G  | 4.4G  | 4.7G  | 5.1G  | 6.9G  | 13G   |
 
-ChatGLM2-6B:
+ChatGLM2-6B / CodeGeeX2:
 
-|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   | F32   |
-|--------------------------------|-------|-------|-------|-------|-------|-------|-------|
-| ms/token (CPU @ Platinum 8260) | 64    | 71    | 79    | 83    | 106   | 189   | 372   |
-| ms/token (CUDA @ V100 SXM2)    | 9.7   | 9.4   | 10.3  | 10.2  | 14.0  | 19.1  | 33.0  |
-| ms/token (MPS @ M2 Ultra)      | 11.0  | 11.7  | N/A   | N/A   | N/A   | 32.1  | N/A   |
-| file size                      | 3.3GB | 3.7GB | 4.0GB | 4.4GB | 6.2GB | 12GB  | 24GB  |
-| mem usage                      | 3.4GB | 3.8GB | 4.1GB | 4.5GB | 6.2GB | 12GB  | 23GB  |
+|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
+|--------------------------------|-------|-------|-------|-------|-------|-------|
+| ms/token (CPU @ Platinum 8260) | 64    | 71    | 79    | 83    | 106   | 189   |
+| ms/token (CUDA @ V100 SXM2)    | 7.9   | 8.3   | 9.2   | 9.2   | 11.7  | 18.5  |
+| ms/token (MPS @ M2 Ultra)      | 11.0  | 11.7  | N/A   | N/A   | N/A   | 32.1  |
+| file size                      | 3.3G  | 3.7G  | 4.0G  | 4.4G  | 6.2G  | 12G   |
+| mem usage                      | 3.4G  | 3.8G  | 4.1G  | 4.5G  | 6.2G  | 12G   |
+
+Baichuan-13B:
+
+|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
+|--------------------------------|-------|-------|-------|-------|-------|-------|
+| ms/token (CPU @ Platinum 8260) | 161.7 | 175.8 | 189.9 | 192.3 | 255.6 | 459.6 |
+| ms/token (CUDA @ V100 SXM2)    | 13.7  | 15.1  | 16.3  | 16.9  | 21.9  | 36.8  |
+| file size                      | 7.0G  | 7.8G  | 8.5G  | 9.3G  | 14G   | 25G   |
+| mem usage                      | 7.8G  | 8.8G  | 9.5G  | 10G   | 14G   | 25G   |
 
 ## Development
 

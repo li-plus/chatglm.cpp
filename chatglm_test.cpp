@@ -17,13 +17,15 @@ static inline int get_num_threads() {
     return num_threads;
 }
 
-static inline void expect_all_close(ggml_tensor *a, ggml_tensor *b, float atol = 1e-5) {
+static inline void expect_all_close(ggml_tensor *a, ggml_tensor *b, float atol = 1e-5f, float rtol = 0.f) {
     ASSERT_EQ(a->type, b->type);
     ASSERT_EQ(a->type, GGML_TYPE_F32);
     ASSERT_EQ(ggml_nelements(a), ggml_nelements(b));
     int64_t numel = ggml_nelements(a);
     for (int64_t i = 0; i < numel; i++) {
-        EXPECT_LT(std::abs(((float *)a->data)[i] - ((float *)b->data)[i]), atol);
+        float ai = ((float *)a->data)[i];
+        float bi = ((float *)b->data)[i];
+        EXPECT_LT(std::abs(ai - bi), atol + rtol * std::abs(bi)) << "diff " << ai << " vs " << bi;
     }
 }
 
@@ -116,8 +118,7 @@ TEST(Sampling, RepetitionPenalty) {
     // reference
     std::vector<float> target{0.8, 1.2, -2.4, -0.8, 0, 2, -1};
     // test
-    BaseModelForConditionalGeneration::sampling_repetition_penalty(logits.data(), logits.data() + logits.size(),
-                                                                   input_ids, penalty);
+    BaseModelForCausalLM::sampling_repetition_penalty(logits.data(), logits.data() + logits.size(), input_ids, penalty);
     // compare
     for (size_t i = 0; i < logits.size(); i++) {
         EXPECT_FLOAT_EQ(logits[i], target[i]);
@@ -136,7 +137,7 @@ TEST(Sampling, Temperature) {
         v /= temp;
     }
     // test
-    BaseModelForConditionalGeneration::sampling_temperature(logits.data(), logits.data() + logits.size(), temp);
+    BaseModelForCausalLM::sampling_temperature(logits.data(), logits.data() + logits.size(), temp);
     // compare
     for (size_t i = 0; i < logits.size(); i++) {
         EXPECT_FLOAT_EQ(logits[i], target[i]);
@@ -156,8 +157,8 @@ TEST(Sampling, TopK) {
     target.resize(top_k);
 
     // test
-    BaseModelForConditionalGeneration::sampling_top_k(token_scores.data(), token_scores.data() + top_k,
-                                                      token_scores.data() + token_scores.size());
+    BaseModelForCausalLM::sampling_top_k(token_scores.data(), token_scores.data() + top_k,
+                                         token_scores.data() + token_scores.size());
     token_scores.resize(top_k);
 
     // sort & compare
@@ -166,8 +167,7 @@ TEST(Sampling, TopK) {
 
 static void reference_top_p(std::vector<TokenIdScore> &token_scores, float top_p) {
     std::sort(token_scores.begin(), token_scores.end(), std::greater<TokenIdScore>());
-    BaseModelForConditionalGeneration::sampling_softmax_inplace(token_scores.data(),
-                                                                token_scores.data() + token_scores.size());
+    BaseModelForCausalLM::sampling_softmax_inplace(token_scores.data(), token_scores.data() + token_scores.size());
     float cumsum = 0.f;
     for (size_t i = 0; i < token_scores.size(); i++) {
         cumsum += token_scores[i].score;
@@ -192,8 +192,8 @@ TEST(Sampling, TopP) {
         EXPECT_TRUE(!token_scores.empty());
 
         // test
-        TokenIdScore *pos = BaseModelForConditionalGeneration::sampling_top_p(
-            token_scores.data(), token_scores.data() + token_scores.size(), top_p);
+        TokenIdScore *pos =
+            BaseModelForCausalLM::sampling_top_p(token_scores.data(), token_scores.data() + token_scores.size(), top_p);
         token_scores.resize(pos - token_scores.data());
 
         // sort & compare
@@ -291,54 +291,68 @@ TEST_F(ChatGLMTest, Linear) {
     ptr = read_tensor_data(ptr, ref);
     ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
 
+    // GEMV data
+    ggml_tensor *vx = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, 32);
+    memcpy(vx->data, x->data, 32 * sizeof(float));
+    ggml_tensor *vref = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, 16);
+    memcpy(vref->data, ref->data, 16 * sizeof(float));
+
     tensor_to_device(x);
+    tensor_to_device(vx);
 
-    // fp32
-    {
-        ctx.dtype = GGML_TYPE_F32;
+    struct TestCase {
+        ggml_tensor *x;
+        ggml_tensor *ref;
+    };
+    std::vector<TestCase> cases{{x, ref}, {vx, vref}};
+
+    struct TestConfig {
+        ggml_type dtype;
+        float atol;
+        float rtol;
+    };
+    std::vector<TestConfig> test_configs{
+        {GGML_TYPE_F32, 1e-5, 0},
+        {GGML_TYPE_F16, 5e-3, 0},
+        {GGML_TYPE_Q4_0, 1.0, 0.2},
+    };
+
+    for (const auto &config : test_configs) {
+        ctx.dtype = config.dtype;
         Linear model(&ctx, 32, 16);
-        model.weight->data = w->data;
+
+        if (config.dtype == GGML_TYPE_F32) {
+            model.weight->data = w->data;
+        } else if (config.dtype == GGML_TYPE_F16) {
+            ggml_fp32_to_fp16_row((float *)w->data, (ggml_fp16_t *)model.weight->data, ggml_nelements(model.weight));
+        } else if (config.dtype == GGML_TYPE_Q4_0) {
+            int64_t hist[16]{};
+            ggml_quantize_q4_0((float *)w->data, model.weight->data, ggml_nelements(w), w->ne[0], hist);
+        } else {
+            CHATGLM_THROW << "unsupported dtype " << config.dtype;
+        }
         model.bias->data = b->data;
         tensor_to_device(model.weight);
         tensor_to_device(model.bias);
 
-        ggml_tensor *out = model.forward(&ctx, x);
-        EXPECT_EQ(out->backend, x->backend);
-        out->backend = GGML_BACKEND_CPU;
+        for (const auto &c : cases) {
+            reset_cgraph();
+            ggml_tensor *out = model.forward(&ctx, c.x);
+            EXPECT_EQ(out->backend, c.x->backend);
+            out->backend = GGML_BACKEND_CPU;
 
-        ggml_build_forward_expand(&ctx.gf, out);
-        device_graph_compute(get_num_threads());
+            ggml_build_forward_expand(&ctx.gf, out);
+            device_graph_compute(get_num_threads());
 
-        expect_all_close(ref, out);
-
-        tensor_to_cpu(model.weight);
-        tensor_to_cpu(model.bias);
-    }
-    // fp16
-    {
-        reset_cgraph();
-
-        ctx.dtype = GGML_TYPE_F16;
-        Linear model(&ctx, 32, 16);
-        ggml_fp32_to_fp16_row((float *)w->data, (ggml_fp16_t *)model.weight->data, ggml_nelements(model.weight));
-        model.bias->data = b->data;
-        tensor_to_device(model.weight);
-        tensor_to_device(model.bias);
-
-        ggml_tensor *out = model.forward(&ctx, x);
-        EXPECT_EQ(out->backend, x->backend);
-        out->backend = GGML_BACKEND_CPU;
-
-        ggml_build_forward_expand(&ctx.gf, out);
-        device_graph_compute(get_num_threads());
-
-        EXPECT_EQ(out->type, GGML_TYPE_F32);
-        expect_all_close(ref, out, 8e-3);
+            EXPECT_EQ(out->type, GGML_TYPE_F32);
+            expect_all_close(c.ref, out, config.atol, config.rtol);
+        }
 
         tensor_to_cpu(model.weight);
         tensor_to_cpu(model.bias);
     }
     tensor_to_cpu(x);
+    tensor_to_cpu(vx);
 }
 
 TEST_F(ChatGLMTest, BenchmarkLinear) {
@@ -779,6 +793,114 @@ TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
     }
 }
 
+TEST_F(ChatGLMTest, Baichuan13BModel) {
+    fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/baichuan13b_block.data";
+    MappedFile mapped_file(test_path.string());
+    char *ptr = mapped_file.data;
+
+    Baichuan13BConfig config;
+    config.hidden_size = 32;
+    config.num_attention_heads = 8;
+    config.intermediate_size = config.hidden_size * 3;
+    config.num_hidden_layers = 1;
+    config.vocab_size = 5;
+    config.max_length = 8;
+
+    constexpr int seq_len = 3;
+
+    Baichuan13BModel model(&ctx, config);
+
+    tensor_to_device(model.layers[0].attention.k_cache);
+    tensor_to_device(model.layers[0].attention.v_cache);
+
+    ggml_tensor *x1 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, seq_len);
+    ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size, seq_len);
+    ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
+    ggml_tensor *ref_y2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
+    ggml_tensor *x3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
+    ggml_tensor *ref_y3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
+
+    std::vector<ggml_tensor *> all_tensors{model.word_embeddings.weight,
+                                           model.layers[0].input_layernorm.weight,
+                                           model.layers[0].attention.query_key_value.weight,
+                                           model.layers[0].attention.dense.weight,
+                                           model.layers[0].post_attention_layernorm.weight,
+                                           model.layers[0].mlp.gate_proj.weight,
+                                           model.layers[0].mlp.down_proj.weight,
+                                           model.layers[0].mlp.up_proj.weight,
+                                           model.final_layernorm.weight,
+                                           x1,
+                                           ref_y1,
+                                           x2,
+                                           ref_y2,
+                                           x3,
+                                           ref_y3};
+    std::vector<ggml_tensor *> cpu_tensors{model.word_embeddings.weight, x1, x2, x3};
+
+    for (auto tensor : all_tensors) {
+        ptr = read_tensor_data(ptr, tensor);
+        if (std::find(cpu_tensors.begin(), cpu_tensors.end(), tensor) == cpu_tensors.end()) {
+            tensor_to_device(tensor);
+        }
+    }
+    ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
+
+    float eps = 5e-4;
+
+#if 0 // TODO: GGML_METAL
+    // convert gemm weights to fp16
+    std::vector<ggml_tensor **> gemm_weight_ptrs{&model.attention.query_key_value.weight, &model.attention.dense.weight,
+                                                 &model.mlp.dense_h_to_4h.weight, &model.mlp.dense_4h_to_h.weight};
+    for (auto weight_ptr : gemm_weight_ptrs) {
+        ggml_tensor *weight = *weight_ptr;
+        ggml_tensor *fp16_weight = ggml_new_tensor(ctx.ctx_b.get(), GGML_TYPE_F16, weight->n_dims, weight->ne);
+        ggml_fp32_to_fp16_row((float *)weight->data, (ggml_fp16_t *)fp16_weight->data, ggml_nelements(weight));
+        *weight_ptr = fp16_weight;
+    }
+    eps = 5e-4;
+#endif
+
+    // self attention
+    reset_cgraph();
+    {
+        ggml_tensor *out_y1 = model.forward(&ctx, x1, 0);
+        EXPECT_EQ(out_y1->backend, ref_y1->backend);
+        out_y1->backend = GGML_BACKEND_CPU;
+        ggml_build_forward_expand(&ctx.gf, out_y1);
+        cpu_graph_compute(get_num_threads());
+
+        expect_all_close(ref_y1, out_y1, eps);
+    }
+
+    // cross attention
+    reset_cgraph();
+    {
+        ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len);
+        EXPECT_EQ(out_y2->backend, ref_y2->backend);
+        out_y2->backend = GGML_BACKEND_CPU;
+        ggml_build_forward_expand(&ctx.gf, out_y2);
+        device_graph_compute(get_num_threads());
+
+        expect_all_close(ref_y2, out_y2, eps);
+    }
+    reset_cgraph();
+    {
+        ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1);
+        EXPECT_EQ(out_y3->backend, ref_y3->backend);
+        out_y3->backend = GGML_BACKEND_CPU;
+        ggml_build_forward_expand(&ctx.gf, out_y3);
+        device_graph_compute(get_num_threads());
+
+        expect_all_close(ref_y3, out_y3, eps);
+    }
+
+    for (auto tensor : all_tensors) {
+        tensor_to_cpu(tensor);
+    }
+    tensor_to_cpu(model.layers[0].attention.k_cache);
+    tensor_to_cpu(model.layers[0].attention.v_cache);
+}
+
 TEST_F(ChatGLMTest, quantize) {
     GTEST_SKIP() << "Skipping quantization data generation";
     float src_data[]{
@@ -902,7 +1024,7 @@ TEST(Pipeline, ChatGLM) {
         GTEST_SKIP() << "Skipping ChatGLM e2e test (ggml model not found)";
     }
     Pipeline pipeline(model_path.string());
-    EXPECT_TRUE(dynamic_cast<ChatGLMForConditionalGeneration *>(pipeline.model.get()));
+    EXPECT_TRUE(dynamic_cast<ChatGLMForCausalLM *>(pipeline.model.get()));
 
     // tokenizer
     {
@@ -921,8 +1043,8 @@ TEST(Pipeline, ChatGLM) {
 
     // prompter
     {
-        EXPECT_EQ(pipeline.tokenizer->build_prompt({"你好"}), "你好");
-        EXPECT_EQ(pipeline.tokenizer->build_prompt(
+        EXPECT_EQ(ChatGLMTokenizer::build_prompt({"你好"}), "你好");
+        EXPECT_EQ(ChatGLMTokenizer::build_prompt(
                       {"你好", "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。",
                        "晚上睡不着应该怎么办"}),
                   "[Round 0]\n问：你好\n答：你好👋！我是人工智能助手 "
@@ -960,7 +1082,7 @@ TEST(Pipeline, ChatGLM2) {
         GTEST_SKIP() << "Skipping ChatGLM2 e2e test (ggml model not found)";
     }
     Pipeline pipeline(model_path.string());
-    EXPECT_TRUE(dynamic_cast<ChatGLM2ForConditionalGeneration *>(pipeline.model.get()));
+    EXPECT_TRUE(dynamic_cast<ChatGLM2ForCausalLM *>(pipeline.model.get()));
 
     // tokenizer
     {
@@ -982,8 +1104,8 @@ TEST(Pipeline, ChatGLM2) {
 
     // prompter
     {
-        EXPECT_EQ(pipeline.tokenizer->build_prompt({"你好"}), "[Round 1]\n\n问：你好\n\n答：");
-        EXPECT_EQ(pipeline.tokenizer->build_prompt(
+        EXPECT_EQ(ChatGLM2Tokenizer::build_prompt({"你好"}), "[Round 1]\n\n问：你好\n\n答：");
+        EXPECT_EQ(ChatGLM2Tokenizer::build_prompt(
                       {"你好", "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。",
                        "晚上睡不着应该怎么办"}),
                   "[Round 1]\n\n问：你好\n\n答：你好👋！我是人工智能助手 "
@@ -1021,7 +1143,7 @@ TEST(Pipeline, CodeGeeX2) {
         GTEST_SKIP() << "Skipping CodeGeeX2 e2e test (ggml model not found)";
     }
     Pipeline pipeline(model_path.string());
-    EXPECT_TRUE(dynamic_cast<ChatGLM2ForConditionalGeneration *>(pipeline.model.get()));
+    EXPECT_TRUE(dynamic_cast<ChatGLM2ForCausalLM *>(pipeline.model.get()));
 
     // tokenizer
     {
@@ -1052,6 +1174,56 @@ print(bubble_sort([5, 4, 3, 2, 1])))";
 
         std::string output = pipeline.generate(prompt, gen_config);
         EXPECT_EQ(output, target);
+    }
+}
+
+TEST(Pipeline, Baichuan13B) {
+    fs::path model_path = fs::path(__FILE__).parent_path() / "baichuan13bchat-ggml.bin";
+    if (!fs::exists(model_path)) {
+        GTEST_SKIP() << "Skipping Baichuan13B e2e test (ggml model not found)";
+    }
+    Pipeline pipeline(model_path.string());
+    EXPECT_TRUE(dynamic_cast<Baichuan13BForCausalLM *>(pipeline.model.get()));
+
+    // tokenizer
+    {
+        std::vector<TokenizerTestCase> cases{
+            {"你是谁", {9875, 21797}},
+            {"我是百川大模型，是由百川智能的工程师们创造的大语言模型，我可以和人类进行自然交流、解答问题、协助创作，帮"
+             "助大众轻松、普惠的获得世界知识和专业服务。如果你有任何问题，可以随时向我提问",
+             {6323,  31161, 31745, 32213, 31175, 14830, 72,    16347, 31745, 32213, 6358,  31135, 14823, 31212, 8823,
+              5114,  7234,  14830, 72,    31182, 1231,  31188, 8627,  1696,  3823,  5536,  76,    17133, 1766,  76,
+              16345, 11769, 72,    4090,  13169, 8385,  76,    31840, 32195, 31135, 4137,  2781,  3317,  31188, 2285,
+              1910,  73,    6011,  31169, 4315,  1766,  72,    1231,  11533, 31490, 31182, 21934}}};
+        check_tokenizer(pipeline.tokenizer.get(), cases);
+
+        std::vector<std::string> history{"你好呀", "你好！很高兴和你交流。请问有什么我可以帮助你的吗？",
+                                         "你叫什么名字？"};
+        std::vector<int> input_ids = pipeline.tokenizer->encode_history(history, 2048);
+        std::vector<int> target_input_ids{195,   9875, 31213, 32889, 196,  9875,  31213, 74,   17318, 31906,
+                                          14822, 5536, 73,    20389, 7713, 31182, 1231,  4090, 2689,  31763,
+                                          75,    195,  9875,  32177, 1534, 10240, 75,    196};
+        EXPECT_TRUE(equal(input_ids, target_input_ids));
+    }
+
+    // memory test
+    {
+        GenerationConfig gen_config;
+        gen_config.max_length = 512;
+        gen_config.max_context_length = gen_config.max_length - 1;
+        gen_config.do_sample = false;
+
+        std::vector<int> input_ids(gen_config.max_context_length, 128);
+        pipeline.generate(input_ids, gen_config);
+    }
+
+    // chat
+    {
+        GenerationConfig gen_config;
+        gen_config.do_sample = false;
+        std::vector<std::string> history{"你好呀"};
+        std::string output = pipeline.chat(history, gen_config);
+        EXPECT_EQ(output, "你好！很高兴见到你。请问有什么我可以帮助你的吗？");
     }
 }
 
@@ -1093,6 +1265,11 @@ TEST(Benchmark, ChatGLM) {
 
 TEST(Benchmark, ChatGLM2) {
     fs::path model_path = fs::path(__FILE__).parent_path() / "chatglm2-ggml.bin";
+    run_benchmark(model_path);
+}
+
+TEST(Benchmark, Baichuan13B) {
+    fs::path model_path = fs::path(__FILE__).parent_path() / "baichuan13bchat-ggml.bin";
     run_benchmark(model_path);
 }
 

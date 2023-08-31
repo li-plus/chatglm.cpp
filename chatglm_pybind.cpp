@@ -20,8 +20,15 @@ class PyBaseTokenizer : public BaseTokenizer {
     std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override {
         PYBIND11_OVERLOAD_PURE(std::vector<int>, BaseTokenizer, encode_history, history, max_length);
     }
-    std::string build_prompt(const std::vector<std::string> &history) const override {
-        PYBIND11_OVERLOAD_PURE(std::string, BaseTokenizer, build_prompt, history);
+};
+
+class PyBaseModelForCausalLM : public BaseModelForCausalLM {
+  public:
+    using BaseModelForCausalLM::BaseModelForCausalLM;
+
+    void load(ModelLoader &loader) override { PYBIND11_OVERLOAD_PURE(void, PyBaseModelForCausalLM, load, loader); }
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override {
+        PYBIND11_OVERLOAD_PURE(ggml_tensor *, PyBaseModelForCausalLM, forward, ctx, input_ids, n_past, n_ctx)
     }
 };
 
@@ -44,8 +51,11 @@ PYBIND11_MODULE(_C, m) {
     py::class_<BaseTokenizer, PyBaseTokenizer>(m, "BaseTokenizer")
         .def("encode", &BaseTokenizer::encode)
         .def("decode", &BaseTokenizer::decode)
-        .def("encode_history", &BaseTokenizer::encode_history)
-        .def("build_prompt", &BaseTokenizer::build_prompt);
+        .def("encode_history", &BaseTokenizer::encode_history);
+
+    py::class_<BaseModelForCausalLM, PyBaseModelForCausalLM>(m, "BaseModelForCausalLM")
+        .def_property_readonly("type_name", &BaseModelForCausalLM::type_name)
+        .def("generate_next_token", &BaseModelForCausalLM::generate_next_token);
 
     py::class_<GenerationConfig>(m, "GenerationConfig")
         .def(py::init<int, int, bool, int, float, float, float, int>(), "max_length"_a = 2048,
@@ -60,24 +70,33 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("repetition_penalty", &GenerationConfig::repetition_penalty)
         .def_readwrite("num_threads", &GenerationConfig::num_threads);
 
+    // ===== ChatGLM =====
+
     py::class_<ChatGLMConfig, BaseConfig>(m, "ChatGLMConfig");
 
     py::class_<ChatGLMTokenizer, BaseTokenizer>(m, "ChatGLMTokenizer");
 
-    py::class_<ChatGLMForConditionalGeneration>(m, "ChatGLMForConditionalGeneration")
-        .def_readonly("config", &ChatGLMForConditionalGeneration::config)
-        .def_property_readonly("type_name", &ChatGLMForConditionalGeneration::type_name)
-        .def("generate_next_token", &ChatGLMForConditionalGeneration::generate_next_token);
+    py::class_<ChatGLMForCausalLM, BaseModelForCausalLM>(m, "ChatGLMForCausalLM")
+        .def_readonly("config", &ChatGLMForCausalLM::config);
+
+    // ===== ChatGLM2 =====
 
     py::class_<ChatGLM2Config, BaseConfig>(m, "ChatGLM2Config")
         .def_readonly("num_kv_heads", &ChatGLM2Config::num_kv_heads);
 
     py::class_<ChatGLM2Tokenizer, BaseTokenizer>(m, "ChatGLM2Tokenizer");
 
-    py::class_<ChatGLM2ForConditionalGeneration>(m, "ChatGLM2ForConditionalGeneration")
-        .def_readonly("config", &ChatGLM2ForConditionalGeneration::config)
-        .def_property_readonly("type_name", &ChatGLM2ForConditionalGeneration::type_name)
-        .def("generate_next_token", &ChatGLM2ForConditionalGeneration::generate_next_token);
+    py::class_<ChatGLM2ForCausalLM, BaseModelForCausalLM>(m, "ChatGLM2ForCausalLM")
+        .def_readonly("config", &ChatGLM2ForCausalLM::config);
+
+    // ===== Baichuan13B =====
+
+    py::class_<Baichuan13BConfig, BaseConfig>(m, "Baichuan13BConfig");
+
+    py::class_<Baichuan13BTokenizer, BaseTokenizer>(m, "Baichuan13BTokenizer");
+
+    py::class_<Baichuan13BForCausalLM, BaseModelForCausalLM>(m, "Baichuan13BForCausalLM")
+        .def_readonly("config", &Baichuan13BForCausalLM::config);
 
     py::class_<Pipeline>(m, "Pipeline")
         .def(py::init<const std::string &>())
