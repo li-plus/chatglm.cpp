@@ -6,7 +6,7 @@
 ![Python](https://img.shields.io/pypi/pyversions/chatglm-cpp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B) and [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B) for real-time chatting on your MacBook.
+C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B) and [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B) and more LLMs for real-time chatting on your MacBook.
 
 ![demo](docs/demo.gif)
 
@@ -16,12 +16,12 @@ Highlights:
 * [x] Pure C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp).
 * [x] Accelerated memory-efficient CPU inference with int4/int8 quantization, optimized KV cache and parallel computing.
 * [x] Streaming generation with typewriter effect.
-* [x] Python binding, web demo, and more possibilities.
+* [x] Python binding, web demo, api servers and more possibilities.
 
 Support Matrix:
 * Hardwares: x86/arm CPU, NVIDIA GPU, Apple Silicon GPU
 * Platforms: Linux, MacOS, Windows
-* Models: ChatGLM, ChatGLM2, CodeGeeX2, Baichuan-13B
+* Models: [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [CodeGeeX2](https://github.com/THUDM/CodeGeeX2), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B)
 
 ## Getting Started
 
@@ -45,10 +45,10 @@ python3 chatglm_cpp/convert.py -i THUDM/chatglm-6b -t q4_0 -o chatglm-ggml.bin
 ```
 
 The original model (`-i <model_name_or_path>`) can be a HuggingFace model name or a local path to your pre-downloaded model. Currently supported models are:
-* [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B): `THUDM/chatglm-6b`, `THUDM/chatglm-6b-int8`, `THUDM/chatglm-6b-int4`
-* [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B): `THUDM/chatglm2-6b`, `THUDM/chatglm2-6b-int4`
-* [CodeGeeX2](https://github.com/THUDM/CodeGeeX2): `THUDM/codegeex2-6b`, `THUDM/codegeex2-6b-int4`
-* [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B): `baichuan-inc/Baichuan-13B-Chat`
+* ChatGLM-6B: `THUDM/chatglm-6b`, `THUDM/chatglm-6b-int8`, `THUDM/chatglm-6b-int4`
+* ChatGLM2-6B: `THUDM/chatglm2-6b`, `THUDM/chatglm2-6b-int4`
+* CodeGeeX2: `THUDM/codegeex2-6b`, `THUDM/codegeex2-6b-int4`
+* Baichuan-13B: `baichuan-inc/Baichuan-13B-Chat`
 
 You are free to try any of the below quantization types by specifying `-t <type>`:
 * `q4_0`: 4-bit integer quantization with fp16 scales.
@@ -204,7 +204,7 @@ python3 web_demo.py -m ../chatglm-ggml.bin
 
 For other models:
 
-* ChatGLM2
+* ChatGLM2-6B
 ```sh
 python3 cli_chat.py -m ../chatglm2-ggml.bin -p 你好 --temp 0.8 --top_p 0.8  # CLI demo
 python3 web_demo.py -m ../chatglm2-ggml.bin --temp 0.8 --top_p 0.8  # web demo
