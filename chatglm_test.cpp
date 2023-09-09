@@ -60,33 +60,23 @@ static inline void random_fill(ggml_tensor *tensor) {
 
 // return elapsed time in milliseconds
 static inline float timeit(std::function<void()> fn, int warmup, int active) {
-    float elapsed_ms;
     for (int i = 0; i < warmup; i++) {
         fn();
     }
 
 #ifdef GGML_USE_CUBLAS
-    cudaEvent_t start, stop;
-    CHATGLM_CHECK_CUDA(cudaEventCreate(&start));
-    CHATGLM_CHECK_CUDA(cudaEventCreate(&stop));
-    CHATGLM_CHECK_CUDA(cudaEventRecord(start));
-    for (int i = 0; i < active; i++) {
-        fn();
-    }
-    CHATGLM_CHECK_CUDA(cudaEventRecord(stop));
-    CHATGLM_CHECK_CUDA(cudaEventSynchronize(stop));
-    CHATGLM_CHECK_CUDA(cudaEventElapsedTime(&elapsed_ms, start, stop));
-    CHATGLM_CHECK_CUDA(cudaEventDestroy(start));
-    CHATGLM_CHECK_CUDA(cudaEventDestroy(stop));
-#else
+    CHATGLM_CHECK_CUDA(cudaDeviceSynchronize());
+#endif
     int64_t start_us = ggml_time_us();
     for (int i = 0; i < active; i++) {
         fn();
     }
-    int64_t end_us = ggml_time_us();
-    elapsed_ms = (end_us - start_us) / 1000.f;
+#ifdef GGML_USE_CUBLAS
+    CHATGLM_CHECK_CUDA(cudaDeviceSynchronize());
 #endif
+    int64_t end_us = ggml_time_us();
 
+    float elapsed_ms = (end_us - start_us) / 1000.f;
     return elapsed_ms / active;
 }
 
@@ -1221,6 +1211,46 @@ TEST(Pipeline, Baichuan13B) {
     {
         GenerationConfig gen_config;
         gen_config.do_sample = false;
+        gen_config.repetition_penalty = 1.1;
+        std::vector<std::string> history{"你好呀"};
+        std::string output = pipeline.chat(history, gen_config);
+        EXPECT_EQ(output, "你好！很高兴见到你。请问有什么我可以帮助你的吗？");
+    }
+}
+
+TEST(Pipeline, Baichuan2_13B) {
+    fs::path model_path = fs::path(__FILE__).parent_path() / "baichuan2-13b-chat-ggml.bin";
+    if (!fs::exists(model_path)) {
+        GTEST_SKIP() << "Skipping Baichuan2-13B e2e test (ggml model not found)";
+    }
+    Pipeline pipeline(model_path.string());
+    EXPECT_TRUE(dynamic_cast<Baichuan13BForCausalLM *>(pipeline.model.get()));
+
+    // tokenizer
+    {
+        std::vector<TokenizerTestCase> cases{
+            {"你是谁", {92067}},
+            {"我是百川大模型，是由百川智能的工程师们创造的大语言模型，我可以和人类进行自然交流、解答问题、协助创作，帮"
+             "助大众轻松、普惠的获得世界知识和专业服务。如果你有任何问题，可以随时向我提问",
+             {6461, 70335, 92366, 9528, 65,    10879, 70335, 3932, 92333, 8832,  92414, 5034,
+              3133, 5002,  9528,  65,   28756, 92385, 5243,  1697, 2559,  3341,  69,    10474,
+              1754, 69,    9036,  7356, 65,    2716,  7499,  4892, 69,    24816, 92333, 2693,
+              2089, 23672, 1940,  1760, 66,    4173,  23181, 1754, 65,    65351, 39975, 14590}}};
+        check_tokenizer(pipeline.tokenizer.get(), cases);
+
+        std::vector<std::string> history{"你好呀", "你好！很高兴和你交流。请问有什么我可以帮助你的吗？",
+                                         "你叫什么名字？"};
+        std::vector<int> input_ids = pipeline.tokenizer->encode_history(history, 2048);
+        std::vector<int> target_input_ids{195,   16829, 94278, 196,   16829, 67,  52160, 10329, 3341, 66,   23216, 5817,
+                                          92392, 21777, 2193,  93122, 68,    195, 92430, 93410, 1747, 6642, 68,    196};
+        EXPECT_TRUE(equal(input_ids, target_input_ids));
+    }
+
+    // chat
+    {
+        GenerationConfig gen_config;
+        gen_config.do_sample = false;
+        gen_config.repetition_penalty = 1.05;
         std::vector<std::string> history{"你好呀"};
         std::string output = pipeline.chat(history, gen_config);
         EXPECT_EQ(output, "你好！很高兴见到你。请问有什么我可以帮助你的吗？");
