@@ -21,7 +21,7 @@ Highlights:
 Support Matrix:
 * Hardwares: x86/arm CPU, NVIDIA GPU, Apple Silicon GPU
 * Platforms: Linux, MacOS, Windows
-* Models: [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [CodeGeeX2](https://github.com/THUDM/CodeGeeX2), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B)
+* Models: [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [CodeGeeX2](https://github.com/THUDM/CodeGeeX2), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan2-13B](https://github.com/baichuan-inc/Baichuan2)
 
 ## Getting Started
 
@@ -49,6 +49,7 @@ The original model (`-i <model_name_or_path>`) can be a HuggingFace model name o
 * ChatGLM2-6B: `THUDM/chatglm2-6b`, `THUDM/chatglm2-6b-int4`
 * CodeGeeX2: `THUDM/codegeex2-6b`, `THUDM/codegeex2-6b-int4`
 * Baichuan-13B: `baichuan-inc/Baichuan-13B-Chat`
+* Baichuan2-13B: `baichuan-inc/Baichuan2-13B-Chat`
 
 You are free to try any of the below quantization types by specifying `-t <type>`:
 * `q4_0`: 4-bit integer quantization with fp16 scales.
@@ -117,6 +118,12 @@ print(bubble_sort([5, 4, 3, 2, 1]))
 python3 chatglm_cpp/convert.py -i baichuan-inc/Baichuan-13B-Chat -t q4_0 -o baichuan13bchat-ggml.bin
 ./build/bin/main -m baichuan13bchat-ggml.bin -p 你好呀 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1
 # 你好！很高兴见到你。请问有什么我可以帮助你的吗？
+```
+
+* Baichuan2-13B-Chat
+```sh
+python3 chatglm_cpp/convert.py -i baichuan-inc/Baichuan2-13B-Chat -t q4_0 -o baichuan2-13b-chat-ggml.bin
+./build/bin/main -m baichuan2-13b-chat-ggml.bin -p 你好呀 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05
 ```
 
 ## Using BLAS
@@ -225,6 +232,12 @@ python3 web_demo.py -m ../codegeex2-ggml.bin --temp 0 --max_length 512 --mode ge
 ```sh
 python3 cli_chat.py -m ../baichuan13bchat-ggml.bin -p 你好呀 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1 # CLI demo
 python3 web_demo.py -m ../baichuan13bchat-ggml.bin --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1   # web demo
+```
+
+* Baichuan2-13B-Chat
+```sh
+python3 cli_chat.py -m ../baichuan2-13b-chat-ggml.bin -p 你好呀 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05 # CLI demo
+python3 web_demo.py -m ../baichuan2-13b-chat-ggml.bin --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05   # web demo
 ```
 
 **Load and optimize Hugging Face LLMs in one line of code**
@@ -378,7 +391,7 @@ ChatGLM2-6B / CodeGeeX2:
 | file size                      | 3.3G  | 3.7G  | 4.0G  | 4.4G  | 6.2G  | 12G   |
 | mem usage                      | 3.4G  | 3.8G  | 4.1G  | 4.5G  | 6.2G  | 12G   |
 
-Baichuan-13B:
+Baichuan-13B / Baichuan2-13B:
 
 |                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
 |--------------------------------|-------|-------|-------|-------|-------|-------|
