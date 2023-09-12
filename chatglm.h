@@ -68,7 +68,6 @@ class BaseTokenizer {
     virtual std::vector<int> encode(const std::string &text, int max_length) const = 0;
     virtual std::string decode(const std::vector<int> &ids) const = 0;
     virtual std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const = 0;
-    virtual std::string build_prompt(const std::vector<std::string> &history) const = 0;
 };
 
 struct ggml_context_deleter_t {
@@ -155,7 +154,7 @@ class LayerNorm {
         : weight(ggml_new_tensor_1d(ctx->ctx_w.get(), GGML_TYPE_F32, normalized_shape)),
           bias(ggml_new_tensor_1d(ctx->ctx_w.get(), GGML_TYPE_F32, normalized_shape)) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input, float eps = 1e-5f) const;
 
   public:
     ggml_tensor *weight; // [normalized_shape]
@@ -293,6 +292,8 @@ struct GenerationConfig {
 enum ModelType {
     MODEL_TYPE_CHATGLM = 1,
     MODEL_TYPE_CHATGLM2 = 2,
+    MODEL_TYPE_BAICHUAN7B = 1024,
+    MODEL_TYPE_BAICHUAN13B = 1025,
 };
 
 int get_num_physical_cores();
@@ -315,10 +316,10 @@ struct TokenIdScore {
     }
 };
 
-class BaseModelForConditionalGeneration {
+class BaseModelForCausalLM {
   public:
-    BaseModelForConditionalGeneration(ModelType model_type, BaseConfig config, size_t mem_size, size_t scratch_size);
-    virtual ~BaseModelForConditionalGeneration() = default;
+    BaseModelForCausalLM(ModelType model_type, BaseConfig config, size_t mem_size, size_t scratch_size);
+    virtual ~BaseModelForCausalLM() = default;
 
     virtual void load(ModelLoader &loader) = 0;
     virtual ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const = 0;
@@ -363,7 +364,7 @@ class ChatGLMTokenizer : public BaseTokenizer {
 
     std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
 
-    std::string build_prompt(const std::vector<std::string> &history) const override;
+    static std::string build_prompt(const std::vector<std::string> &history);
 
   private:
     static std::string preprocess(const std::string &text);
@@ -438,10 +439,10 @@ class ChatGLMModel {
     LayerNorm final_layernorm;
 };
 
-class ChatGLMForConditionalGeneration : public BaseModelForConditionalGeneration {
+class ChatGLMForCausalLM : public BaseModelForCausalLM {
   public:
-    ChatGLMForConditionalGeneration(const ChatGLMConfig &config);
-    ~ChatGLMForConditionalGeneration();
+    ChatGLMForCausalLM(const ChatGLMConfig &config);
+    ~ChatGLMForCausalLM();
 
     void load(ModelLoader &loader) override;
 
@@ -471,7 +472,7 @@ class ChatGLM2Tokenizer : public BaseTokenizer {
 
     std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
 
-    std::string build_prompt(const std::vector<std::string> &history) const override;
+    static std::string build_prompt(const std::vector<std::string> &history);
 
     bool is_special_id(int id) const;
 
@@ -545,10 +546,10 @@ class ChatGLM2Model {
     RMSNorm final_layernorm;
 };
 
-class ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGeneration {
+class ChatGLM2ForCausalLM : public BaseModelForCausalLM {
   public:
-    ChatGLM2ForConditionalGeneration(const ChatGLM2Config &config);
-    ~ChatGLM2ForConditionalGeneration();
+    ChatGLM2ForCausalLM(const ChatGLM2Config &config);
+    ~ChatGLM2ForCausalLM();
 
     void load(ModelLoader &loader) override;
 
@@ -563,11 +564,120 @@ class ChatGLM2ForConditionalGeneration : public BaseModelForConditionalGeneratio
     Linear lm_head;
 };
 
+// ===== Baichuan-13B =====
+
+struct Baichuan13BConfig : public BaseConfig {};
+
+class Baichuan13BTokenizer : public BaseTokenizer {
+  public:
+    Baichuan13BTokenizer(std::string_view serialized_model_proto);
+
+    std::vector<int> encode(const std::string &text, int max_length) const override;
+
+    std::string decode(const std::vector<int> &ids) const override;
+
+    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
+
+    bool is_special_id(int id) const;
+
+  protected:
+    static void truncate(std::vector<int> &ids, int max_length);
+
+  public:
+    static constexpr int USER_TOKEN_ID = 195;
+    static constexpr int ASSISTANT_TOKEN_ID = 196;
+
+    sentencepiece::SentencePieceProcessor sp;
+    int bos_token_id;
+    int eos_token_id;
+    int pad_token_id;
+};
+
+class Baichuan13BSelfAttention {
+  public:
+    Baichuan13BSelfAttention() = default;
+    Baichuan13BSelfAttention(ModelContext *ctx, int hidden_size, int num_attention_heads, int max_length);
+
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past) const;
+
+  public:
+    int num_attention_heads;
+    Linear query_key_value;
+    Linear dense;
+    ggml_tensor *k_cache; // [n_head, maxlen, head_size]
+    ggml_tensor *v_cache; // [n_head, head_size, maxlen]
+};
+
+class Baichuan13BMLP {
+  public:
+    Baichuan13BMLP() = default;
+    Baichuan13BMLP(ModelContext *ctx, int hidden_size, int intermediate_size)
+        : gate_proj(ctx, hidden_size, intermediate_size, false), down_proj(ctx, intermediate_size, hidden_size, false),
+          up_proj(ctx, hidden_size, intermediate_size, false) {}
+
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const;
+
+  public:
+    Linear gate_proj;
+    Linear down_proj;
+    Linear up_proj;
+};
+
+class Baichuan13BBlock {
+  public:
+    Baichuan13BBlock() = default;
+    Baichuan13BBlock(ModelContext *ctx, int hidden_size, int num_attention_heads, int intermediate_size, int max_length)
+        : input_layernorm(ctx, hidden_size, false), attention(ctx, hidden_size, num_attention_heads, max_length),
+          post_attention_layernorm(ctx, hidden_size, false), mlp(ctx, hidden_size, intermediate_size) {}
+
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past) const;
+
+  public:
+    RMSNorm input_layernorm;
+    Baichuan13BSelfAttention attention;
+    RMSNorm post_attention_layernorm;
+    Baichuan13BMLP mlp;
+};
+
+class Baichuan13BModel {
+  public:
+    Baichuan13BModel() = default;
+    Baichuan13BModel(ModelContext *ctx, const Baichuan13BConfig &config);
+
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past) const;
+
+  public:
+    Embedding word_embeddings;
+    std::vector<Baichuan13BBlock> layers;
+    RMSNorm final_layernorm;
+};
+
+class Baichuan13BForCausalLM : public BaseModelForCausalLM {
+  public:
+    Baichuan13BForCausalLM(const Baichuan13BConfig &config);
+    ~Baichuan13BForCausalLM();
+
+    void load(ModelLoader &loader) override;
+
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
+
+  public:
+    static constexpr size_t MEM_SIZE = 512 * MB;
+    static constexpr size_t SCRATCH_SIZE = 1280 * MB;
+
+    Baichuan13BConfig config;
+    Baichuan13BModel transformer;
+    Linear lm_head;
+};
+
 // ===== pipeline =====
 
 class Pipeline {
   public:
     Pipeline(const std::string &path);
+
+    std::vector<int> generate(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
+                              BaseStreamer *streamer = nullptr) const;
 
     std::string generate(const std::string &prompt, const GenerationConfig &gen_config,
                          BaseStreamer *streamer = nullptr) const;
@@ -577,7 +687,7 @@ class Pipeline {
 
   public:
     std::unique_ptr<BaseTokenizer> tokenizer;
-    std::unique_ptr<BaseModelForConditionalGeneration> model;
+    std::unique_ptr<BaseModelForCausalLM> model;
     std::unique_ptr<MappedFile> mapped_file;
 };
 

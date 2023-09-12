@@ -3,7 +3,7 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from convert import quantize_q4_0, quantize_q4_1, quantize_q5_0, quantize_q5_1, quantize_q8_0
+from chatglm_cpp.convert import quantize_q4_0, quantize_q4_1, quantize_q5_0, quantize_q5_1, quantize_q8_0
 
 HERE = Path(__file__).resolve().parent
 
@@ -176,6 +176,10 @@ CHATGLM2_MODEL_PATH = Path(
     "~/.cache/huggingface/hub/models--THUDM--chatglm2-6b/snapshots/0ecfe0b857efd00836a4851b3dd2ed04bd4b197f"
 ).expanduser()
 
+BAICHUAN13B_MODEL_PATH = Path(
+    "~/.cache/huggingface/hub/models--baichuan-inc--Baichuan-13B-Chat/snapshots/a4a558127068f2ce965aa56aeb826bf501a68970"
+).expanduser()
+
 
 def make_data_embedding():
     m = torch.nn.Embedding(4, 3)
@@ -213,6 +217,7 @@ def make_data_layernorm():
 
 
 def make_data_rms_norm():
+    sys.path.append(str(CHATGLM2_MODEL_PATH))
     from modeling_chatglm import RMSNorm
 
     m = RMSNorm(64, eps=1e-5).eval()
@@ -229,6 +234,7 @@ def make_data_rms_norm():
 
 
 def make_data_glm_block():
+    sys.path.append(str(CHATGLM_MODEL_PATH))
     from modeling_chatglm import GLMBlock
 
     m = (
@@ -307,6 +313,7 @@ def make_data_glm_block():
 
 
 def make_data_glm2_block():
+    sys.path.append(str(CHATGLM2_MODEL_PATH))
     from modeling_chatglm import GLMBlock, RotaryEmbedding
     from transformers import AutoConfig
 
@@ -365,15 +372,79 @@ def make_data_glm2_block():
         y3.numpy().tofile(f)
 
 
+def make_data_baichuan13b_block():
+    sys.path.append(str(BAICHUAN13B_MODEL_PATH))
+    from modeling_baichuan import BaichuanModel
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained(BAICHUAN13B_MODEL_PATH, trust_remote_code=True)
+    config.hidden_size = 32
+    config.num_attention_heads = 8
+    config.intermediate_size = config.hidden_size * 3
+    config.num_hidden_layers = 1
+    config.torch_dtype = torch.float32
+    config.vocab_size = 5
+
+    m = BaichuanModel(config).eval()
+    for param in m.parameters():
+        param.data.uniform_(-0.5, 0.5)
+
+    seq_len = 3
+
+    # self attention
+    x1 = torch.arange(seq_len, dtype=torch.int64)[None, :]
+    attn_mask = torch.ones(1, seq_len, dtype=torch.int64)
+    with torch.no_grad():
+        out = m(x1, attention_mask=attn_mask, use_cache=True)
+        y1 = out.last_hidden_state
+        kv_cache = out.past_key_values
+
+    # cross attention
+    x2 = torch.tensor([[seq_len]], dtype=torch.int64)
+    attn_mask = torch.ones(1, seq_len + 1, dtype=torch.int64)
+    with torch.no_grad():
+        out = m(x2, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True)
+        y2 = out.last_hidden_state
+        kv_cache = out.past_key_values
+
+    # cross attention
+    x3 = torch.tensor([[seq_len + 1]], dtype=torch.int64)
+    attn_mask = torch.ones(1, seq_len + 2, dtype=torch.int64)
+    with torch.no_grad():
+        out = m(x3, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True)
+        y3 = out.last_hidden_state
+        kv_cache = out.past_key_values
+
+    print(m)
+
+    with open(HERE / "data/baichuan13b_block.data", "wb") as f:
+        m.embed_tokens.weight.data.numpy().tofile(f)
+        m.layers[0].input_layernorm.weight.data.numpy().tofile(f)
+        m.layers[0].self_attn.W_pack.weight.data.numpy().tofile(f)
+        m.layers[0].self_attn.o_proj.weight.data.numpy().tofile(f)
+        m.layers[0].post_attention_layernorm.weight.data.numpy().tofile(f)
+        m.layers[0].mlp.gate_proj.weight.data.numpy().tofile(f)
+        m.layers[0].mlp.down_proj.weight.data.numpy().tofile(f)
+        m.layers[0].mlp.up_proj.weight.data.numpy().tofile(f)
+        m.norm.weight.data.numpy().tofile(f)
+
+        x1.int().numpy().tofile(f)
+        y1.numpy().tofile(f)
+        x2.int().numpy().tofile(f)
+        y2.numpy().tofile(f)
+        x3.int().numpy().tofile(f)
+        y3.numpy().tofile(f)
+
+
 def main():
-    sys.path.append(str(CHATGLM_MODEL_PATH))
     torch.manual_seed(0)
     (HERE / "data").mkdir(parents=True, exist_ok=True)
     # make_data_linear()
     # make_data_layernorm()
     # make_data_rms_norm()
-    make_data_glm_block()
+    # make_data_glm_block()
     # make_data_glm2_block()
+    make_data_baichuan13b_block()
 
 
 if __name__ == "__main__":

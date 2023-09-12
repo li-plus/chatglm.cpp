@@ -13,8 +13,10 @@ parser.add_argument("-m", "--model", default=DEFAULT_MODEL_PATH, type=Path, help
 parser.add_argument("--mode", default="chat", type=str, choices=["chat", "generate"], help="inference mode")
 parser.add_argument("-l", "--max_length", default=2048, type=int, help="max total length including prompt and output")
 parser.add_argument("-c", "--max_context_length", default=512, type=int, help="max context length")
+parser.add_argument("--top_k", default=0, type=int, help="top-k sampling")
 parser.add_argument("--top_p", default=0.7, type=float, help="top-p sampling")
 parser.add_argument("--temp", default=0.95, type=float, help="temperature")
+parser.add_argument("--repeat_penalty", default=1.0, type=float, help="penalize repeat sequence of tokens")
 parser.add_argument("-t", "--threads", default=0, type=int, help="number of threads for inference")
 parser.add_argument("--plain", action="store_true", help="display in plain text without markdown support")
 args = parser.parse_args()
@@ -36,8 +38,10 @@ def predict(input, chatbot, max_length, top_p, temperature, history):
     generation_kwargs = dict(
         max_length=max_length,
         do_sample=temperature > 0,
+        top_k=args.top_k,
         top_p=top_p,
         temperature=temperature,
+        repetition_penalty=args.repeat_penalty,
         num_threads=args.threads,
         stream=True,
     )

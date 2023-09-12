@@ -6,6 +6,7 @@ import pytest
 CHATGLM_MODEL_PATH = Path(__file__).resolve().parent.parent / "chatglm-ggml.bin"
 CHATGLM2_MODEL_PATH = Path(__file__).resolve().parent.parent / "chatglm2-ggml.bin"
 CODEGEEX2_MODEL_PATH = Path(__file__).resolve().parent.parent / "codegeex2-ggml.bin"
+BAICHUAN13B_MODEL_PATH = Path(__file__).resolve().parent.parent / "baichuan13bchat-ggml.bin"
 
 
 def test_chatglm_version():
@@ -68,5 +69,23 @@ print(bubble_sort([5, 4, 3, 2, 1]))"""
     assert output == target
 
     stream_output = pipeline.generate(prompt, do_sample=False, stream=True)
+    stream_output = "".join(stream_output)
+    assert stream_output == target
+
+
+@pytest.mark.skipif(not BAICHUAN13B_MODEL_PATH.exists(), reason="model file not found")
+def test_baichuan13b_pipeline():
+    history = ["你好呀"]
+    target = "你好！很高兴见到你。请问有什么我可以帮助你的吗？"
+
+    pipeline = chatglm_cpp.Pipeline(BAICHUAN13B_MODEL_PATH)
+    output = pipeline.chat(history, do_sample=False)
+    assert output == target
+
+    stream_output = pipeline.stream_chat(history, do_sample=False)
+    stream_output = "".join(stream_output)
+    assert stream_output == target
+
+    stream_output = pipeline.chat(history, do_sample=False, stream=True)
     stream_output = "".join(stream_output)
     assert stream_output == target
