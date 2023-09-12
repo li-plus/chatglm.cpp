@@ -174,6 +174,42 @@ class RMSNorm {
     bool inplace;
 };
 
+enum ActivationType {
+    ACT_TYPE_GELU,
+    ACT_TYPE_SILU,
+};
+
+template <ActivationType ACT_TYPE>
+class BasicMLP {
+  public:
+    BasicMLP() = default;
+    BasicMLP(ModelContext *ctx, int hidden_size, int intermediate_size)
+        : dense_h_to_4h(ctx, hidden_size, intermediate_size), dense_4h_to_h(ctx, intermediate_size, hidden_size) {}
+
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const;
+
+  public:
+    Linear dense_h_to_4h;
+    Linear dense_4h_to_h;
+};
+
+template <ActivationType ACT_TYPE, bool USE_BIAS>
+class BasicGLU {
+  public:
+    BasicGLU() = default;
+    BasicGLU(ModelContext *ctx, int hidden_size, int intermediate_size)
+        : gate_proj(ctx, hidden_size, intermediate_size, USE_BIAS),
+          up_proj(ctx, hidden_size, intermediate_size, USE_BIAS),
+          down_proj(ctx, intermediate_size, hidden_size, USE_BIAS) {}
+
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const;
+
+  public:
+    Linear gate_proj;
+    Linear up_proj;
+    Linear down_proj;
+};
+
 class BaseStreamer {
   public:
     virtual ~BaseStreamer() = default;
@@ -248,7 +284,7 @@ class MappedFile {
 
 class ModelLoader {
   public:
-    ModelLoader(std::string_view buffer) : data(buffer.data()), size(buffer.size()), ptr(buffer.data()) {}
+    ModelLoader(char *data, size_t size) : data(data), size(size), ptr(data) {}
 
     int64_t tell() const { return ptr - data; }
 
@@ -263,12 +299,16 @@ class ModelLoader {
 
     std::string read_string(size_t length);
 
+    void checked_read_tensor_meta(const std::string &name, int ndim, int64_t *ne, ggml_type dtype);
+
+    void *read_tensor_data(size_t nbytes);
+
     void read_tensor(const std::string &name, ggml_tensor *tensor);
 
   public:
-    const char *const data;
+    char *data;
     size_t size;
-    const char *ptr;
+    char *ptr;
 };
 
 // ===== generation =====
@@ -396,25 +436,15 @@ class GLMSelfAttention {
     ggml_tensor *v_cache; // [n_head, head_size, maxlen]
 };
 
-class GLMMLP {
-  public:
-    GLMMLP() = default;
-    GLMMLP(ModelContext *ctx, int hidden_size)
-        : dense_h_to_4h(ctx, hidden_size, 4 * hidden_size), dense_4h_to_h(ctx, 4 * hidden_size, hidden_size) {}
-
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const;
-
-  public:
-    Linear dense_h_to_4h;
-    Linear dense_4h_to_h;
-};
+using GLMMLP = BasicMLP<ACT_TYPE_GELU>;
 
 class GLMBlock {
   public:
     GLMBlock() : num_hidden_layers(0) {}
     GLMBlock(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_hidden_layers, int max_length)
         : input_layernorm(ctx, hidden_size), attention(ctx, hidden_size, num_attention_heads, max_length),
-          post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size), num_hidden_layers(num_hidden_layers) {}
+          post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size, 4 * hidden_size),
+          num_hidden_layers(num_hidden_layers) {}
 
     ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
 
@@ -501,19 +531,7 @@ class GLM2SelfAttention {
     ggml_tensor *v_cache; // [mqa_n_head, head_size, maxlen]
 };
 
-class GLM2MLP {
-  public:
-    GLM2MLP() = default;
-    GLM2MLP(ModelContext *ctx, int hidden_size, int intermediate_size)
-        : dense_h_to_4h(ctx, hidden_size, intermediate_size * 2, false),
-          dense_4h_to_h(ctx, intermediate_size, hidden_size, false) {}
-
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const;
-
-  public:
-    Linear dense_h_to_4h;
-    Linear dense_4h_to_h;
-};
+using GLM2MLP = BasicGLU<ACT_TYPE_SILU, false>;
 
 class GLM2Block {
   public:
@@ -608,20 +626,7 @@ class Baichuan13BSelfAttention {
     ggml_tensor *v_cache; // [n_head, head_size, maxlen]
 };
 
-class Baichuan13BMLP {
-  public:
-    Baichuan13BMLP() = default;
-    Baichuan13BMLP(ModelContext *ctx, int hidden_size, int intermediate_size)
-        : gate_proj(ctx, hidden_size, intermediate_size, false), down_proj(ctx, intermediate_size, hidden_size, false),
-          up_proj(ctx, hidden_size, intermediate_size, false) {}
-
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const;
-
-  public:
-    Linear gate_proj;
-    Linear down_proj;
-    Linear up_proj;
-};
+using Baichuan13BMLP = BasicGLU<ACT_TYPE_SILU, false>;
 
 class Baichuan13BBlock {
   public:

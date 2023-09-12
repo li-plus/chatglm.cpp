@@ -647,8 +647,9 @@ TEST_F(ChatGLMTest, GLM2Block) {
                                            model.attention.query_key_value.bias,
                                            model.attention.dense.weight,
                                            model.post_attention_layernorm.weight,
-                                           model.mlp.dense_h_to_4h.weight,
-                                           model.mlp.dense_4h_to_h.weight,
+                                           model.mlp.gate_proj.weight,
+                                           model.mlp.up_proj.weight,
+                                           model.mlp.down_proj.weight,
                                            x1,
                                            ref_y1,
                                            x2,
@@ -747,8 +748,9 @@ TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
                                                model.attention.query_key_value.bias,
                                                model.attention.dense.weight,
                                                model.post_attention_layernorm.weight,
-                                               model.mlp.dense_h_to_4h.weight,
-                                               model.mlp.dense_4h_to_h.weight,
+                                               model.mlp.gate_proj.weight,
+                                               model.mlp.up_proj.weight,
+                                               model.mlp.down_proj.weight,
                                                self_attn_x,
                                                cross_attn_x};
 

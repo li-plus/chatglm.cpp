@@ -324,7 +324,8 @@ std::string ModelLoader::read_string(size_t length) {
     return s;
 }
 
-void ModelLoader::read_tensor(const std::string &name, ggml_tensor *tensor) {
+void ModelLoader::checked_read_tensor_meta(const std::string &name, int target_ndim, int64_t *target_ne,
+                                           ggml_type target_dtype) {
     // read and check tensor name
     {
         int name_size = read_basic<int>();
@@ -337,29 +338,34 @@ void ModelLoader::read_tensor(const std::string &name, ggml_tensor *tensor) {
     // read and check tensor shape
     {
         int ndim = read_basic<int>();
-        CHATGLM_CHECK(ndim == tensor->n_dims)
-            << "tensor " << name << " ndim mismatch: expect " << tensor->n_dims << " but got " << ndim;
+        CHATGLM_CHECK(ndim == target_ndim)
+            << "tensor " << name << " ndim mismatch: expect " << target_ndim << " but got " << ndim;
         for (int i = ndim - 1; i >= 0; i--) {
             int dim_size = read_basic<int>();
-            CHATGLM_CHECK(dim_size == tensor->ne[i]) << "tensor " << name << " shape mismatch at dim " << i
-                                                     << ": expect " << tensor->ne[i] << " but got " << dim_size;
+            CHATGLM_CHECK(dim_size == target_ne[i]) << "tensor " << name << " shape mismatch at dim " << i
+                                                    << ": expect " << target_ne[i] << " but got " << dim_size;
         }
     }
 
     // read and check tensor dtype
     {
         ggml_type dtype = (ggml_type)read_basic<int>();
-        CHATGLM_CHECK(dtype == tensor->type)
-            << "tensor " << name << " dtype mismatch: expect " << tensor->type << " but got " << dtype;
+        CHATGLM_CHECK(dtype == target_dtype)
+            << "tensor " << name << " dtype mismatch: expect " << target_dtype << " but got " << dtype;
     }
+}
 
-    // map tensor data
-    {
-        constexpr int64_t MEM_ALIGNED = 16;
-        const int64_t data_offset = (tell() + (MEM_ALIGNED - 1)) & ~(MEM_ALIGNED - 1);
-        tensor->data = const_cast<char *const>(data) + data_offset;
-        seek(data_offset + ggml_nbytes(tensor), SEEK_SET);
-    }
+void *ModelLoader::read_tensor_data(size_t nbytes) {
+    constexpr int64_t MEM_ALIGNED = 16;
+    const int64_t data_offset = (tell() + (MEM_ALIGNED - 1)) & ~(MEM_ALIGNED - 1);
+    void *tensor_data = data + data_offset;
+    seek(data_offset + nbytes, SEEK_SET);
+    return tensor_data;
+}
+
+void ModelLoader::read_tensor(const std::string &name, ggml_tensor *tensor) {
+    checked_read_tensor_meta(name, tensor->n_dims, tensor->ne, tensor->type);
+    tensor->data = read_tensor_data(ggml_nbytes(tensor));
 }
 
 // ===== modules =====
@@ -394,6 +400,39 @@ ggml_tensor *RMSNorm::forward(ModelContext *ctx, ggml_tensor *input, float eps) 
     ggml_tensor *output = tensor_assign_buffers(ggml_rms_norm_fn(gctx, input, eps));
     output = tensor_assign_buffers(ggml_mul_inplace(gctx, output, weight));
     return output;
+}
+
+template <ActivationType ACT_TYPE>
+static inline ggml_tensor *apply_activation_inplace(ggml_context *ctx, ggml_tensor *hidden_states) {
+    static_assert(ACT_TYPE == ACT_TYPE_GELU || ACT_TYPE == ACT_TYPE_SILU);
+    if constexpr (ACT_TYPE == ACT_TYPE_GELU) {
+        hidden_states = tensor_assign_buffers(ggml_gelu_inplace(ctx, hidden_states));
+    } else if constexpr (ACT_TYPE == ACT_TYPE_SILU) {
+        hidden_states = tensor_assign_buffers(ggml_silu_inplace(ctx, hidden_states));
+    } else {
+        CHATGLM_THROW << "Unknown activation type " << ACT_TYPE;
+    }
+    return hidden_states;
+}
+
+template <ActivationType ACT_TYPE>
+ggml_tensor *BasicMLP<ACT_TYPE>::forward(ModelContext *ctx, ggml_tensor *hidden_states) const {
+    ggml_context *gctx = ctx->ctx_b.get();
+    hidden_states = dense_h_to_4h.forward(ctx, hidden_states);
+    hidden_states = apply_activation_inplace<ACT_TYPE>(gctx, hidden_states);
+    hidden_states = dense_4h_to_h.forward(ctx, hidden_states);
+    return hidden_states;
+}
+
+template <ActivationType ACT_TYPE, bool USE_BIAS>
+ggml_tensor *BasicGLU<ACT_TYPE, USE_BIAS>::forward(ModelContext *ctx, ggml_tensor *hidden_states) const {
+    ggml_context *gctx = ctx->ctx_b.get();
+    ggml_tensor *gate = gate_proj.forward(ctx, hidden_states);
+    gate = apply_activation_inplace<ACT_TYPE>(gctx, gate);
+    hidden_states = up_proj.forward(ctx, hidden_states);
+    hidden_states = tensor_assign_buffers(ggml_mul_inplace(gctx, hidden_states, gate));
+    hidden_states = down_proj.forward(ctx, hidden_states);
+    return hidden_states;
 }
 
 // Adapted from https://github.com/ggerganov/llama.cpp/blob/master/examples/common.cpp
@@ -846,13 +885,6 @@ ggml_tensor *GLMSelfAttention::forward(ModelContext *ctx, ggml_tensor *hidden_st
     return attn_output;
 }
 
-ggml_tensor *GLMMLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) const {
-    ggml_tensor *output = dense_h_to_4h.forward(ctx, hidden_states);
-    output = tensor_assign_buffers(ggml_gelu_inplace(ctx->ctx_b.get(), output));
-    output = dense_4h_to_h.forward(ctx, output);
-    return output;
-}
-
 ggml_tensor *GLMBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
     ggml_context *gctx = ctx->ctx_b.get();
 
@@ -1139,38 +1171,6 @@ ggml_tensor *GLM2SelfAttention::forward(ModelContext *ctx, ggml_tensor *hidden_s
     return attn_output;
 }
 
-ggml_tensor *GLM2MLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) const {
-    ggml_context *gctx = ctx->ctx_b.get();
-
-    ggml_tensor *output = dense_h_to_4h.forward(ctx, hidden_states);
-
-    // swiglu activation
-    ggml_tensor *x0 = ggml_view_2d(gctx, output, output->ne[0] / 2, output->ne[1], output->nb[1], 0);
-#ifdef GGML_USE_CUBLAS
-    x0 = tensor_assign_buffers(ggml_cont(gctx, x0));
-#elif defined(GGML_USE_METAL)
-    if (x0->ne[1] > 1) {
-        x0 = tensor_assign_buffers(ggml_cont(gctx, x0));
-    }
-#endif
-    x0 = tensor_assign_buffers(ggml_silu_inplace(gctx, x0));
-
-    ggml_tensor *x1 = ggml_view_2d(gctx, output, output->ne[0] / 2, output->ne[1], output->nb[1],
-                                   output->ne[0] / 2 * ggml_element_size(output));
-#ifdef GGML_USE_CUBLAS
-    x1 = tensor_assign_buffers(ggml_cont(gctx, x1));
-#elif defined(GGML_USE_METAL)
-    if (x1->ne[1] > 1) {
-        x1 = tensor_assign_buffers(ggml_cont(gctx, x1));
-    }
-#endif
-
-    output = tensor_assign_buffers(ggml_mul_inplace(gctx, x0, x1));
-
-    output = dense_4h_to_h.forward(ctx, output);
-    return output;
-}
-
 ggml_tensor *GLM2Block::forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past) const {
     ggml_context *gctx = ctx->ctx_b.get();
 
@@ -1213,7 +1213,8 @@ ggml_tensor *ChatGLM2Model::forward(ModelContext *ctx, ggml_tensor *input_ids, i
 ChatGLM2ForCausalLM::ChatGLM2ForCausalLM(const ChatGLM2Config &config)
     : BaseModelForCausalLM(MODEL_TYPE_CHATGLM2, config, MEM_SIZE, SCRATCH_SIZE), config(config) {
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
-    const size_t ctx_w_size = (3 + config.num_hidden_layers * 7) * tensor_ovhd;
+    const size_t num_weights = 3 + config.num_hidden_layers * 8;
+    const size_t ctx_w_size = num_weights * tensor_ovhd;
     const size_t ctx_kv_size = 2 * config.num_hidden_layers *
                                (config.max_length * config.hidden_size / config.num_attention_heads *
                                     config.num_kv_heads * ggml_type_size(GGML_TYPE_F16) +
@@ -1228,7 +1229,7 @@ ChatGLM2ForCausalLM::ChatGLM2ForCausalLM(const ChatGLM2Config &config)
     CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ctx_kv_size) << "corrupted kv cache";
 
     // build state_dict
-    state_dict_.reserve(3 + config.num_hidden_layers * 7);
+    state_dict_.reserve(num_weights);
     state_dict_.emplace_back("transformer.embedding.word_embeddings.weight", transformer.word_embeddings.weight);
     for (int i = 0; i < config.num_hidden_layers; i++) {
         std::string layer_prefix = "transformer.encoder.layers." + std::to_string(i) + '.';
@@ -1241,10 +1242,10 @@ ChatGLM2ForCausalLM::ChatGLM2ForCausalLM(const ChatGLM2Config &config)
                                  transformer.layers[i].attention.dense.weight);
         state_dict_.emplace_back(layer_prefix + "post_attention_layernorm.weight",
                                  transformer.layers[i].post_attention_layernorm.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.dense_h_to_4h.weight",
-                                 transformer.layers[i].mlp.dense_h_to_4h.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.dense_4h_to_h.weight",
-                                 transformer.layers[i].mlp.dense_4h_to_h.weight);
+        state_dict_.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
+        state_dict_.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
+        // for compatibility
+        state_dict_.emplace_back(layer_prefix + "mlp.dense_4h_to_h.weight", transformer.layers[i].mlp.down_proj.weight);
     }
     state_dict_.emplace_back("transformer.encoder.final_layernorm.weight", transformer.final_layernorm.weight);
     state_dict_.emplace_back("transformer.output_layer.weight", lm_head.weight);
@@ -1262,12 +1263,37 @@ ChatGLM2ForCausalLM::~ChatGLM2ForCausalLM() {
 }
 
 void ChatGLM2ForCausalLM::load(ModelLoader &loader) {
-    for (auto &item : state_dict_) {
-        const std::string &name = item.first;
-        ggml_tensor *tensor = item.second;
-        loader.read_tensor(name, tensor);
-        if (name != "transformer.embedding.word_embeddings.weight") {
-            tensor_to_device(tensor);
+    std::unordered_map<std::string, std::string> glu_name_map;
+    for (int i = 0; i < config.num_hidden_layers; i++) {
+        std::string layer_prefix = "transformer.encoder.layers." + std::to_string(i) + '.';
+        glu_name_map.emplace(layer_prefix + "mlp.gate_proj.weight", layer_prefix + "mlp.dense_h_to_4h.weight");
+        glu_name_map.emplace(layer_prefix + "mlp.up_proj.weight", layer_prefix + "mlp.dense_h_to_4h.weight");
+    }
+
+    for (auto it = state_dict_.begin(); it != state_dict_.end(); it++) {
+        const std::string &name = it->first;
+        ggml_tensor *tensor = it->second;
+
+        auto glu_it = glu_name_map.find(name);
+        if (glu_it != glu_name_map.end()) {
+            // for compatibility: load gate_proj & up_proj from dense_h_to_4h
+            const std::string &dense_h_to_4h_name = glu_it->second;
+            ggml_tensor *gate_proj = tensor;
+            it++;
+            CHATGLM_CHECK(glu_name_map.at(it->first) == dense_h_to_4h_name) << "corrupted glu weights";
+            ggml_tensor *up_proj = it->second;
+
+            int64_t target_ne[4]{gate_proj->ne[0], gate_proj->ne[1] + up_proj->ne[1]};
+            loader.checked_read_tensor_meta(dense_h_to_4h_name, gate_proj->n_dims, target_ne, gate_proj->type);
+            gate_proj->data = loader.read_tensor_data(ggml_nbytes(gate_proj));
+            up_proj->data = loader.read_tensor_data(ggml_nbytes(up_proj));
+            tensor_to_device(gate_proj);
+            tensor_to_device(up_proj);
+        } else {
+            loader.read_tensor(name, tensor);
+            if (name != "transformer.embedding.word_embeddings.weight") {
+                tensor_to_device(tensor);
+            }
         }
     }
 
@@ -1421,18 +1447,6 @@ ggml_tensor *Baichuan13BSelfAttention::forward(ModelContext *ctx, ggml_tensor *h
     return attn_output;
 }
 
-ggml_tensor *Baichuan13BMLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) const {
-    ggml_context *gctx = ctx->ctx_b.get();
-
-    ggml_tensor *gate = gate_proj.forward(ctx, hidden_states);
-    gate = tensor_assign_buffers(ggml_silu_inplace(gctx, gate));
-    ggml_tensor *up = up_proj.forward(ctx, hidden_states);
-
-    ggml_tensor *output = tensor_assign_buffers(ggml_mul_inplace(gctx, gate, up));
-    output = down_proj.forward(ctx, output);
-    return output;
-}
-
 ggml_tensor *Baichuan13BBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past) const {
     ggml_context *gctx = ctx->ctx_b.get();
 
@@ -1552,7 +1566,7 @@ ggml_tensor *Baichuan13BForCausalLM::forward(ModelContext *ctx, ggml_tensor *inp
 
 Pipeline::Pipeline(const std::string &path) {
     mapped_file = std::make_unique<MappedFile>(path);
-    ModelLoader loader(std::string_view((char *)mapped_file->data, mapped_file->size));
+    ModelLoader loader(mapped_file->data, mapped_file->size);
 
     // load magic
     std::string magic = loader.read_string(4);
