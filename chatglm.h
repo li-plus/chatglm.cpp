@@ -612,7 +612,7 @@ struct GLMContextMasker {
     ggml_tensor *operator()(ModelContext *ctx, ggml_tensor *attn_scores, int n_past) const;
 };
 
-using GLMSelfAttention = BasicAttention<true, true, true, ROPE_TYPE_CHATGLM, false, GLMContextMasker>;
+using GLMAttention = BasicAttention<true, true, true, ROPE_TYPE_CHATGLM, false, GLMContextMasker>;
 
 using GLMMLP = BasicMLP<ACT_TYPE_GELU>;
 
@@ -629,7 +629,7 @@ class GLMBlock {
 
   public:
     LayerNorm input_layernorm;
-    GLMSelfAttention attention;
+    GLMAttention attention;
     LayerNorm post_attention_layernorm;
     GLMMLP mlp;
     int num_hidden_layers;
@@ -694,7 +694,7 @@ class ChatGLM2Tokenizer : public BaseTokenizer {
     int eop_token_id;
 };
 
-using GLM2SelfAttention = BasicAttention<true, false, false, ROPE_TYPE_DEFAULT, false, CausalContextMasker>;
+using GLM2Attention = BasicAttention<true, false, false, ROPE_TYPE_DEFAULT, false, CausalContextMasker>;
 
 using GLM2MLP = BasicGLU<ACT_TYPE_SILU, false>;
 
@@ -711,7 +711,7 @@ class GLM2Block {
 
   public:
     RMSNorm input_layernorm;
-    GLM2SelfAttention attention;
+    GLM2Attention attention;
     RMSNorm post_attention_layernorm;
     GLM2MLP mlp;
 };
@@ -776,7 +776,7 @@ class Baichuan13BTokenizer : public BaseTokenizer {
     int pad_token_id;
 };
 
-using Baichuan13BSelfAttention = BasicAttention<false, false, false, ROPE_TYPE_NONE, true, CausalContextMasker>;
+using Baichuan13BAttention = BasicAttention<false, false, false, ROPE_TYPE_NONE, true, CausalContextMasker>;
 
 using Baichuan13BMLP = BasicGLU<ACT_TYPE_SILU, false>;
 
@@ -792,7 +792,7 @@ class Baichuan13BBlock {
 
   public:
     RMSNorm input_layernorm;
-    Baichuan13BSelfAttention attention;
+    Baichuan13BAttention attention;
     RMSNorm post_attention_layernorm;
     Baichuan13BMLP mlp;
 };

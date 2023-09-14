@@ -1182,7 +1182,7 @@ ggml_tensor *Baichuan13BBlock::forward(ModelContext *ctx, ggml_tensor *hidden_st
     hidden_states = tensor_assign_buffers(ggml_add_inplace(gctx, hidden_states, residual));
 
     residual = hidden_states;
-    hidden_states = post_attention_layernorm.forward(ctx, hidden_states);
+    hidden_states = post_attention_layernorm.forward(ctx, hidden_states, 1e-6);
     hidden_states = mlp.forward(ctx, hidden_states);
     hidden_states = tensor_assign_buffers(ggml_add_inplace(gctx, hidden_states, residual));
 
