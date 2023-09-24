@@ -647,8 +647,9 @@ TEST_F(ChatGLMTest, GLM2Block) {
                                            model.attention.query_key_value.bias,
                                            model.attention.dense.weight,
                                            model.post_attention_layernorm.weight,
-                                           model.mlp.dense_h_to_4h.weight,
-                                           model.mlp.dense_4h_to_h.weight,
+                                           model.mlp.gate_proj.weight,
+                                           model.mlp.up_proj.weight,
+                                           model.mlp.down_proj.weight,
                                            x1,
                                            ref_y1,
                                            x2,
@@ -680,7 +681,7 @@ TEST_F(ChatGLMTest, GLM2Block) {
     // self attention
     reset_cgraph();
     {
-        ggml_tensor *out_y1 = model.forward(&ctx, x1, 0);
+        ggml_tensor *out_y1 = model.forward(&ctx, x1, 0, seq_len);
         EXPECT_EQ(out_y1->backend, x1->backend);
         out_y1->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y1);
@@ -692,7 +693,7 @@ TEST_F(ChatGLMTest, GLM2Block) {
     // cross attention
     reset_cgraph();
     {
-        ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len);
+        ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len, seq_len);
         EXPECT_EQ(out_y2->backend, x2->backend);
         out_y2->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y2);
@@ -702,7 +703,7 @@ TEST_F(ChatGLMTest, GLM2Block) {
     }
     reset_cgraph();
     {
-        ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1);
+        ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1, seq_len);
         EXPECT_EQ(out_y3->backend, x3->backend);
         out_y3->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y3);
@@ -747,8 +748,9 @@ TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
                                                model.attention.query_key_value.bias,
                                                model.attention.dense.weight,
                                                model.post_attention_layernorm.weight,
-                                               model.mlp.dense_h_to_4h.weight,
-                                               model.mlp.dense_4h_to_h.weight,
+                                               model.mlp.gate_proj.weight,
+                                               model.mlp.up_proj.weight,
+                                               model.mlp.down_proj.weight,
                                                self_attn_x,
                                                cross_attn_x};
 
@@ -760,7 +762,7 @@ TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
         // self attention
         reset_cgraph();
         {
-            ggml_tensor *self_attn_y = model.forward(&ctx, self_attn_x, 0);
+            ggml_tensor *self_attn_y = model.forward(&ctx, self_attn_x, 0, seq_len);
             ggml_build_forward_expand(&ctx.gf, self_attn_y);
             std::cout << "[Benchmark] GLM2Block " << ggml_type_name(dtype)
                       << " self attn time: " << perf_device_graph_compute() << " ms\n";
@@ -769,7 +771,7 @@ TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
         // cross attention
         reset_cgraph();
         {
-            ggml_tensor *cross_attn_y = model.forward(&ctx, cross_attn_x, seq_len);
+            ggml_tensor *cross_attn_y = model.forward(&ctx, cross_attn_x, seq_len, seq_len);
             ggml_build_forward_expand(&ctx.gf, cross_attn_y);
             std::cout << "[Benchmark] GLM2Block " << ggml_type_name(dtype)
                       << " cross attn time: " << perf_device_graph_compute() << " ms\n";
@@ -853,7 +855,7 @@ TEST_F(ChatGLMTest, Baichuan13BModel) {
     // self attention
     reset_cgraph();
     {
-        ggml_tensor *out_y1 = model.forward(&ctx, x1, 0);
+        ggml_tensor *out_y1 = model.forward(&ctx, x1, 0, seq_len);
         EXPECT_EQ(out_y1->backend, ref_y1->backend);
         out_y1->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y1);
@@ -865,7 +867,7 @@ TEST_F(ChatGLMTest, Baichuan13BModel) {
     // cross attention
     reset_cgraph();
     {
-        ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len);
+        ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len, seq_len);
         EXPECT_EQ(out_y2->backend, ref_y2->backend);
         out_y2->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y2);
@@ -875,7 +877,7 @@ TEST_F(ChatGLMTest, Baichuan13BModel) {
     }
     reset_cgraph();
     {
-        ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1);
+        ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1, seq_len);
         EXPECT_EQ(out_y3->backend, ref_y3->backend);
         out_y3->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y3);

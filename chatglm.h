@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <ggml.h>
 #include <sentencepiece_processor.h>
 #include <sstream>
@@ -174,6 +175,256 @@ class RMSNorm {
     bool inplace;
 };
 
+enum ActivationType {
+    ACT_TYPE_GELU,
+    ACT_TYPE_SILU,
+};
+
+template <ActivationType ACT_TYPE>
+static inline ggml_tensor *apply_activation_inplace(ggml_context *ctx, ggml_tensor *hidden_states) {
+    static_assert(ACT_TYPE == ACT_TYPE_GELU || ACT_TYPE == ACT_TYPE_SILU);
+    if constexpr (ACT_TYPE == ACT_TYPE_GELU) {
+        hidden_states = tensor_assign_buffers(ggml_gelu_inplace(ctx, hidden_states));
+    } else if constexpr (ACT_TYPE == ACT_TYPE_SILU) {
+        hidden_states = tensor_assign_buffers(ggml_silu_inplace(ctx, hidden_states));
+    } else {
+        CHATGLM_THROW << "Unknown activation type " << ACT_TYPE;
+    }
+    return hidden_states;
+}
+
+template <ActivationType ACT_TYPE>
+class BasicMLP {
+  public:
+    BasicMLP() = default;
+    BasicMLP(ModelContext *ctx, int hidden_size, int intermediate_size)
+        : dense_h_to_4h(ctx, hidden_size, intermediate_size), dense_4h_to_h(ctx, intermediate_size, hidden_size) {}
+
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const {
+        ggml_context *gctx = ctx->ctx_b.get();
+        hidden_states = dense_h_to_4h.forward(ctx, hidden_states);
+        hidden_states = apply_activation_inplace<ACT_TYPE>(gctx, hidden_states);
+        hidden_states = dense_4h_to_h.forward(ctx, hidden_states);
+        return hidden_states;
+    }
+
+  public:
+    Linear dense_h_to_4h;
+    Linear dense_4h_to_h;
+};
+
+template <ActivationType ACT_TYPE, bool USE_BIAS>
+class BasicGLU {
+  public:
+    BasicGLU() = default;
+    BasicGLU(ModelContext *ctx, int hidden_size, int intermediate_size)
+        : gate_proj(ctx, hidden_size, intermediate_size, USE_BIAS),
+          up_proj(ctx, hidden_size, intermediate_size, USE_BIAS),
+          down_proj(ctx, intermediate_size, hidden_size, USE_BIAS) {}
+
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const {
+        ggml_context *gctx = ctx->ctx_b.get();
+        ggml_tensor *gate = gate_proj.forward(ctx, hidden_states);
+        gate = apply_activation_inplace<ACT_TYPE>(gctx, gate);
+        hidden_states = up_proj.forward(ctx, hidden_states);
+        hidden_states = tensor_assign_buffers(ggml_mul_inplace(gctx, hidden_states, gate));
+        hidden_states = down_proj.forward(ctx, hidden_states);
+        return hidden_states;
+    }
+
+  public:
+    Linear gate_proj;
+    Linear up_proj;
+    Linear down_proj;
+};
+
+struct CausalContextMasker {
+    ggml_tensor *operator()(ModelContext *ctx, ggml_tensor *attn_scores, int n_past) const {
+        return tensor_assign_buffers(ggml_diag_mask_inf_inplace(ctx->ctx_b.get(), attn_scores, n_past));
+    }
+};
+
+enum RopeType {
+    ROPE_TYPE_NONE = -1,
+    ROPE_TYPE_DEFAULT = 0,
+    ROPE_TYPE_CHATGLM = 4,
+};
+
+static inline ggml_tensor *apply_rope_inplace(ggml_context *ctx, ggml_tensor *a, int mode, int n_past, int n_ctx) {
+    // tensor a (activation) is of shape [qlen, heads, head_size]
+#ifdef GGML_USE_CUBLAS
+    if (!ggml_is_contiguous(a)) {
+        a = tensor_assign_buffers(ggml_cont(ctx, a));
+    }
+#endif
+    const int head_size = a->ne[0];
+    const int rope_dim = head_size / 2;
+    a = tensor_assign_buffers(ggml_rope_inplace(ctx, a, n_past, rope_dim, mode, n_ctx)); // [qlen, heads, head_size]
+    return a;
+}
+
+template <bool USE_QKV_BIAS, bool USE_DENSE_BIAS, bool INTERLEAVED_QKV, RopeType ROPE_TYPE, bool USE_ALIBI,
+          typename ContextMasker>
+class BasicAttention {
+  public:
+    BasicAttention() = default;
+    BasicAttention(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int max_length)
+        : num_attention_heads(num_attention_heads), num_kv_heads(num_kv_heads),
+          query_key_value(ctx, hidden_size, hidden_size + 2 * (hidden_size / num_attention_heads) * num_kv_heads,
+                          USE_QKV_BIAS),
+          dense(ctx, hidden_size, hidden_size, USE_DENSE_BIAS),
+          k_cache(ggml_new_tensor_3d(ctx->ctx_kv.get(), GGML_TYPE_F16, hidden_size / num_attention_heads, max_length,
+                                     num_kv_heads)),
+          v_cache(ggml_new_tensor_3d(ctx->ctx_kv.get(), GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
+                                     num_kv_heads)) {}
+
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
+        ggml_context *gctx = ctx->ctx_b.get();
+
+        const int hidden_size = hidden_states->ne[0];
+        const int qlen = hidden_states->ne[1];
+        const int head_size = hidden_size / num_attention_heads;
+        const int num_shared_q_heads = num_attention_heads / num_kv_heads;
+        const bool is_gqa = num_shared_q_heads > 1;
+
+        ggml_tensor *qkv = query_key_value.forward(ctx, hidden_states); // [qlen, hidden + 2 * kv_hidden]
+
+        // split mixed qkv into separate query, key and value
+        ggml_tensor *query_layer; // [qlen, heads, head_size]
+        ggml_tensor *key_layer;   // [qlen, kv_heads, head_size]
+        ggml_tensor *value_layer; // [qlen, kv_heads, head_size]
+
+        if constexpr (INTERLEAVED_QKV) {
+            CHATGLM_CHECK(!is_gqa) << "interleaved qkv is not supported for GQA";
+            query_layer = ggml_view_3d(gctx, qkv, head_size, num_attention_heads, qlen,
+                                       3 * head_size * ggml_element_size(qkv), qkv->nb[1], 0);
+            key_layer =
+                ggml_view_3d(gctx, qkv, head_size, num_attention_heads, qlen, 3 * head_size * ggml_element_size(qkv),
+                             qkv->nb[1], head_size * ggml_element_size(qkv));
+            value_layer =
+                ggml_view_3d(gctx, qkv, head_size, num_attention_heads, qlen, 3 * head_size * ggml_element_size(qkv),
+                             qkv->nb[1], 2 * head_size * ggml_element_size(qkv));
+        } else {
+            query_layer = ggml_view_3d(gctx, qkv, head_size, num_attention_heads, qlen,
+                                       head_size * ggml_element_size(qkv), qkv->nb[1], 0);
+            key_layer = ggml_view_3d(gctx, qkv, head_size, num_kv_heads, qlen, head_size * ggml_element_size(qkv),
+                                     qkv->nb[1], hidden_size * ggml_element_size(qkv));
+            value_layer = ggml_view_3d(gctx, qkv, head_size, num_kv_heads, qlen, head_size * ggml_element_size(qkv),
+                                       qkv->nb[1], (hidden_size + head_size * num_kv_heads) * ggml_element_size(qkv));
+        }
+
+        if constexpr (ROPE_TYPE != ROPE_TYPE_NONE) {
+            query_layer = apply_rope_inplace(gctx, query_layer, ROPE_TYPE, n_past, n_ctx);
+            key_layer = apply_rope_inplace(gctx, key_layer, ROPE_TYPE, n_past, n_ctx);
+        }
+
+        query_layer = tensor_assign_buffers(
+            ggml_cont(gctx, ggml_permute(gctx, query_layer, 0, 2, 1, 3))); // [heads, qlen, head_size]
+        if (num_shared_q_heads > 1) {
+            query_layer =
+                tensor_assign_buffers(ggml_reshape_3d(gctx, query_layer, head_size, num_shared_q_heads * qlen,
+                                                      num_kv_heads)); // [kv_heads, shared_qheads * qlen, head_size]
+        }
+
+        key_layer = tensor_assign_buffers(ggml_permute(gctx, key_layer, 0, 2, 1, 3)); // [kv_heads, qlen, head_size]
+
+        value_layer = tensor_assign_buffers(ggml_permute(gctx, value_layer, 1, 2, 0, 3)); // [kv_heads, head_size, qlen]
+
+        // store key & value to cache
+        ggml_tensor *k_cache_view = tensor_assign_buffers(
+            ggml_view_3d(gctx, k_cache, head_size, qlen, num_kv_heads, k_cache->nb[1], k_cache->nb[2],
+                         n_past * head_size * ggml_element_size(k_cache))); // [kv_heads, qlen, head_size]
+        ggml_build_forward_expand(&ctx->gf, ggml_cpy(gctx, key_layer, k_cache_view));
+        ggml_tensor *v_cache_view = tensor_assign_buffers(
+            ggml_view_3d(gctx, v_cache, qlen, head_size, num_kv_heads, v_cache->nb[1], v_cache->nb[2],
+                         n_past * ggml_element_size(v_cache))); // [kv_heads, head_size, qlen]
+        ggml_build_forward_expand(&ctx->gf, ggml_cpy(gctx, value_layer, v_cache_view));
+
+        // concat key & value with past kv
+        key_layer = tensor_assign_buffers(ggml_view_3d(gctx, k_cache, head_size, n_past + qlen, num_kv_heads,
+                                                       k_cache->nb[1], k_cache->nb[2],
+                                                       0)); // [kv_heads, klen, head_size]
+        value_layer = tensor_assign_buffers(ggml_view_3d(gctx, v_cache, n_past + qlen, head_size, num_kv_heads,
+                                                         v_cache->nb[1], v_cache->nb[2],
+                                                         0)); // [kv_heads, head_size, klen]
+
+        // attention
+        ggml_tensor *attn_scores =
+            tensor_assign_buffers(ggml_mul_mat(gctx, key_layer, query_layer)); // [kv_heads, shared_qheads * qlen, klen]
+        attn_scores = tensor_assign_buffers(
+            ggml_scale_inplace(gctx, attn_scores, ggml_new_f32(gctx, 1.f / std::sqrt(head_size))));
+        if constexpr (USE_ALIBI) {
+            attn_scores = tensor_assign_buffers(ggml_alibi(gctx, attn_scores, n_past, num_attention_heads, 8));
+        }
+        if (n_past == 0) {
+            // build attention mask for context input
+            if (num_shared_q_heads > 1) {
+                attn_scores = ggml_reshape_3d(gctx, attn_scores, n_past + qlen, qlen,
+                                              num_attention_heads); // [heads, qlen, klen]
+            }
+            attn_scores = context_masker_(ctx, attn_scores, n_past);
+            if (num_shared_q_heads > 1) {
+                attn_scores = ggml_reshape_3d(gctx, attn_scores, n_past + qlen, num_shared_q_heads * qlen,
+                                              num_kv_heads); // [kv_heads, shared_qheads * qlen, klen]
+            }
+        }
+        ggml_tensor *attn_probs =
+            tensor_assign_buffers(ggml_soft_max_inplace(gctx, attn_scores)); // [kv_heads, shared_qheads * qlen, klen]
+
+        ggml_tensor *context_layer = tensor_assign_buffers(
+            ggml_mul_mat(gctx, value_layer, attn_probs)); // [kv_heads, shared_qheads * qlen, head_size]
+        if (num_shared_q_heads > 1) {
+            context_layer = ggml_reshape_3d(gctx, context_layer, head_size, qlen,
+                                            num_attention_heads); // [heads, qlen, head_size]
+        }
+        context_layer = tensor_assign_buffers(
+            ggml_cont(gctx, ggml_permute(gctx, context_layer, 0, 2, 1, 3))); // [qlen, heads, head_size]
+        context_layer =
+            tensor_assign_buffers(ggml_reshape_2d(gctx, context_layer, hidden_size, qlen)); // [qlen, hidden]
+
+        ggml_tensor *attn_output = dense.forward(ctx, context_layer);
+        return attn_output;
+    }
+
+  public:
+    int num_attention_heads;
+    int num_kv_heads;
+    Linear query_key_value;
+    Linear dense;
+    ggml_tensor *k_cache; // [kv_heads, max_len, head_size]
+    ggml_tensor *v_cache; // [kv_heads, head_size, max_len]
+
+  private:
+    ContextMasker context_masker_;
+};
+
+template <typename Block, typename Norm>
+class BasicModel {
+  protected:
+    BasicModel() = default;
+    BasicModel(Embedding word_embeddings, std::vector<Block> layers, Norm final_layernorm)
+        : word_embeddings(word_embeddings), layers(std::move(layers)), final_layernorm(final_layernorm) {}
+
+  public:
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const {
+        ggml_context *gctx = ctx->ctx_b.get();
+        ggml_tensor *hidden_states = word_embeddings.forward(ctx, input_ids);
+        for (const auto &layer : layers) {
+            ggml_set_scratch(gctx, ctx->scratch);
+            hidden_states = layer.forward(ctx, hidden_states, n_past, n_ctx);
+        }
+        ggml_scratch empty_scratch = {0, 0, nullptr};
+        ggml_set_scratch(gctx, empty_scratch);
+        hidden_states = final_layernorm.forward(ctx, hidden_states);
+        return hidden_states;
+    }
+
+  public:
+    Embedding word_embeddings;
+    std::vector<Block> layers;
+    Norm final_layernorm;
+};
+
 class BaseStreamer {
   public:
     virtual ~BaseStreamer() = default;
@@ -248,7 +499,7 @@ class MappedFile {
 
 class ModelLoader {
   public:
-    ModelLoader(std::string_view buffer) : data(buffer.data()), size(buffer.size()), ptr(buffer.data()) {}
+    ModelLoader(char *data, size_t size) : data(data), size(size), ptr(data) {}
 
     int64_t tell() const { return ptr - data; }
 
@@ -263,12 +514,16 @@ class ModelLoader {
 
     std::string read_string(size_t length);
 
+    void checked_read_tensor_meta(const std::string &name, int ndim, int64_t *ne, ggml_type dtype);
+
+    void *read_tensor_data(size_t nbytes);
+
     void read_tensor(const std::string &name, ggml_tensor *tensor);
 
   public:
-    const char *const data;
+    char *data;
     size_t size;
-    const char *ptr;
+    char *ptr;
 };
 
 // ===== generation =====
@@ -347,6 +602,60 @@ class BaseModelForCausalLM {
     ModelType model_type_;
     BaseConfig config_;
     ModelContext ctx_;
+};
+
+template <typename Config, typename Model>
+class BasicModelForCausalLM : public BaseModelForCausalLM {
+  protected:
+    BasicModelForCausalLM(ModelType model_type, const Config &config, size_t mem_size, size_t scratch_size)
+        : BaseModelForCausalLM(model_type, config, mem_size, scratch_size), config(config) {}
+    ~BasicModelForCausalLM() { to_cpu(); }
+
+  public:
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override {
+        ggml_tensor *transformer_outputs = transformer.forward(ctx, input_ids, n_past, n_ctx);
+        // NOTE: only compute next_token_logits for the last token
+        if (input_ids->ne[0] > 1) {
+            transformer_outputs = tensor_assign_buffers(
+                ggml_view_1d(ctx->ctx_b.get(), transformer_outputs, config.hidden_size,
+                             (input_ids->ne[0] - 1) * config.hidden_size * ggml_element_size(transformer_outputs)));
+        }
+        ggml_tensor *lm_logits = lm_head.forward(ctx, transformer_outputs);
+        return lm_logits;
+    }
+
+  protected:
+    void to_cpu() {
+        for (auto &item : state_dict_) {
+            tensor_to_cpu(item.second);
+        }
+
+        for (auto &layer : transformer.layers) {
+            tensor_to_cpu(layer.attention.k_cache);
+            tensor_to_cpu(layer.attention.v_cache);
+        }
+    }
+
+    void to_device(const std::string &embedding_key) {
+        // should not place embedding onto device
+        for (auto &item : state_dict_) {
+            const std::string &name = item.first;
+            ggml_tensor *tensor = item.second;
+            if (name != embedding_key) {
+                tensor_to_device(tensor);
+            }
+        }
+
+        for (auto &layer : transformer.layers) {
+            tensor_to_device(layer.attention.k_cache);
+            tensor_to_device(layer.attention.v_cache);
+        }
+    }
+
+  public:
+    Config config;
+    Model transformer;
+    Linear lm_head;
     std::vector<std::pair<std::string, ggml_tensor *>> state_dict_;
 };
 
@@ -380,80 +689,53 @@ class ChatGLMTokenizer : public BaseTokenizer {
     int pad_token_id;
 };
 
-class GLMSelfAttention {
-  public:
-    // TODO: kv cache type
-    GLMSelfAttention() : num_attention_heads(0) {}
-    GLMSelfAttention(ModelContext *ctx, int hidden_size, int num_attention_heads, int max_length);
-
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
-
-  public:
-    Linear query_key_value;
-    Linear dense;
-    int num_attention_heads;
-    ggml_tensor *k_cache; // [n_head, maxlen, head_size]
-    ggml_tensor *v_cache; // [n_head, head_size, maxlen]
+struct GLMContextMasker {
+    ggml_tensor *operator()(ModelContext *ctx, ggml_tensor *attn_scores, int n_past) const;
 };
 
-class GLMMLP {
-  public:
-    GLMMLP() = default;
-    GLMMLP(ModelContext *ctx, int hidden_size)
-        : dense_h_to_4h(ctx, hidden_size, 4 * hidden_size), dense_4h_to_h(ctx, 4 * hidden_size, hidden_size) {}
+using GLMAttention = BasicAttention<true, true, true, ROPE_TYPE_CHATGLM, false, GLMContextMasker>;
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const;
-
-  public:
-    Linear dense_h_to_4h;
-    Linear dense_4h_to_h;
-};
+using GLMMLP = BasicMLP<ACT_TYPE_GELU>;
 
 class GLMBlock {
   public:
     GLMBlock() : num_hidden_layers(0) {}
     GLMBlock(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_hidden_layers, int max_length)
-        : input_layernorm(ctx, hidden_size), attention(ctx, hidden_size, num_attention_heads, max_length),
-          post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size), num_hidden_layers(num_hidden_layers) {}
+        : input_layernorm(ctx, hidden_size),
+          attention(ctx, hidden_size, num_attention_heads, num_attention_heads, max_length),
+          post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size, 4 * hidden_size),
+          num_hidden_layers(num_hidden_layers) {}
 
     ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
 
   public:
     LayerNorm input_layernorm;
-    GLMSelfAttention attention;
+    GLMAttention attention;
     LayerNorm post_attention_layernorm;
     GLMMLP mlp;
     int num_hidden_layers;
 };
 
-class ChatGLMModel {
+class ChatGLMModel : public BasicModel<GLMBlock, LayerNorm> {
   public:
     ChatGLMModel() = default;
-    ChatGLMModel(ModelContext *ctx, const ChatGLMConfig &config);
+    ChatGLMModel(ModelContext *ctx, const ChatGLMConfig &config)
+        : BasicModel(Embedding(ctx, config.vocab_size, config.hidden_size), build_layers(ctx, config),
+                     LayerNorm(ctx, config.hidden_size)) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const;
-
-  public:
-    Embedding word_embeddings;
-    std::vector<GLMBlock> layers;
-    LayerNorm final_layernorm;
+  private:
+    static std::vector<GLMBlock> build_layers(ModelContext *ctx, const ChatGLMConfig &config);
 };
 
-class ChatGLMForCausalLM : public BaseModelForCausalLM {
+class ChatGLMForCausalLM : public BasicModelForCausalLM<ChatGLMConfig, ChatGLMModel> {
   public:
     ChatGLMForCausalLM(const ChatGLMConfig &config);
-    ~ChatGLMForCausalLM();
 
     void load(ModelLoader &loader) override;
-
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
 
   public:
     static constexpr size_t MEM_SIZE = 512 * MB;      // 2k context
     static constexpr size_t SCRATCH_SIZE = 1024 * MB; // 2k context
-    ChatGLMConfig config;
-    ChatGLMModel transformer;
-    Linear lm_head;
 };
 
 // ===== ChatGLM2-6B =====
@@ -485,35 +767,9 @@ class ChatGLM2Tokenizer : public BaseTokenizer {
     int eop_token_id;
 };
 
-class GLM2SelfAttention {
-  public:
-    GLM2SelfAttention() : num_attention_heads(0), num_kv_heads(0) {}
-    GLM2SelfAttention(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int max_length);
+using GLM2Attention = BasicAttention<true, false, false, ROPE_TYPE_DEFAULT, false, CausalContextMasker>;
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past) const;
-
-  public:
-    int num_attention_heads;
-    int num_kv_heads;
-    Linear query_key_value;
-    Linear dense;
-    ggml_tensor *k_cache; // [mqa_n_head, maxlen, head_size]
-    ggml_tensor *v_cache; // [mqa_n_head, head_size, maxlen]
-};
-
-class GLM2MLP {
-  public:
-    GLM2MLP() = default;
-    GLM2MLP(ModelContext *ctx, int hidden_size, int intermediate_size)
-        : dense_h_to_4h(ctx, hidden_size, intermediate_size * 2, false),
-          dense_4h_to_h(ctx, intermediate_size, hidden_size, false) {}
-
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const;
-
-  public:
-    Linear dense_h_to_4h;
-    Linear dense_4h_to_h;
-};
+using GLM2MLP = BasicGLU<ACT_TYPE_SILU, false>;
 
 class GLM2Block {
   public:
@@ -524,44 +780,35 @@ class GLM2Block {
           attention(ctx, hidden_size, num_attention_heads, num_kv_heads, max_length),
           post_attention_layernorm(ctx, hidden_size, false), mlp(ctx, hidden_size, intermediate_size) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
 
   public:
     RMSNorm input_layernorm;
-    GLM2SelfAttention attention;
+    GLM2Attention attention;
     RMSNorm post_attention_layernorm;
     GLM2MLP mlp;
 };
 
-class ChatGLM2Model {
+class ChatGLM2Model : public BasicModel<GLM2Block, RMSNorm> {
   public:
     ChatGLM2Model() = default;
-    ChatGLM2Model(ModelContext *ctx, const ChatGLM2Config &config);
+    ChatGLM2Model(ModelContext *ctx, const ChatGLM2Config &config)
+        : BasicModel(Embedding(ctx, config.vocab_size, config.hidden_size), build_layers(ctx, config),
+                     RMSNorm(ctx, config.hidden_size)) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past) const;
-
-  public:
-    Embedding word_embeddings;
-    std::vector<GLM2Block> layers;
-    RMSNorm final_layernorm;
+  private:
+    static std::vector<GLM2Block> build_layers(ModelContext *ctx, const ChatGLM2Config &config);
 };
 
-class ChatGLM2ForCausalLM : public BaseModelForCausalLM {
+class ChatGLM2ForCausalLM : public BasicModelForCausalLM<ChatGLM2Config, ChatGLM2Model> {
   public:
     ChatGLM2ForCausalLM(const ChatGLM2Config &config);
-    ~ChatGLM2ForCausalLM();
 
     void load(ModelLoader &loader) override;
-
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
 
   public:
     static constexpr size_t MEM_SIZE = 512 * MB;      // 2k context
     static constexpr size_t SCRATCH_SIZE = 1280 * MB; // 2k context
-
-    ChatGLM2Config config;
-    ChatGLM2Model transformer;
-    Linear lm_head;
 };
 
 // ===== Baichuan-13B =====
@@ -593,81 +840,47 @@ class Baichuan13BTokenizer : public BaseTokenizer {
     int pad_token_id;
 };
 
-class Baichuan13BSelfAttention {
-  public:
-    Baichuan13BSelfAttention() = default;
-    Baichuan13BSelfAttention(ModelContext *ctx, int hidden_size, int num_attention_heads, int max_length);
+using Baichuan13BAttention = BasicAttention<false, false, false, ROPE_TYPE_NONE, true, CausalContextMasker>;
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past) const;
-
-  public:
-    int num_attention_heads;
-    Linear query_key_value;
-    Linear dense;
-    ggml_tensor *k_cache; // [n_head, maxlen, head_size]
-    ggml_tensor *v_cache; // [n_head, head_size, maxlen]
-};
-
-class Baichuan13BMLP {
-  public:
-    Baichuan13BMLP() = default;
-    Baichuan13BMLP(ModelContext *ctx, int hidden_size, int intermediate_size)
-        : gate_proj(ctx, hidden_size, intermediate_size, false), down_proj(ctx, intermediate_size, hidden_size, false),
-          up_proj(ctx, hidden_size, intermediate_size, false) {}
-
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states) const;
-
-  public:
-    Linear gate_proj;
-    Linear down_proj;
-    Linear up_proj;
-};
+using Baichuan13BMLP = BasicGLU<ACT_TYPE_SILU, false>;
 
 class Baichuan13BBlock {
   public:
     Baichuan13BBlock() = default;
     Baichuan13BBlock(ModelContext *ctx, int hidden_size, int num_attention_heads, int intermediate_size, int max_length)
-        : input_layernorm(ctx, hidden_size, false), attention(ctx, hidden_size, num_attention_heads, max_length),
+        : input_layernorm(ctx, hidden_size, false),
+          attention(ctx, hidden_size, num_attention_heads, num_attention_heads, max_length),
           post_attention_layernorm(ctx, hidden_size, false), mlp(ctx, hidden_size, intermediate_size) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
 
   public:
     RMSNorm input_layernorm;
-    Baichuan13BSelfAttention attention;
+    Baichuan13BAttention attention;
     RMSNorm post_attention_layernorm;
     Baichuan13BMLP mlp;
 };
 
-class Baichuan13BModel {
+class Baichuan13BModel : public BasicModel<Baichuan13BBlock, RMSNorm> {
   public:
     Baichuan13BModel() = default;
-    Baichuan13BModel(ModelContext *ctx, const Baichuan13BConfig &config);
+    Baichuan13BModel(ModelContext *ctx, const Baichuan13BConfig &config)
+        : BasicModel(Embedding(ctx, config.vocab_size, config.hidden_size), build_layers(ctx, config),
+                     RMSNorm(ctx, config.hidden_size)) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past) const;
-
-  public:
-    Embedding word_embeddings;
-    std::vector<Baichuan13BBlock> layers;
-    RMSNorm final_layernorm;
+  private:
+    static std::vector<Baichuan13BBlock> build_layers(ModelContext *ctx, const Baichuan13BConfig &config);
 };
 
-class Baichuan13BForCausalLM : public BaseModelForCausalLM {
+class Baichuan13BForCausalLM : public BasicModelForCausalLM<Baichuan13BConfig, Baichuan13BModel> {
   public:
     Baichuan13BForCausalLM(const Baichuan13BConfig &config);
-    ~Baichuan13BForCausalLM();
 
     void load(ModelLoader &loader) override;
-
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
 
   public:
     static constexpr size_t MEM_SIZE = 512 * MB;
     static constexpr size_t SCRATCH_SIZE = 1280 * MB;
-
-    Baichuan13BConfig config;
-    Baichuan13BModel transformer;
-    Linear lm_head;
 };
 
 // ===== pipeline =====
