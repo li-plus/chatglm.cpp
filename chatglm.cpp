@@ -854,35 +854,17 @@ ChatGLMForCausalLM::ChatGLMForCausalLM(const ChatGLMConfig &config)
     state_dict_.emplace_back("lm_head.weight", lm_head.weight);
 }
 
-ChatGLMForCausalLM::~ChatGLMForCausalLM() {
-    for (auto &item : state_dict_) {
-        tensor_to_cpu(item.second);
-    }
-
-    for (auto &layer : transformer.layers) {
-        tensor_to_cpu(layer.attention.k_cache);
-        tensor_to_cpu(layer.attention.v_cache);
-    }
-}
-
 void ChatGLMForCausalLM::load(ModelLoader &loader) {
     for (auto &item : state_dict_) {
         const std::string &name = item.first;
         ggml_tensor *tensor = item.second;
-        if (name == "lm_head.weight") {
-            lm_head.weight->data = transformer.word_embeddings.weight->data; // tied weight
-        } else {
+        if (name != "lm_head.weight") {
             loader.read_tensor(name, tensor);
         }
-        if (name != "transformer.word_embeddings.weight") {
-            tensor_to_device(tensor);
-        }
     }
+    lm_head.weight->data = transformer.word_embeddings.weight->data; // tied weight
 
-    for (auto &layer : transformer.layers) {
-        tensor_to_device(layer.attention.k_cache);
-        tensor_to_device(layer.attention.v_cache);
-    }
+    to_device("transformer.word_embeddings.weight");
 
     ctx_.weight_buffer = std::string_view(loader.data, loader.size);
     ctx_.init_device_context();
@@ -1018,17 +1000,6 @@ ChatGLM2ForCausalLM::ChatGLM2ForCausalLM(const ChatGLM2Config &config)
     state_dict_.emplace_back("transformer.output_layer.weight", lm_head.weight);
 }
 
-ChatGLM2ForCausalLM::~ChatGLM2ForCausalLM() {
-    for (auto &item : state_dict_) {
-        tensor_to_cpu(item.second);
-    }
-
-    for (auto &layer : transformer.layers) {
-        tensor_to_cpu(layer.attention.k_cache);
-        tensor_to_cpu(layer.attention.v_cache);
-    }
-}
-
 void ChatGLM2ForCausalLM::load(ModelLoader &loader) {
     std::unordered_map<std::string, std::string> glu_name_map;
     for (int i = 0; i < config.num_hidden_layers; i++) {
@@ -1054,20 +1025,12 @@ void ChatGLM2ForCausalLM::load(ModelLoader &loader) {
             loader.checked_read_tensor_meta(dense_h_to_4h_name, gate_proj->n_dims, target_ne, gate_proj->type);
             gate_proj->data = loader.read_tensor_data(ggml_nbytes(gate_proj));
             up_proj->data = loader.read_tensor_data(ggml_nbytes(up_proj));
-            tensor_to_device(gate_proj);
-            tensor_to_device(up_proj);
         } else {
             loader.read_tensor(name, tensor);
-            if (name != "transformer.embedding.word_embeddings.weight") {
-                tensor_to_device(tensor);
-            }
         }
     }
 
-    for (auto &layer : transformer.layers) {
-        tensor_to_device(layer.attention.k_cache);
-        tensor_to_device(layer.attention.v_cache);
-    }
+    to_device("transformer.embedding.word_embeddings.weight");
 
     ctx_.weight_buffer = std::string_view(loader.data, loader.size);
     ctx_.init_device_context();
@@ -1188,31 +1151,14 @@ Baichuan13BForCausalLM::Baichuan13BForCausalLM(const Baichuan13BConfig &config)
     state_dict_.emplace_back("lm_head.weight", lm_head.weight);
 }
 
-Baichuan13BForCausalLM::~Baichuan13BForCausalLM() {
-    for (auto &item : state_dict_) {
-        tensor_to_cpu(item.second);
-    }
-
-    for (auto &layer : transformer.layers) {
-        tensor_to_cpu(layer.attention.k_cache);
-        tensor_to_cpu(layer.attention.v_cache);
-    }
-}
-
 void Baichuan13BForCausalLM::load(ModelLoader &loader) {
     for (auto &item : state_dict_) {
         const std::string &name = item.first;
         ggml_tensor *tensor = item.second;
         loader.read_tensor(name, tensor);
-        if (name != "model.embed_tokens.weight") {
-            tensor_to_device(tensor);
-        }
     }
 
-    for (auto &layer : transformer.layers) {
-        tensor_to_device(layer.attention.k_cache);
-        tensor_to_device(layer.attention.v_cache);
-    }
+    to_device("model.embed_tokens.weight");
 
     ctx_.weight_buffer = std::string_view(loader.data, loader.size);
     ctx_.init_device_context();

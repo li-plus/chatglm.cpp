@@ -602,7 +602,6 @@ class BaseModelForCausalLM {
     ModelType model_type_;
     BaseConfig config_;
     ModelContext ctx_;
-    std::vector<std::pair<std::string, ggml_tensor *>> state_dict_;
 };
 
 template <typename Config, typename Model>
@@ -610,6 +609,7 @@ class BasicModelForCausalLM : public BaseModelForCausalLM {
   protected:
     BasicModelForCausalLM(ModelType model_type, const Config &config, size_t mem_size, size_t scratch_size)
         : BaseModelForCausalLM(model_type, config, mem_size, scratch_size), config(config) {}
+    ~BasicModelForCausalLM() { to_cpu(); }
 
   public:
     ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override {
@@ -624,10 +624,39 @@ class BasicModelForCausalLM : public BaseModelForCausalLM {
         return lm_logits;
     }
 
+  protected:
+    void to_cpu() {
+        for (auto &item : state_dict_) {
+            tensor_to_cpu(item.second);
+        }
+
+        for (auto &layer : transformer.layers) {
+            tensor_to_cpu(layer.attention.k_cache);
+            tensor_to_cpu(layer.attention.v_cache);
+        }
+    }
+
+    void to_device(const std::string &embedding_key) {
+        // should not place embedding onto device
+        for (auto &item : state_dict_) {
+            const std::string &name = item.first;
+            ggml_tensor *tensor = item.second;
+            if (name != embedding_key) {
+                tensor_to_device(tensor);
+            }
+        }
+
+        for (auto &layer : transformer.layers) {
+            tensor_to_device(layer.attention.k_cache);
+            tensor_to_device(layer.attention.v_cache);
+        }
+    }
+
   public:
     Config config;
     Model transformer;
     Linear lm_head;
+    std::vector<std::pair<std::string, ggml_tensor *>> state_dict_;
 };
 
 // ===== ChatGLM-6B =====
@@ -701,7 +730,6 @@ class ChatGLMModel : public BasicModel<GLMBlock, LayerNorm> {
 class ChatGLMForCausalLM : public BasicModelForCausalLM<ChatGLMConfig, ChatGLMModel> {
   public:
     ChatGLMForCausalLM(const ChatGLMConfig &config);
-    ~ChatGLMForCausalLM();
 
     void load(ModelLoader &loader) override;
 
@@ -775,7 +803,6 @@ class ChatGLM2Model : public BasicModel<GLM2Block, RMSNorm> {
 class ChatGLM2ForCausalLM : public BasicModelForCausalLM<ChatGLM2Config, ChatGLM2Model> {
   public:
     ChatGLM2ForCausalLM(const ChatGLM2Config &config);
-    ~ChatGLM2ForCausalLM();
 
     void load(ModelLoader &loader) override;
 
@@ -848,7 +875,6 @@ class Baichuan13BModel : public BasicModel<Baichuan13BBlock, RMSNorm> {
 class Baichuan13BForCausalLM : public BasicModelForCausalLM<Baichuan13BConfig, Baichuan13BModel> {
   public:
     Baichuan13BForCausalLM(const Baichuan13BConfig &config);
-    ~Baichuan13BForCausalLM();
 
     void load(ModelLoader &loader) override;
 
