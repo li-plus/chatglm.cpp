@@ -799,32 +799,21 @@ ggml_tensor *GLMBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, in
     return output;
 }
 
-ChatGLMModel::ChatGLMModel(ModelContext *ctx, const ChatGLMConfig &config)
-    : word_embeddings(ctx, config.vocab_size, config.hidden_size), final_layernorm(ctx, config.hidden_size) {
+std::vector<GLMBlock> ChatGLMModel::build_layers(ModelContext *ctx, const ChatGLMConfig &config) {
+    std::vector<GLMBlock> layers;
     layers.reserve(config.num_hidden_layers);
     for (int layer_id = 0; layer_id < config.num_hidden_layers; layer_id++) {
         layers.emplace_back(ctx, config.hidden_size, config.num_attention_heads, config.num_hidden_layers,
                             config.max_length);
     }
-}
-
-ggml_tensor *ChatGLMModel::forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const {
-    ggml_context *gctx = ctx->ctx_b.get();
-    ggml_tensor *hidden_states = word_embeddings.forward(ctx, input_ids);
-    for (const GLMBlock &layer : layers) {
-        ggml_set_scratch(gctx, ctx->scratch);
-        hidden_states = layer.forward(ctx, hidden_states, n_past, n_ctx);
-    }
-    ggml_scratch empty_scratch = {0, 0, nullptr};
-    ggml_set_scratch(gctx, empty_scratch);
-    hidden_states = final_layernorm.forward(ctx, hidden_states);
-    return hidden_states;
+    return layers;
 }
 
 ChatGLMForCausalLM::ChatGLMForCausalLM(const ChatGLMConfig &config)
-    : BaseModelForCausalLM(MODEL_TYPE_CHATGLM, config, MEM_SIZE, SCRATCH_SIZE), config(config) {
+    : BasicModelForCausalLM(MODEL_TYPE_CHATGLM, config, MEM_SIZE, SCRATCH_SIZE) {
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
-    const size_t ctx_w_size = (4 + config.num_hidden_layers * 12) * tensor_ovhd;
+    const size_t num_weights = 4 + config.num_hidden_layers * 12;
+    const size_t ctx_w_size = num_weights * tensor_ovhd;
     const size_t ctx_kv_size = 2 * config.num_hidden_layers *
                                (config.max_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16) + tensor_ovhd);
     ctx_.dtype = config.dtype;
@@ -837,7 +826,7 @@ ChatGLMForCausalLM::ChatGLMForCausalLM(const ChatGLMConfig &config)
     CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ggml_get_mem_size(ctx_.ctx_kv.get())) << "corrupted kv cache";
 
     // build state_dict
-    state_dict_.reserve(3 + config.num_hidden_layers * 12);
+    state_dict_.reserve(num_weights);
     state_dict_.emplace_back("transformer.word_embeddings.weight", transformer.word_embeddings.weight);
     for (int i = 0; i < config.num_hidden_layers; i++) {
         std::string layer_prefix = "transformer.layers." + std::to_string(i) + '.';
@@ -862,13 +851,13 @@ ChatGLMForCausalLM::ChatGLMForCausalLM(const ChatGLMConfig &config)
     }
     state_dict_.emplace_back("transformer.final_layernorm.weight", transformer.final_layernorm.weight);
     state_dict_.emplace_back("transformer.final_layernorm.bias", transformer.final_layernorm.bias);
+    state_dict_.emplace_back("lm_head.weight", lm_head.weight);
 }
 
 ChatGLMForCausalLM::~ChatGLMForCausalLM() {
     for (auto &item : state_dict_) {
         tensor_to_cpu(item.second);
     }
-    tensor_to_cpu(lm_head.weight);
 
     for (auto &layer : transformer.layers) {
         tensor_to_cpu(layer.attention.k_cache);
@@ -880,14 +869,15 @@ void ChatGLMForCausalLM::load(ModelLoader &loader) {
     for (auto &item : state_dict_) {
         const std::string &name = item.first;
         ggml_tensor *tensor = item.second;
-        loader.read_tensor(name, tensor);
+        if (name == "lm_head.weight") {
+            lm_head.weight->data = transformer.word_embeddings.weight->data; // tied weight
+        } else {
+            loader.read_tensor(name, tensor);
+        }
         if (name != "transformer.word_embeddings.weight") {
             tensor_to_device(tensor);
         }
     }
-
-    lm_head.weight->data = transformer.word_embeddings.weight->data; // tied weight
-    tensor_to_device(lm_head.weight);
 
     for (auto &layer : transformer.layers) {
         tensor_to_device(layer.attention.k_cache);
@@ -896,18 +886,6 @@ void ChatGLMForCausalLM::load(ModelLoader &loader) {
 
     ctx_.weight_buffer = std::string_view(loader.data, loader.size);
     ctx_.init_device_context();
-}
-
-ggml_tensor *ChatGLMForCausalLM::forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const {
-    ggml_tensor *transformer_outputs = transformer.forward(ctx, input_ids, n_past, n_ctx);
-    // NOTE: only compute next_token_logits for the last token
-    if (input_ids->ne[0] > 1) {
-        transformer_outputs = tensor_assign_buffers(
-            ggml_view_1d(ctx->ctx_b.get(), transformer_outputs, config.hidden_size,
-                         (input_ids->ne[0] - 1) * config.hidden_size * ggml_element_size(transformer_outputs)));
-    }
-    ggml_tensor *lm_logits = lm_head.forward(ctx, transformer_outputs);
-    return lm_logits;
 }
 
 // ===== ChatGLM2-6B =====
@@ -988,31 +966,19 @@ ggml_tensor *GLM2Block::forward(ModelContext *ctx, ggml_tensor *hidden_states, i
     return hidden_states;
 }
 
-ChatGLM2Model::ChatGLM2Model(ModelContext *ctx, const ChatGLM2Config &config)
-    : word_embeddings(ctx, config.vocab_size, config.hidden_size), final_layernorm(ctx, config.hidden_size) {
-    // TODO: reduce max length? 32k might be too large for cpu inference
+std::vector<GLM2Block> ChatGLM2Model::build_layers(ModelContext *ctx, const ChatGLM2Config &config) {
+    std::vector<GLM2Block> layers;
     layers.reserve(config.num_hidden_layers);
     for (int layer_id = 0; layer_id < config.num_hidden_layers; layer_id++) {
+        // TODO: reduce max length? 32k might be too large for cpu inference
         layers.emplace_back(ctx, config.hidden_size, config.num_attention_heads, config.num_kv_heads,
                             config.intermediate_size, config.max_length);
     }
-}
-
-ggml_tensor *ChatGLM2Model::forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const {
-    ggml_context *gctx = ctx->ctx_b.get();
-    ggml_tensor *hidden_states = word_embeddings.forward(ctx, input_ids);
-    for (const auto &layer : layers) {
-        ggml_set_scratch(gctx, ctx->scratch);
-        hidden_states = layer.forward(ctx, hidden_states, n_past, n_ctx);
-    }
-    ggml_scratch empty_scratch = {0, 0, nullptr};
-    ggml_set_scratch(gctx, empty_scratch);
-    hidden_states = final_layernorm.forward(ctx, hidden_states);
-    return hidden_states;
+    return layers;
 }
 
 ChatGLM2ForCausalLM::ChatGLM2ForCausalLM(const ChatGLM2Config &config)
-    : BaseModelForCausalLM(MODEL_TYPE_CHATGLM2, config, MEM_SIZE, SCRATCH_SIZE), config(config) {
+    : BasicModelForCausalLM(MODEL_TYPE_CHATGLM2, config, MEM_SIZE, SCRATCH_SIZE) {
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
     const size_t num_weights = 3 + config.num_hidden_layers * 8;
     const size_t ctx_w_size = num_weights * tensor_ovhd;
@@ -1107,18 +1073,6 @@ void ChatGLM2ForCausalLM::load(ModelLoader &loader) {
     ctx_.init_device_context();
 }
 
-ggml_tensor *ChatGLM2ForCausalLM::forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const {
-    ggml_tensor *transformer_outputs = transformer.forward(ctx, input_ids, n_past, n_ctx);
-    // NOTE: only compute next_token_logits for the last token
-    if (input_ids->ne[0] > 1) {
-        transformer_outputs = tensor_assign_buffers(
-            ggml_view_1d(ctx->ctx_b.get(), transformer_outputs, config.hidden_size,
-                         (input_ids->ne[0] - 1) * config.hidden_size * ggml_element_size(transformer_outputs)));
-    }
-    ggml_tensor *lm_logits = lm_head.forward(ctx, transformer_outputs);
-    return lm_logits;
-}
-
 // ===== Baichuan-13B =====
 
 Baichuan13BTokenizer::Baichuan13BTokenizer(std::string_view serialized_model_proto) {
@@ -1189,30 +1143,18 @@ ggml_tensor *Baichuan13BBlock::forward(ModelContext *ctx, ggml_tensor *hidden_st
     return hidden_states;
 }
 
-Baichuan13BModel::Baichuan13BModel(ModelContext *ctx, const Baichuan13BConfig &config)
-    : word_embeddings(ctx, config.vocab_size, config.hidden_size), final_layernorm(ctx, config.hidden_size) {
+std::vector<Baichuan13BBlock> Baichuan13BModel::build_layers(ModelContext *ctx, const Baichuan13BConfig &config) {
+    std::vector<Baichuan13BBlock> layers;
     layers.reserve(config.num_hidden_layers);
     for (int layer_id = 0; layer_id < config.num_hidden_layers; layer_id++) {
         layers.emplace_back(ctx, config.hidden_size, config.num_attention_heads, config.intermediate_size,
                             config.max_length);
     }
-}
-
-ggml_tensor *Baichuan13BModel::forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const {
-    ggml_context *gctx = ctx->ctx_b.get();
-    ggml_tensor *hidden_states = word_embeddings.forward(ctx, input_ids);
-    for (const auto &layer : layers) {
-        ggml_set_scratch(gctx, ctx->scratch);
-        hidden_states = layer.forward(ctx, hidden_states, n_past, n_ctx);
-    }
-    ggml_scratch empty_scratch = {0, 0, nullptr};
-    ggml_set_scratch(gctx, empty_scratch);
-    hidden_states = final_layernorm.forward(ctx, hidden_states);
-    return hidden_states;
+    return layers;
 }
 
 Baichuan13BForCausalLM::Baichuan13BForCausalLM(const Baichuan13BConfig &config)
-    : BaseModelForCausalLM(MODEL_TYPE_BAICHUAN13B, config, MEM_SIZE, SCRATCH_SIZE), config(config) {
+    : BasicModelForCausalLM(MODEL_TYPE_BAICHUAN13B, config, MEM_SIZE, SCRATCH_SIZE) {
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
     const size_t ctx_w_size = (3 + config.num_hidden_layers * 7) * tensor_ovhd;
     const size_t ctx_kv_size = 2 * config.num_hidden_layers *
@@ -1274,18 +1216,6 @@ void Baichuan13BForCausalLM::load(ModelLoader &loader) {
 
     ctx_.weight_buffer = std::string_view(loader.data, loader.size);
     ctx_.init_device_context();
-}
-
-ggml_tensor *Baichuan13BForCausalLM::forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const {
-    ggml_tensor *transformer_outputs = transformer.forward(ctx, input_ids, n_past, n_ctx);
-    // NOTE: only compute next_token_logits for the last token
-    if (input_ids->ne[0] > 1) {
-        transformer_outputs = tensor_assign_buffers(
-            ggml_view_1d(ctx->ctx_b.get(), transformer_outputs, config.hidden_size,
-                         (input_ids->ne[0] - 1) * config.hidden_size * ggml_element_size(transformer_outputs)));
-    }
-    ggml_tensor *lm_logits = lm_head.forward(ctx, transformer_outputs);
-    return lm_logits;
 }
 
 // ===== pipeline =====

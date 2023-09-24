@@ -398,6 +398,33 @@ class BasicAttention {
     ContextMasker context_masker_;
 };
 
+template <typename Block, typename Norm>
+class BasicModel {
+  protected:
+    BasicModel() = default;
+    BasicModel(Embedding word_embeddings, std::vector<Block> layers, Norm final_layernorm)
+        : word_embeddings(word_embeddings), layers(std::move(layers)), final_layernorm(final_layernorm) {}
+
+  public:
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const {
+        ggml_context *gctx = ctx->ctx_b.get();
+        ggml_tensor *hidden_states = word_embeddings.forward(ctx, input_ids);
+        for (const auto &layer : layers) {
+            ggml_set_scratch(gctx, ctx->scratch);
+            hidden_states = layer.forward(ctx, hidden_states, n_past, n_ctx);
+        }
+        ggml_scratch empty_scratch = {0, 0, nullptr};
+        ggml_set_scratch(gctx, empty_scratch);
+        hidden_states = final_layernorm.forward(ctx, hidden_states);
+        return hidden_states;
+    }
+
+  public:
+    Embedding word_embeddings;
+    std::vector<Block> layers;
+    Norm final_layernorm;
+};
+
 class BaseStreamer {
   public:
     virtual ~BaseStreamer() = default;
@@ -578,6 +605,31 @@ class BaseModelForCausalLM {
     std::vector<std::pair<std::string, ggml_tensor *>> state_dict_;
 };
 
+template <typename Config, typename Model>
+class BasicModelForCausalLM : public BaseModelForCausalLM {
+  protected:
+    BasicModelForCausalLM(ModelType model_type, const Config &config, size_t mem_size, size_t scratch_size)
+        : BaseModelForCausalLM(model_type, config, mem_size, scratch_size), config(config) {}
+
+  public:
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override {
+        ggml_tensor *transformer_outputs = transformer.forward(ctx, input_ids, n_past, n_ctx);
+        // NOTE: only compute next_token_logits for the last token
+        if (input_ids->ne[0] > 1) {
+            transformer_outputs = tensor_assign_buffers(
+                ggml_view_1d(ctx->ctx_b.get(), transformer_outputs, config.hidden_size,
+                             (input_ids->ne[0] - 1) * config.hidden_size * ggml_element_size(transformer_outputs)));
+        }
+        ggml_tensor *lm_logits = lm_head.forward(ctx, transformer_outputs);
+        return lm_logits;
+    }
+
+  public:
+    Config config;
+    Model transformer;
+    Linear lm_head;
+};
+
 // ===== ChatGLM-6B =====
 
 struct ChatGLMConfig : public BaseConfig {};
@@ -635,34 +687,27 @@ class GLMBlock {
     int num_hidden_layers;
 };
 
-class ChatGLMModel {
+class ChatGLMModel : public BasicModel<GLMBlock, LayerNorm> {
   public:
     ChatGLMModel() = default;
-    ChatGLMModel(ModelContext *ctx, const ChatGLMConfig &config);
+    ChatGLMModel(ModelContext *ctx, const ChatGLMConfig &config)
+        : BasicModel(Embedding(ctx, config.vocab_size, config.hidden_size), build_layers(ctx, config),
+                     LayerNorm(ctx, config.hidden_size)) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const;
-
-  public:
-    Embedding word_embeddings;
-    std::vector<GLMBlock> layers;
-    LayerNorm final_layernorm;
+  private:
+    static std::vector<GLMBlock> build_layers(ModelContext *ctx, const ChatGLMConfig &config);
 };
 
-class ChatGLMForCausalLM : public BaseModelForCausalLM {
+class ChatGLMForCausalLM : public BasicModelForCausalLM<ChatGLMConfig, ChatGLMModel> {
   public:
     ChatGLMForCausalLM(const ChatGLMConfig &config);
     ~ChatGLMForCausalLM();
 
     void load(ModelLoader &loader) override;
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
-
   public:
     static constexpr size_t MEM_SIZE = 512 * MB;      // 2k context
     static constexpr size_t SCRATCH_SIZE = 1024 * MB; // 2k context
-    ChatGLMConfig config;
-    ChatGLMModel transformer;
-    Linear lm_head;
 };
 
 // ===== ChatGLM2-6B =====
@@ -716,35 +761,27 @@ class GLM2Block {
     GLM2MLP mlp;
 };
 
-class ChatGLM2Model {
+class ChatGLM2Model : public BasicModel<GLM2Block, RMSNorm> {
   public:
     ChatGLM2Model() = default;
-    ChatGLM2Model(ModelContext *ctx, const ChatGLM2Config &config);
+    ChatGLM2Model(ModelContext *ctx, const ChatGLM2Config &config)
+        : BasicModel(Embedding(ctx, config.vocab_size, config.hidden_size), build_layers(ctx, config),
+                     RMSNorm(ctx, config.hidden_size)) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const;
-
-  public:
-    Embedding word_embeddings;
-    std::vector<GLM2Block> layers;
-    RMSNorm final_layernorm;
+  private:
+    static std::vector<GLM2Block> build_layers(ModelContext *ctx, const ChatGLM2Config &config);
 };
 
-class ChatGLM2ForCausalLM : public BaseModelForCausalLM {
+class ChatGLM2ForCausalLM : public BasicModelForCausalLM<ChatGLM2Config, ChatGLM2Model> {
   public:
     ChatGLM2ForCausalLM(const ChatGLM2Config &config);
     ~ChatGLM2ForCausalLM();
 
     void load(ModelLoader &loader) override;
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
-
   public:
     static constexpr size_t MEM_SIZE = 512 * MB;      // 2k context
     static constexpr size_t SCRATCH_SIZE = 1280 * MB; // 2k context
-
-    ChatGLM2Config config;
-    ChatGLM2Model transformer;
-    Linear lm_head;
 };
 
 // ===== Baichuan-13B =====
@@ -797,35 +834,27 @@ class Baichuan13BBlock {
     Baichuan13BMLP mlp;
 };
 
-class Baichuan13BModel {
+class Baichuan13BModel : public BasicModel<Baichuan13BBlock, RMSNorm> {
   public:
     Baichuan13BModel() = default;
-    Baichuan13BModel(ModelContext *ctx, const Baichuan13BConfig &config);
+    Baichuan13BModel(ModelContext *ctx, const Baichuan13BConfig &config)
+        : BasicModel(Embedding(ctx, config.vocab_size, config.hidden_size), build_layers(ctx, config),
+                     RMSNorm(ctx, config.hidden_size)) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const;
-
-  public:
-    Embedding word_embeddings;
-    std::vector<Baichuan13BBlock> layers;
-    RMSNorm final_layernorm;
+  private:
+    static std::vector<Baichuan13BBlock> build_layers(ModelContext *ctx, const Baichuan13BConfig &config);
 };
 
-class Baichuan13BForCausalLM : public BaseModelForCausalLM {
+class Baichuan13BForCausalLM : public BasicModelForCausalLM<Baichuan13BConfig, Baichuan13BModel> {
   public:
     Baichuan13BForCausalLM(const Baichuan13BConfig &config);
     ~Baichuan13BForCausalLM();
 
     void load(ModelLoader &loader) override;
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override;
-
   public:
     static constexpr size_t MEM_SIZE = 512 * MB;
     static constexpr size_t SCRATCH_SIZE = 1280 * MB;
-
-    Baichuan13BConfig config;
-    Baichuan13BModel transformer;
-    Linear lm_head;
 };
 
 // ===== pipeline =====
