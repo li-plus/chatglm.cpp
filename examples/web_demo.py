@@ -37,6 +37,7 @@ def predict(input, chatbot, max_length, top_p, temperature, history):
 
     generation_kwargs = dict(
         max_length=max_length,
+        max_context_length=args.max_context_length,
         do_sample=temperature > 0,
         top_k=args.top_k,
         top_p=top_p,
