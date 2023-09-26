@@ -384,16 +384,17 @@ ggml_tensor *Linear::forward(ModelContext *ctx, ggml_tensor *input) const {
     return output;
 }
 
-ggml_tensor *LayerNorm::forward(ModelContext *ctx, ggml_tensor *input, float eps) const {
+ggml_tensor *LayerNorm::forward(ModelContext *ctx, ggml_tensor *input) const {
     // input: [seqlen, normalized_shape]
     ggml_context *gctx = ctx->ctx_b.get();
-    ggml_tensor *output = tensor_assign_buffers(ggml_norm_inplace(gctx, input, eps));
+    auto ggml_norm_fn = inplace ? ggml_norm_inplace : ggml_norm;
+    ggml_tensor *output = tensor_assign_buffers(ggml_norm_fn(gctx, input, eps));
     output = tensor_assign_buffers(ggml_mul_inplace(gctx, output, weight));
     output = tensor_assign_buffers(ggml_add_inplace(gctx, output, bias));
     return output;
 }
 
-ggml_tensor *RMSNorm::forward(ModelContext *ctx, ggml_tensor *input, float eps) const {
+ggml_tensor *RMSNorm::forward(ModelContext *ctx, ggml_tensor *input) const {
     ggml_context *gctx = ctx->ctx_b.get();
     auto ggml_rms_norm_fn = inplace ? ggml_rms_norm_inplace : ggml_rms_norm;
     ggml_tensor *output = tensor_assign_buffers(ggml_rms_norm_fn(gctx, input, eps));
@@ -782,7 +783,7 @@ ggml_tensor *GLMContextMasker::operator()(ModelContext *ctx, ggml_tensor *attn_s
 ggml_tensor *GLMBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
     ggml_context *gctx = ctx->ctx_b.get();
 
-    ggml_tensor *alpha = ggml_new_f32(gctx, std::sqrt(2.f * num_hidden_layers));
+    ggml_tensor *alpha = ggml_new_f32(gctx, alpha_value);
 
     ggml_tensor *attn_input = input_layernorm.forward(ctx, hidden_states);
     ggml_tensor *attn_output = attention.forward(ctx, attn_input, n_past, n_ctx);
@@ -932,29 +933,13 @@ bool ChatGLM2Tokenizer::is_special_id(int id) const {
            id == eop_token_id;
 }
 
-ggml_tensor *GLM2Block::forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
-    ggml_context *gctx = ctx->ctx_b.get();
-
-    ggml_tensor *residual = hidden_states;
-    hidden_states = input_layernorm.forward(ctx, hidden_states);
-    hidden_states = attention.forward(ctx, hidden_states, n_past, n_ctx);
-    hidden_states = tensor_assign_buffers(ggml_add_inplace(gctx, hidden_states, residual));
-
-    residual = hidden_states;
-    hidden_states = post_attention_layernorm.forward(ctx, hidden_states);
-    hidden_states = mlp.forward(ctx, hidden_states);
-    hidden_states = tensor_assign_buffers(ggml_add_inplace(gctx, hidden_states, residual));
-
-    return hidden_states;
-}
-
 std::vector<GLM2Block> ChatGLM2Model::build_layers(ModelContext *ctx, const ChatGLM2Config &config) {
     std::vector<GLM2Block> layers;
     layers.reserve(config.num_hidden_layers);
     for (int layer_id = 0; layer_id < config.num_hidden_layers; layer_id++) {
         // TODO: reduce max length? 32k might be too large for cpu inference
         layers.emplace_back(ctx, config.hidden_size, config.num_attention_heads, config.num_kv_heads,
-                            config.intermediate_size, config.max_length);
+                            config.intermediate_size, config.max_length, 1e-5f);
     }
     return layers;
 }
@@ -1090,28 +1075,12 @@ void Baichuan13BTokenizer::truncate(std::vector<int> &ids, int max_length) {
     }
 }
 
-ggml_tensor *Baichuan13BBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
-    ggml_context *gctx = ctx->ctx_b.get();
-
-    ggml_tensor *residual = hidden_states;
-    hidden_states = input_layernorm.forward(ctx, hidden_states, 1e-6);
-    hidden_states = attention.forward(ctx, hidden_states, n_past, n_ctx);
-    hidden_states = tensor_assign_buffers(ggml_add_inplace(gctx, hidden_states, residual));
-
-    residual = hidden_states;
-    hidden_states = post_attention_layernorm.forward(ctx, hidden_states, 1e-6);
-    hidden_states = mlp.forward(ctx, hidden_states);
-    hidden_states = tensor_assign_buffers(ggml_add_inplace(gctx, hidden_states, residual));
-
-    return hidden_states;
-}
-
 std::vector<Baichuan13BBlock> Baichuan13BModel::build_layers(ModelContext *ctx, const Baichuan13BConfig &config) {
     std::vector<Baichuan13BBlock> layers;
     layers.reserve(config.num_hidden_layers);
     for (int layer_id = 0; layer_id < config.num_hidden_layers; layer_id++) {
-        layers.emplace_back(ctx, config.hidden_size, config.num_attention_heads, config.intermediate_size,
-                            config.max_length);
+        layers.emplace_back(ctx, config.hidden_size, config.num_attention_heads, config.num_attention_heads,
+                            config.intermediate_size, config.max_length, 1e-6f);
     }
     return layers;
 }

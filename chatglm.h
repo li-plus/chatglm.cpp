@@ -150,29 +150,32 @@ class Linear {
 
 class LayerNorm {
   public:
-    LayerNorm() : weight(nullptr), bias(nullptr) {}
-    LayerNorm(ModelContext *ctx, int normalized_shape)
+    LayerNorm() = default;
+    LayerNorm(ModelContext *ctx, int normalized_shape, bool inplace = true, float eps = 1e-5f)
         : weight(ggml_new_tensor_1d(ctx->ctx_w.get(), GGML_TYPE_F32, normalized_shape)),
-          bias(ggml_new_tensor_1d(ctx->ctx_w.get(), GGML_TYPE_F32, normalized_shape)) {}
+          bias(ggml_new_tensor_1d(ctx->ctx_w.get(), GGML_TYPE_F32, normalized_shape)), inplace(inplace), eps(eps) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input, float eps = 1e-5f) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input) const;
 
   public:
     ggml_tensor *weight; // [normalized_shape]
     ggml_tensor *bias;   // [normalized_shape]
+    bool inplace;
+    float eps;
 };
 
 class RMSNorm {
   public:
-    RMSNorm() : weight(nullptr), inplace(true) {}
-    RMSNorm(ModelContext *ctx, int normalized_shape, bool inplace = true)
-        : weight(ggml_new_tensor_1d(ctx->ctx_w.get(), GGML_TYPE_F32, normalized_shape)), inplace(inplace) {}
+    RMSNorm() = default;
+    RMSNorm(ModelContext *ctx, int normalized_shape, bool inplace = true, float eps = 1e-5f)
+        : weight(ggml_new_tensor_1d(ctx->ctx_w.get(), GGML_TYPE_F32, normalized_shape)), inplace(inplace), eps(eps) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input, float eps = 1e-5f) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input) const;
 
   public:
-    ggml_tensor *weight;
+    ggml_tensor *weight; // [normalized_shape]
     bool inplace;
+    float eps;
 };
 
 enum ActivationType {
@@ -396,6 +399,44 @@ class BasicAttention {
 
   private:
     ContextMasker context_masker_;
+};
+
+template <typename Norm, typename Attention, typename MLP>
+class BasicBlock {
+  public:
+    BasicBlock() = default;
+    BasicBlock(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int intermediate_size,
+               int max_length, float norm_eps)
+        : input_layernorm(ctx, hidden_size, false, norm_eps),
+          attention(ctx, hidden_size, num_attention_heads, num_kv_heads, max_length),
+          post_attention_layernorm(ctx, hidden_size, false, norm_eps), mlp(ctx, hidden_size, intermediate_size) {}
+
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
+        ggml_context *gctx = ctx->ctx_b.get();
+
+        ggml_tensor *residual = hidden_states;
+        hidden_states = input_layernorm.forward(ctx, hidden_states);
+        hidden_states = attention.forward(ctx, hidden_states, n_past, n_ctx);
+        hidden_states = tensor_assign_buffers(ggml_add_inplace(gctx, hidden_states, residual));
+
+        residual = hidden_states;
+        hidden_states = post_attention_layernorm.forward(ctx, hidden_states);
+        hidden_states = mlp.forward(ctx, hidden_states);
+        hidden_states = tensor_assign_buffers(ggml_add_inplace(gctx, hidden_states, residual));
+
+        return hidden_states;
+    }
+
+  protected:
+    BasicBlock(Norm input_layernorm, Attention attention, Norm post_attention_layernorm, MLP mlp)
+        : input_layernorm(input_layernorm), attention(attention), post_attention_layernorm(post_attention_layernorm),
+          mlp(mlp) {}
+
+  public:
+    Norm input_layernorm;
+    Attention attention;
+    Norm post_attention_layernorm;
+    MLP mlp;
 };
 
 template <typename Block, typename Norm>
@@ -697,23 +738,19 @@ using GLMAttention = BasicAttention<true, true, true, ROPE_TYPE_CHATGLM, false, 
 
 using GLMMLP = BasicMLP<ACT_TYPE_GELU>;
 
-class GLMBlock {
+class GLMBlock : public BasicBlock<LayerNorm, GLMAttention, GLMMLP> {
   public:
-    GLMBlock() : num_hidden_layers(0) {}
+    GLMBlock() = default;
     GLMBlock(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_hidden_layers, int max_length)
-        : input_layernorm(ctx, hidden_size),
-          attention(ctx, hidden_size, num_attention_heads, num_attention_heads, max_length),
-          post_attention_layernorm(ctx, hidden_size), mlp(ctx, hidden_size, 4 * hidden_size),
-          num_hidden_layers(num_hidden_layers) {}
+        : BasicBlock(LayerNorm(ctx, hidden_size),
+                     GLMAttention(ctx, hidden_size, num_attention_heads, num_attention_heads, max_length),
+                     LayerNorm(ctx, hidden_size), GLMMLP(ctx, hidden_size, 4 * hidden_size)),
+          alpha_value(std::sqrt(2.f * num_hidden_layers)) {}
 
     ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
 
   public:
-    LayerNorm input_layernorm;
-    GLMAttention attention;
-    LayerNorm post_attention_layernorm;
-    GLMMLP mlp;
-    int num_hidden_layers;
+    float alpha_value;
 };
 
 class ChatGLMModel : public BasicModel<GLMBlock, LayerNorm> {
@@ -771,23 +808,7 @@ using GLM2Attention = BasicAttention<true, false, false, ROPE_TYPE_DEFAULT, fals
 
 using GLM2MLP = BasicGLU<ACT_TYPE_SILU, false>;
 
-class GLM2Block {
-  public:
-    GLM2Block() = default;
-    GLM2Block(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int intermediate_size,
-              int max_length)
-        : input_layernorm(ctx, hidden_size, false),
-          attention(ctx, hidden_size, num_attention_heads, num_kv_heads, max_length),
-          post_attention_layernorm(ctx, hidden_size, false), mlp(ctx, hidden_size, intermediate_size) {}
-
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
-
-  public:
-    RMSNorm input_layernorm;
-    GLM2Attention attention;
-    RMSNorm post_attention_layernorm;
-    GLM2MLP mlp;
-};
+using GLM2Block = BasicBlock<RMSNorm, GLM2Attention, GLM2MLP>;
 
 class ChatGLM2Model : public BasicModel<GLM2Block, RMSNorm> {
   public:
@@ -844,22 +865,7 @@ using Baichuan13BAttention = BasicAttention<false, false, false, ROPE_TYPE_NONE,
 
 using Baichuan13BMLP = BasicGLU<ACT_TYPE_SILU, false>;
 
-class Baichuan13BBlock {
-  public:
-    Baichuan13BBlock() = default;
-    Baichuan13BBlock(ModelContext *ctx, int hidden_size, int num_attention_heads, int intermediate_size, int max_length)
-        : input_layernorm(ctx, hidden_size, false),
-          attention(ctx, hidden_size, num_attention_heads, num_attention_heads, max_length),
-          post_attention_layernorm(ctx, hidden_size, false), mlp(ctx, hidden_size, intermediate_size) {}
-
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
-
-  public:
-    RMSNorm input_layernorm;
-    Baichuan13BAttention attention;
-    RMSNorm post_attention_layernorm;
-    Baichuan13BMLP mlp;
-};
+using Baichuan13BBlock = BasicBlock<RMSNorm, Baichuan13BAttention, Baichuan13BMLP>;
 
 class Baichuan13BModel : public BasicModel<Baichuan13BBlock, RMSNorm> {
   public:
