@@ -631,7 +631,7 @@ TEST_F(ChatGLMTest, GLM2Block) {
     constexpr int ffn_hidden_size = 6;
     constexpr int max_length = 8;
 
-    GLM2Block model(&ctx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length);
+    GLM2Block model(&ctx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length, 1e-5);
     tensor_to_device(model.attention.k_cache);
     tensor_to_device(model.attention.v_cache);
 
@@ -736,7 +736,7 @@ TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
         SetUp();
 
         ctx.dtype = dtype;
-        GLM2Block model(&ctx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length);
+        GLM2Block model(&ctx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length, 1e-5);
         tensor_to_device(model.attention.k_cache);
         tensor_to_device(model.attention.v_cache);
 
