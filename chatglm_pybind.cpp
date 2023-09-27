@@ -89,14 +89,23 @@ PYBIND11_MODULE(_C, m) {
     py::class_<ChatGLM2ForCausalLM, BaseModelForCausalLM>(m, "ChatGLM2ForCausalLM")
         .def_readonly("config", &ChatGLM2ForCausalLM::config);
 
+    // ===== Baichuan7B =====
+
+    py::class_<Baichuan7BConfig, BaseConfig>(m, "Baichuan7BConfig");
+
+    py::class_<BaichuanTokenizer, BaseTokenizer>(m, "BaichuanTokenizer");
+
+    py::class_<Baichuan7BForCausalLM, BaseModelForCausalLM>(m, "Baichuan7BForCausalLM")
+        .def_readonly("config", &Baichuan7BForCausalLM::config);
+
     // ===== Baichuan13B =====
 
     py::class_<Baichuan13BConfig, BaseConfig>(m, "Baichuan13BConfig");
 
-    py::class_<Baichuan13BTokenizer, BaseTokenizer>(m, "Baichuan13BTokenizer");
-
     py::class_<Baichuan13BForCausalLM, BaseModelForCausalLM>(m, "Baichuan13BForCausalLM")
         .def_readonly("config", &Baichuan13BForCausalLM::config);
+
+    // ===== Pipeline ====
 
     py::class_<Pipeline>(m, "Pipeline")
         .def(py::init<const std::string &>())

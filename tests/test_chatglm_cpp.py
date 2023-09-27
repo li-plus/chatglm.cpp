@@ -6,7 +6,9 @@ import pytest
 CHATGLM_MODEL_PATH = Path(__file__).resolve().parent.parent / "chatglm-ggml.bin"
 CHATGLM2_MODEL_PATH = Path(__file__).resolve().parent.parent / "chatglm2-ggml.bin"
 CODEGEEX2_MODEL_PATH = Path(__file__).resolve().parent.parent / "codegeex2-ggml.bin"
-BAICHUAN13B_MODEL_PATH = Path(__file__).resolve().parent.parent / "baichuan13bchat-ggml.bin"
+BAICHUAN13B_MODEL_PATH = Path(__file__).resolve().parent.parent / "baichuan-13b-chat-ggml.bin"
+BAICHUAN2_7B_MODEL_PATH = Path(__file__).resolve().parent.parent / "baichuan2-7b-chat-ggml.bin"
+BAICHUAN2_13B_MODEL_PATH = Path(__file__).resolve().parent.parent / "baichuan2-13b-chat-ggml.bin"
 
 
 def test_chatglm_version():
@@ -78,14 +80,56 @@ def test_baichuan13b_pipeline():
     history = ["你好呀"]
     target = "你好！很高兴见到你。请问有什么我可以帮助你的吗？"
 
+    gen_kwargs = dict(do_sample=False, repetition_penalty=1.1)
+
     pipeline = chatglm_cpp.Pipeline(BAICHUAN13B_MODEL_PATH)
-    output = pipeline.chat(history, do_sample=False)
+    output = pipeline.chat(history, **gen_kwargs)
     assert output == target
 
-    stream_output = pipeline.stream_chat(history, do_sample=False)
+    stream_output = pipeline.stream_chat(history, **gen_kwargs)
     stream_output = "".join(stream_output)
     assert stream_output == target
 
-    stream_output = pipeline.chat(history, do_sample=False, stream=True)
+    stream_output = pipeline.chat(history, **gen_kwargs, stream=True)
+    stream_output = "".join(stream_output)
+    assert stream_output == target
+
+
+@pytest.mark.skipif(not BAICHUAN2_7B_MODEL_PATH.exists(), reason="model file not found")
+def test_baichuan2_7b_pipeline():
+    history = ["你好呀"]
+    target = "你好！很高兴为你服务。请问有什么问题我可以帮助你解决？"
+
+    gen_kwargs = dict(do_sample=False, repetition_penalty=1.05)
+
+    pipeline = chatglm_cpp.Pipeline(BAICHUAN2_7B_MODEL_PATH)
+    output = pipeline.chat(history, **gen_kwargs)
+    assert output == target
+
+    stream_output = pipeline.stream_chat(history, **gen_kwargs)
+    stream_output = "".join(stream_output)
+    assert stream_output == target
+
+    stream_output = pipeline.chat(history, **gen_kwargs, stream=True)
+    stream_output = "".join(stream_output)
+    assert stream_output == target
+
+
+@pytest.mark.skipif(not BAICHUAN2_13B_MODEL_PATH.exists(), reason="model file not found")
+def test_baichuan2_13b_pipeline():
+    history = ["你好呀"]
+    target = "你好！很高兴见到你。请问有什么我可以帮助你的吗？"
+
+    gen_kwargs = dict(do_sample=False, repetition_penalty=1.05)
+
+    pipeline = chatglm_cpp.Pipeline(BAICHUAN2_13B_MODEL_PATH)
+    output = pipeline.chat(history, **gen_kwargs)
+    assert output == target
+
+    stream_output = pipeline.stream_chat(history, **gen_kwargs)
+    stream_output = "".join(stream_output)
+    assert stream_output == target
+
+    stream_output = pipeline.chat(history, **gen_kwargs, stream=True)
     stream_output = "".join(stream_output)
     assert stream_output == target

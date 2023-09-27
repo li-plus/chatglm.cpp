@@ -1021,21 +1021,21 @@ void ChatGLM2ForCausalLM::load(ModelLoader &loader) {
     ctx_.init_device_context();
 }
 
-// ===== Baichuan-13B =====
+// ===== Baichuan =====
 
-Baichuan13BTokenizer::Baichuan13BTokenizer(std::string_view serialized_model_proto) {
+BaichuanTokenizer::BaichuanTokenizer(std::string_view serialized_model_proto) {
     const auto status = sp.LoadFromSerializedProto(serialized_model_proto);
     CHATGLM_CHECK(status.ok()) << status.ToString();
 }
 
-std::vector<int> Baichuan13BTokenizer::encode(const std::string &text, int max_length) const {
+std::vector<int> BaichuanTokenizer::encode(const std::string &text, int max_length) const {
     std::vector<int> ids;
     sp.Encode(text, &ids);
     truncate(ids, max_length);
     return ids;
 }
 
-std::string Baichuan13BTokenizer::decode(const std::vector<int> &ids) const {
+std::string BaichuanTokenizer::decode(const std::vector<int> &ids) const {
     std::vector<int> normal_ids(ids);
     normal_ids.erase(std::remove_if(normal_ids.begin(), normal_ids.end(), [this](int id) { return is_special_id(id); }),
                      normal_ids.end());
@@ -1045,7 +1045,7 @@ std::string Baichuan13BTokenizer::decode(const std::vector<int> &ids) const {
     return text;
 }
 
-std::vector<int> Baichuan13BTokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
+std::vector<int> BaichuanTokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
     CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
 
     std::vector<int> ids;
@@ -1065,15 +1065,77 @@ std::vector<int> Baichuan13BTokenizer::encode_history(const std::vector<std::str
     return ids;
 }
 
-bool Baichuan13BTokenizer::is_special_id(int id) const {
+bool BaichuanTokenizer::is_special_id(int id) const {
     return id == bos_token_id || id == eos_token_id || id == pad_token_id;
 }
 
-void Baichuan13BTokenizer::truncate(std::vector<int> &ids, int max_length) {
+void BaichuanTokenizer::truncate(std::vector<int> &ids, int max_length) {
     if ((int)ids.size() > max_length) {
         ids.erase(ids.begin(), ids.end() - max_length);
     }
 }
+
+// ===== Baichuan-7B =====
+
+std::vector<Baichuan7BBlock> Baichuan7BModel::build_layers(ModelContext *ctx, const Baichuan7BConfig &config) {
+    std::vector<Baichuan7BBlock> layers;
+    layers.reserve(config.num_hidden_layers);
+    for (int layer_id = 0; layer_id < config.num_hidden_layers; layer_id++) {
+        layers.emplace_back(ctx, config.hidden_size, config.num_attention_heads, config.num_attention_heads,
+                            config.intermediate_size, config.max_length, 1e-6f);
+    }
+    return layers;
+}
+
+Baichuan7BForCausalLM::Baichuan7BForCausalLM(const Baichuan7BConfig &config)
+    : BasicModelForCausalLM(MODEL_TYPE_BAICHUAN7B, config, MEM_SIZE, SCRATCH_SIZE) {
+    constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
+    const size_t ctx_w_size = (3 + config.num_hidden_layers * 7) * tensor_ovhd;
+    const size_t ctx_kv_size = 2 * config.num_hidden_layers *
+                               (config.max_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16) + tensor_ovhd);
+    ctx_.dtype = config.dtype;
+    ctx_.ctx_w = make_unique_ggml_context(ctx_w_size, nullptr, true);
+    ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size + 1 * MB, nullptr, false); // 1MB extra for MPS
+
+    transformer = Baichuan7BModel(&ctx_, config);
+    lm_head = Linear(&ctx_, config.hidden_size, config.vocab_size, false);
+    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_w.get()) == ggml_get_mem_size(ctx_.ctx_w.get())) << "corrupted model weights";
+    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ctx_kv_size) << "corrupted kv cache";
+
+    // build state_dict
+    state_dict_.reserve(3 + config.num_hidden_layers * 7);
+    state_dict_.emplace_back("model.embed_tokens.weight", transformer.word_embeddings.weight);
+    for (int i = 0; i < config.num_hidden_layers; i++) {
+        std::string layer_prefix = "model.layers." + std::to_string(i) + '.';
+        state_dict_.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
+        state_dict_.emplace_back(layer_prefix + "self_attn.W_pack.weight",
+                                 transformer.layers[i].attention.query_key_value.weight);
+        state_dict_.emplace_back(layer_prefix + "self_attn.o_proj.weight",
+                                 transformer.layers[i].attention.dense.weight);
+        state_dict_.emplace_back(layer_prefix + "post_attention_layernorm.weight",
+                                 transformer.layers[i].post_attention_layernorm.weight);
+        state_dict_.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
+        state_dict_.emplace_back(layer_prefix + "mlp.down_proj.weight", transformer.layers[i].mlp.down_proj.weight);
+        state_dict_.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
+    }
+    state_dict_.emplace_back("model.norm.weight", transformer.final_layernorm.weight);
+    state_dict_.emplace_back("lm_head.weight", lm_head.weight);
+}
+
+void Baichuan7BForCausalLM::load(ModelLoader &loader) {
+    for (auto &item : state_dict_) {
+        const std::string &name = item.first;
+        ggml_tensor *tensor = item.second;
+        loader.read_tensor(name, tensor);
+    }
+
+    to_device("model.embed_tokens.weight");
+
+    ctx_.weight_buffer = std::string_view(loader.data, loader.size);
+    ctx_.init_device_context();
+}
+
+// ===== Baichuan-13B =====
 
 std::vector<Baichuan13BBlock> Baichuan13BModel::build_layers(ModelContext *ctx, const Baichuan13BConfig &config) {
     std::vector<Baichuan13BBlock> layers;
@@ -1177,6 +1239,21 @@ Pipeline::Pipeline(const std::string &path) {
         // load model
         model = std::make_unique<ChatGLM2ForCausalLM>(config);
         model->load(loader);
+    } else if (model_type == MODEL_TYPE_BAICHUAN7B) {
+        CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
+
+        // load config
+        Baichuan7BConfig config = loader.read_basic<Baichuan7BConfig>();
+
+        // load tokenizer
+        int proto_size = loader.read_basic<int>();
+        std::string_view serialized_model_proto((char *)mapped_file->data + loader.tell(), proto_size);
+        loader.seek(proto_size, SEEK_CUR);
+        tokenizer = std::make_unique<BaichuanTokenizer>(serialized_model_proto);
+
+        // load model
+        model = std::make_unique<Baichuan7BForCausalLM>(config);
+        model->load(loader);
     } else if (model_type == MODEL_TYPE_BAICHUAN13B) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
@@ -1187,7 +1264,7 @@ Pipeline::Pipeline(const std::string &path) {
         int proto_size = loader.read_basic<int>();
         std::string_view serialized_model_proto((char *)mapped_file->data + loader.tell(), proto_size);
         loader.seek(proto_size, SEEK_CUR);
-        tokenizer = std::make_unique<Baichuan13BTokenizer>(serialized_model_proto);
+        tokenizer = std::make_unique<BaichuanTokenizer>(serialized_model_proto);
 
         // load model
         model = std::make_unique<Baichuan13BForCausalLM>(config);

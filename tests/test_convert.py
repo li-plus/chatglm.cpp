@@ -176,6 +176,10 @@ CHATGLM2_MODEL_PATH = Path(
     "~/.cache/huggingface/hub/models--THUDM--chatglm2-6b/snapshots/0ecfe0b857efd00836a4851b3dd2ed04bd4b197f"
 ).expanduser()
 
+BAICHUAN7B_MODEL_PATH = Path(
+    "~/.cache/huggingface/hub/models--baichuan-inc--Baichuan2-7B-Chat/snapshots/229e4eb1fab7f6aef90a2344c07085b680487597"
+).expanduser()
+
 BAICHUAN13B_MODEL_PATH = Path(
     "~/.cache/huggingface/hub/models--baichuan-inc--Baichuan-13B-Chat/snapshots/a4a558127068f2ce965aa56aeb826bf501a68970"
 ).expanduser()
@@ -372,12 +376,12 @@ def make_data_glm2_block():
         y3.numpy().tofile(f)
 
 
-def make_data_baichuan13b_block():
-    sys.path.append(str(BAICHUAN13B_MODEL_PATH))
+def _make_data_baichuan_model(model_path, out_name):
+    sys.path.append(str(model_path))
     from modeling_baichuan import BaichuanModel
     from transformers import AutoConfig
 
-    config = AutoConfig.from_pretrained(BAICHUAN13B_MODEL_PATH, trust_remote_code=True)
+    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     config.hidden_size = 32
     config.num_attention_heads = 8
     config.intermediate_size = config.hidden_size * 3
@@ -417,7 +421,7 @@ def make_data_baichuan13b_block():
 
     print(m)
 
-    with open(HERE / "data/baichuan13b_block.data", "wb") as f:
+    with open(HERE / f"data/{out_name}", "wb") as f:
         m.embed_tokens.weight.data.numpy().tofile(f)
         m.layers[0].input_layernorm.weight.data.numpy().tofile(f)
         m.layers[0].self_attn.W_pack.weight.data.numpy().tofile(f)
@@ -436,6 +440,14 @@ def make_data_baichuan13b_block():
         y3.numpy().tofile(f)
 
 
+def make_data_baichuan7b_model():
+    _make_data_baichuan_model(BAICHUAN7B_MODEL_PATH, "baichuan7b_model.data")
+
+
+def make_data_baichuan13b_model():
+    _make_data_baichuan_model(BAICHUAN13B_MODEL_PATH, "baichuan13b_model.data")
+
+
 def main():
     torch.manual_seed(0)
     (HERE / "data").mkdir(parents=True, exist_ok=True)
@@ -444,7 +456,8 @@ def main():
     # make_data_rms_norm()
     # make_data_glm_block()
     # make_data_glm2_block()
-    make_data_baichuan13b_block()
+    make_data_baichuan7b_model()
+    # make_data_baichuan13b_model()
 
 
 if __name__ == "__main__":

@@ -248,25 +248,32 @@ struct CausalContextMasker {
 };
 
 enum RopeType {
-    ROPE_TYPE_NONE = -1,
     ROPE_TYPE_DEFAULT = 0,
+    ROPE_TYPE_NEOX = 2,
     ROPE_TYPE_CHATGLM = 4,
 };
 
-static inline ggml_tensor *apply_rope_inplace(ggml_context *ctx, ggml_tensor *a, int mode, int n_past, int n_ctx) {
-    // tensor a (activation) is of shape [qlen, heads, head_size]
-#ifdef GGML_USE_CUBLAS
-    if (!ggml_is_contiguous(a)) {
-        a = tensor_assign_buffers(ggml_cont(ctx, a));
-    }
-#endif
-    const int head_size = a->ne[0];
-    const int rope_dim = head_size / 2;
-    a = tensor_assign_buffers(ggml_rope_inplace(ctx, a, n_past, rope_dim, mode, n_ctx)); // [qlen, heads, head_size]
-    return a;
-}
+struct NoopRoper {
+    ggml_tensor *operator()(ggml_context *ctx, ggml_tensor *a, int n_past, int n_ctx) const { return a; }
+};
 
-template <bool USE_QKV_BIAS, bool USE_DENSE_BIAS, bool INTERLEAVED_QKV, RopeType ROPE_TYPE, bool USE_ALIBI,
+template <RopeType MODE, int DIM_SCALE>
+struct BasicRoper {
+    ggml_tensor *operator()(ggml_context *ctx, ggml_tensor *a, int n_past, int n_ctx) const {
+        // tensor a (activation) is of shape [qlen, heads, head_size]
+#ifdef GGML_USE_CUBLAS
+        if (!ggml_is_contiguous(a)) {
+            a = tensor_assign_buffers(ggml_cont(ctx, a));
+        }
+#endif
+        const int head_size = a->ne[0];
+        const int rope_dim = head_size / DIM_SCALE;
+        a = tensor_assign_buffers(ggml_rope_inplace(ctx, a, n_past, rope_dim, MODE, n_ctx)); // [qlen, heads, head_size]
+        return a;
+    }
+};
+
+template <bool USE_QKV_BIAS, bool USE_DENSE_BIAS, bool INTERLEAVED_QKV, typename Roper, bool USE_ALIBI,
           typename ContextMasker>
 class BasicAttention {
   public:
@@ -316,10 +323,8 @@ class BasicAttention {
                                        qkv->nb[1], (hidden_size + head_size * num_kv_heads) * ggml_element_size(qkv));
         }
 
-        if constexpr (ROPE_TYPE != ROPE_TYPE_NONE) {
-            query_layer = apply_rope_inplace(gctx, query_layer, ROPE_TYPE, n_past, n_ctx);
-            key_layer = apply_rope_inplace(gctx, key_layer, ROPE_TYPE, n_past, n_ctx);
-        }
+        query_layer = roper_(gctx, query_layer, n_past, n_ctx);
+        key_layer = roper_(gctx, key_layer, n_past, n_ctx);
 
         query_layer = tensor_assign_buffers(
             ggml_cont(gctx, ggml_permute(gctx, query_layer, 0, 2, 1, 3))); // [heads, qlen, head_size]
@@ -398,6 +403,7 @@ class BasicAttention {
     ggml_tensor *v_cache; // [kv_heads, head_size, max_len]
 
   private:
+    Roper roper_;
     ContextMasker context_masker_;
 };
 
@@ -734,7 +740,7 @@ struct GLMContextMasker {
     ggml_tensor *operator()(ModelContext *ctx, ggml_tensor *attn_scores, int n_past) const;
 };
 
-using GLMAttention = BasicAttention<true, true, true, ROPE_TYPE_CHATGLM, false, GLMContextMasker>;
+using GLMAttention = BasicAttention<true, true, true, BasicRoper<ROPE_TYPE_CHATGLM, 2>, false, GLMContextMasker>;
 
 using GLMMLP = BasicMLP<ACT_TYPE_GELU>;
 
@@ -804,7 +810,7 @@ class ChatGLM2Tokenizer : public BaseTokenizer {
     int eop_token_id;
 };
 
-using GLM2Attention = BasicAttention<true, false, false, ROPE_TYPE_DEFAULT, false, CausalContextMasker>;
+using GLM2Attention = BasicAttention<true, false, false, BasicRoper<ROPE_TYPE_DEFAULT, 2>, false, CausalContextMasker>;
 
 using GLM2MLP = BasicGLU<ACT_TYPE_SILU, false>;
 
@@ -832,13 +838,11 @@ class ChatGLM2ForCausalLM : public BasicModelForCausalLM<ChatGLM2Config, ChatGLM
     static constexpr size_t SCRATCH_SIZE = 1280 * MB; // 2k context
 };
 
-// ===== Baichuan-13B =====
+// ===== Baichuan =====
 
-struct Baichuan13BConfig : public BaseConfig {};
-
-class Baichuan13BTokenizer : public BaseTokenizer {
+class BaichuanTokenizer : public BaseTokenizer {
   public:
-    Baichuan13BTokenizer(std::string_view serialized_model_proto);
+    BaichuanTokenizer(std::string_view serialized_model_proto);
 
     std::vector<int> encode(const std::string &text, int max_length) const override;
 
@@ -861,7 +865,44 @@ class Baichuan13BTokenizer : public BaseTokenizer {
     int pad_token_id;
 };
 
-using Baichuan13BAttention = BasicAttention<false, false, false, ROPE_TYPE_NONE, true, CausalContextMasker>;
+// ===== Baichuan-7B =====
+
+struct Baichuan7BConfig : public BaseConfig {};
+
+using Baichuan7BAttention =
+    BasicAttention<false, false, false, BasicRoper<ROPE_TYPE_NEOX, 1>, false, CausalContextMasker>;
+
+using Baichuan7BMLP = BasicGLU<ACT_TYPE_SILU, false>;
+
+using Baichuan7BBlock = BasicBlock<RMSNorm, Baichuan7BAttention, Baichuan7BMLP>;
+
+class Baichuan7BModel : public BasicModel<Baichuan7BBlock, RMSNorm> {
+  public:
+    Baichuan7BModel() = default;
+    Baichuan7BModel(ModelContext *ctx, const Baichuan7BConfig &config)
+        : BasicModel(Embedding(ctx, config.vocab_size, config.hidden_size), build_layers(ctx, config),
+                     RMSNorm(ctx, config.hidden_size)) {}
+
+  private:
+    static std::vector<Baichuan7BBlock> build_layers(ModelContext *ctx, const Baichuan7BConfig &config);
+};
+
+class Baichuan7BForCausalLM : public BasicModelForCausalLM<Baichuan7BConfig, Baichuan7BModel> {
+  public:
+    Baichuan7BForCausalLM(const Baichuan7BConfig &config);
+
+    void load(ModelLoader &loader) override;
+
+  public:
+    static constexpr size_t MEM_SIZE = 512 * MB;
+    static constexpr size_t SCRATCH_SIZE = 1280 * MB;
+};
+
+// ===== Baichuan-13B =====
+
+struct Baichuan13BConfig : public BaseConfig {};
+
+using Baichuan13BAttention = BasicAttention<false, false, false, NoopRoper, true, CausalContextMasker>;
 
 using Baichuan13BMLP = BasicGLU<ACT_TYPE_SILU, false>;
 
