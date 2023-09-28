@@ -790,13 +790,15 @@ TEST_F(ChatGLMTest, Baichuan7BModel) {
     MappedFile mapped_file(test_path.string());
     char *ptr = mapped_file.data;
 
-    Baichuan7BConfig config;
+    ModelConfig config;
     config.hidden_size = 32;
     config.num_attention_heads = 8;
+    config.num_kv_heads = config.num_attention_heads;
     config.intermediate_size = config.hidden_size * 3;
     config.num_hidden_layers = 1;
     config.vocab_size = 5;
     config.max_length = 8;
+    config.norm_eps = 1e-6;
 
     constexpr int seq_len = 3;
 
@@ -885,13 +887,15 @@ TEST_F(ChatGLMTest, Baichuan13BModel) {
     MappedFile mapped_file(test_path.string());
     char *ptr = mapped_file.data;
 
-    Baichuan13BConfig config;
+    ModelConfig config;
     config.hidden_size = 32;
     config.num_attention_heads = 8;
+    config.num_kv_heads = config.num_attention_heads;
     config.intermediate_size = config.hidden_size * 3;
     config.num_hidden_layers = 1;
     config.vocab_size = 5;
     config.max_length = 8;
+    config.norm_eps = 1e-6;
 
     constexpr int seq_len = 3;
 
@@ -1360,7 +1364,6 @@ TEST(Pipeline, Baichuan2_7B) {
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         gen_config.repetition_penalty = 1.05;
-        gen_config.max_length = 512;
         std::vector<std::string> history{"你好呀"};
         std::string output = pipeline.chat(history, gen_config);
         EXPECT_EQ(output, "你好！很高兴为你服务。请问有什么问题我可以帮助你解决？");

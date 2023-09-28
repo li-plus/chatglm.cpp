@@ -431,9 +431,9 @@ std::string to_string(ModelType model_type) {
     }
 }
 
-BaseModelForCausalLM::BaseModelForCausalLM(ModelType model_type, BaseConfig config, size_t mem_size,
+BaseModelForCausalLM::BaseModelForCausalLM(ModelType model_type, ModelConfig config, size_t mem_size,
                                            size_t scratch_size)
-    : model_type_(model_type), config_(config) {
+    : model_type_(model_type), config(config) {
     ctx_.compute_buffer.resize(mem_size);
     ctx_.scratch_buffer.resize(scratch_size);
     ctx_.scratch = {0, ctx_.scratch_buffer.size(), ctx_.scratch_buffer.data()};
@@ -588,9 +588,9 @@ void BaseModelForCausalLM::sampling_softmax_inplace(TokenIdScore *first, TokenId
 
 std::vector<int> BaseModelForCausalLM::generate(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
                                                 BaseStreamer *streamer) {
-    CHATGLM_CHECK(gen_config.max_length <= config_.max_length)
+    CHATGLM_CHECK(gen_config.max_length <= config.max_length)
         << "requested max_length (" << gen_config.max_length << ") is larger than model's max_length ("
-        << config_.max_length << ")";
+        << config.max_length << ")";
 
     std::vector<int> output_ids;
     output_ids.reserve(gen_config.max_length);
@@ -612,7 +612,7 @@ std::vector<int> BaseModelForCausalLM::generate(const std::vector<int> &input_id
             streamer->put({next_token_id});
         }
 
-        if (next_token_id == config_.eos_token_id) {
+        if (next_token_id == config.eos_token_id) {
             break;
         }
     }
@@ -800,7 +800,7 @@ ggml_tensor *GLMBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, in
     return output;
 }
 
-std::vector<GLMBlock> ChatGLMModel::build_layers(ModelContext *ctx, const ChatGLMConfig &config) {
+std::vector<GLMBlock> ChatGLMModel::build_layers(ModelContext *ctx, const ModelConfig &config) {
     std::vector<GLMBlock> layers;
     layers.reserve(config.num_hidden_layers);
     for (int layer_id = 0; layer_id < config.num_hidden_layers; layer_id++) {
@@ -810,7 +810,7 @@ std::vector<GLMBlock> ChatGLMModel::build_layers(ModelContext *ctx, const ChatGL
     return layers;
 }
 
-ChatGLMForCausalLM::ChatGLMForCausalLM(const ChatGLMConfig &config)
+ChatGLMForCausalLM::ChatGLMForCausalLM(const ModelConfig &config)
     : BasicModelForCausalLM(MODEL_TYPE_CHATGLM, config, MEM_SIZE, SCRATCH_SIZE) {
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
     const size_t num_weights = 4 + config.num_hidden_layers * 12;
@@ -933,18 +933,7 @@ bool ChatGLM2Tokenizer::is_special_id(int id) const {
            id == eop_token_id;
 }
 
-std::vector<GLM2Block> ChatGLM2Model::build_layers(ModelContext *ctx, const ChatGLM2Config &config) {
-    std::vector<GLM2Block> layers;
-    layers.reserve(config.num_hidden_layers);
-    for (int layer_id = 0; layer_id < config.num_hidden_layers; layer_id++) {
-        // TODO: reduce max length? 32k might be too large for cpu inference
-        layers.emplace_back(ctx, config.hidden_size, config.num_attention_heads, config.num_kv_heads,
-                            config.intermediate_size, config.max_length, 1e-5f);
-    }
-    return layers;
-}
-
-ChatGLM2ForCausalLM::ChatGLM2ForCausalLM(const ChatGLM2Config &config)
+ChatGLM2ForCausalLM::ChatGLM2ForCausalLM(const ModelConfig &config)
     : BasicModelForCausalLM(MODEL_TYPE_CHATGLM2, config, MEM_SIZE, SCRATCH_SIZE) {
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
     const size_t num_weights = 3 + config.num_hidden_layers * 8;
@@ -1077,20 +1066,11 @@ void BaichuanTokenizer::truncate(std::vector<int> &ids, int max_length) {
 
 // ===== Baichuan-7B =====
 
-std::vector<Baichuan7BBlock> Baichuan7BModel::build_layers(ModelContext *ctx, const Baichuan7BConfig &config) {
-    std::vector<Baichuan7BBlock> layers;
-    layers.reserve(config.num_hidden_layers);
-    for (int layer_id = 0; layer_id < config.num_hidden_layers; layer_id++) {
-        layers.emplace_back(ctx, config.hidden_size, config.num_attention_heads, config.num_attention_heads,
-                            config.intermediate_size, config.max_length, 1e-6f);
-    }
-    return layers;
-}
-
-Baichuan7BForCausalLM::Baichuan7BForCausalLM(const Baichuan7BConfig &config)
+Baichuan7BForCausalLM::Baichuan7BForCausalLM(const ModelConfig &config)
     : BasicModelForCausalLM(MODEL_TYPE_BAICHUAN7B, config, MEM_SIZE, SCRATCH_SIZE) {
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
-    const size_t ctx_w_size = (3 + config.num_hidden_layers * 7) * tensor_ovhd;
+    const size_t num_weights = 3 + config.num_hidden_layers * 7;
+    const size_t ctx_w_size = num_weights * tensor_ovhd;
     const size_t ctx_kv_size = 2 * config.num_hidden_layers *
                                (config.max_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16) + tensor_ovhd);
     ctx_.dtype = config.dtype;
@@ -1103,7 +1083,7 @@ Baichuan7BForCausalLM::Baichuan7BForCausalLM(const Baichuan7BConfig &config)
     CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ctx_kv_size) << "corrupted kv cache";
 
     // build state_dict
-    state_dict_.reserve(3 + config.num_hidden_layers * 7);
+    state_dict_.reserve(num_weights);
     state_dict_.emplace_back("model.embed_tokens.weight", transformer.word_embeddings.weight);
     for (int i = 0; i < config.num_hidden_layers; i++) {
         std::string layer_prefix = "model.layers." + std::to_string(i) + '.';
@@ -1137,20 +1117,11 @@ void Baichuan7BForCausalLM::load(ModelLoader &loader) {
 
 // ===== Baichuan-13B =====
 
-std::vector<Baichuan13BBlock> Baichuan13BModel::build_layers(ModelContext *ctx, const Baichuan13BConfig &config) {
-    std::vector<Baichuan13BBlock> layers;
-    layers.reserve(config.num_hidden_layers);
-    for (int layer_id = 0; layer_id < config.num_hidden_layers; layer_id++) {
-        layers.emplace_back(ctx, config.hidden_size, config.num_attention_heads, config.num_attention_heads,
-                            config.intermediate_size, config.max_length, 1e-6f);
-    }
-    return layers;
-}
-
-Baichuan13BForCausalLM::Baichuan13BForCausalLM(const Baichuan13BConfig &config)
+Baichuan13BForCausalLM::Baichuan13BForCausalLM(const ModelConfig &config)
     : BasicModelForCausalLM(MODEL_TYPE_BAICHUAN13B, config, MEM_SIZE, SCRATCH_SIZE) {
     constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
-    const size_t ctx_w_size = (3 + config.num_hidden_layers * 7) * tensor_ovhd;
+    const size_t num_weights = 3 + config.num_hidden_layers * 7;
+    const size_t ctx_w_size = num_weights * tensor_ovhd;
     const size_t ctx_kv_size = 2 * config.num_hidden_layers *
                                (config.max_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16) + tensor_ovhd);
     ctx_.dtype = config.dtype;
@@ -1163,7 +1134,7 @@ Baichuan13BForCausalLM::Baichuan13BForCausalLM(const Baichuan13BConfig &config)
     CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ctx_kv_size) << "corrupted kv cache";
 
     // build state_dict
-    state_dict_.reserve(3 + config.num_hidden_layers * 7);
+    state_dict_.reserve(num_weights);
     state_dict_.emplace_back("model.embed_tokens.weight", transformer.word_embeddings.weight);
     for (int i = 0; i < config.num_hidden_layers; i++) {
         std::string layer_prefix = "model.layers." + std::to_string(i) + '.';
@@ -1213,7 +1184,7 @@ Pipeline::Pipeline(const std::string &path) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
-        ChatGLMConfig config = loader.read_basic<ChatGLMConfig>();
+        ModelConfig config(loader.read_basic<ConfigRecordV1>());
 
         // load tokenizer
         int proto_size = loader.read_basic<int>();
@@ -1228,7 +1199,7 @@ Pipeline::Pipeline(const std::string &path) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
-        ChatGLM2Config config = loader.read_basic<ChatGLM2Config>();
+        ModelConfig config(loader.read_basic<ConfigRecordV2>());
 
         // load tokenizer
         int proto_size = loader.read_basic<int>();
@@ -1243,7 +1214,8 @@ Pipeline::Pipeline(const std::string &path) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
-        Baichuan7BConfig config = loader.read_basic<Baichuan7BConfig>();
+        ModelConfig config(loader.read_basic<ConfigRecordV1>());
+        config.norm_eps = 1e-6;
 
         // load tokenizer
         int proto_size = loader.read_basic<int>();
@@ -1258,7 +1230,8 @@ Pipeline::Pipeline(const std::string &path) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
-        Baichuan13BConfig config = loader.read_basic<Baichuan13BConfig>();
+        ModelConfig config(loader.read_basic<ConfigRecordV1>());
+        config.norm_eps = 1e-6;
 
         // load tokenizer
         int proto_size = loader.read_basic<int>();
