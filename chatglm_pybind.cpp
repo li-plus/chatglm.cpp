@@ -35,18 +35,20 @@ class PyBaseModelForCausalLM : public BaseModelForCausalLM {
 PYBIND11_MODULE(_C, m) {
     m.doc() = "ChatGLM.cpp python binding";
 
-    py::class_<BaseConfig>(m, "BaseConfig")
-        .def_readonly("dtype", &BaseConfig::dtype)
-        .def_readonly("vocab_size", &BaseConfig::vocab_size)
-        .def_readonly("hidden_size", &BaseConfig::hidden_size)
-        .def_readonly("num_attention_heads", &BaseConfig::num_attention_heads)
-        .def_readonly("num_hidden_layers", &BaseConfig::num_hidden_layers)
-        .def_readonly("intermediate_size", &BaseConfig::intermediate_size)
-        .def_readonly("max_length", &BaseConfig::max_length)
-        .def_readonly("bos_token_id", &BaseConfig::bos_token_id)
-        .def_readonly("eos_token_id", &BaseConfig::eos_token_id)
-        .def_readonly("pad_token_id", &BaseConfig::pad_token_id)
-        .def_readonly("sep_token_id", &BaseConfig::sep_token_id);
+    py::class_<ModelConfig>(m, "ModelConfig")
+        .def_readonly("dtype", &ModelConfig::dtype)
+        .def_readonly("vocab_size", &ModelConfig::vocab_size)
+        .def_readonly("hidden_size", &ModelConfig::hidden_size)
+        .def_readonly("num_attention_heads", &ModelConfig::num_attention_heads)
+        .def_readonly("num_kv_heads", &ModelConfig::num_kv_heads)
+        .def_readonly("num_hidden_layers", &ModelConfig::num_hidden_layers)
+        .def_readonly("intermediate_size", &ModelConfig::intermediate_size)
+        .def_readonly("norm_eps", &ModelConfig::norm_eps)
+        .def_readonly("max_length", &ModelConfig::max_length)
+        .def_readonly("bos_token_id", &ModelConfig::bos_token_id)
+        .def_readonly("eos_token_id", &ModelConfig::eos_token_id)
+        .def_readonly("pad_token_id", &ModelConfig::pad_token_id)
+        .def_readonly("sep_token_id", &ModelConfig::sep_token_id);
 
     py::class_<BaseTokenizer, PyBaseTokenizer>(m, "BaseTokenizer")
         .def("encode", &BaseTokenizer::encode)
@@ -72,8 +74,6 @@ PYBIND11_MODULE(_C, m) {
 
     // ===== ChatGLM =====
 
-    py::class_<ChatGLMConfig, BaseConfig>(m, "ChatGLMConfig");
-
     py::class_<ChatGLMTokenizer, BaseTokenizer>(m, "ChatGLMTokenizer");
 
     py::class_<ChatGLMForCausalLM, BaseModelForCausalLM>(m, "ChatGLMForCausalLM")
@@ -81,22 +81,22 @@ PYBIND11_MODULE(_C, m) {
 
     // ===== ChatGLM2 =====
 
-    py::class_<ChatGLM2Config, BaseConfig>(m, "ChatGLM2Config")
-        .def_readonly("num_kv_heads", &ChatGLM2Config::num_kv_heads);
-
     py::class_<ChatGLM2Tokenizer, BaseTokenizer>(m, "ChatGLM2Tokenizer");
 
     py::class_<ChatGLM2ForCausalLM, BaseModelForCausalLM>(m, "ChatGLM2ForCausalLM")
         .def_readonly("config", &ChatGLM2ForCausalLM::config);
 
-    // ===== Baichuan13B =====
+    // ===== Baichuan7B/13B =====
 
-    py::class_<Baichuan13BConfig, BaseConfig>(m, "Baichuan13BConfig");
+    py::class_<BaichuanTokenizer, BaseTokenizer>(m, "BaichuanTokenizer");
 
-    py::class_<Baichuan13BTokenizer, BaseTokenizer>(m, "Baichuan13BTokenizer");
+    py::class_<Baichuan7BForCausalLM, BaseModelForCausalLM>(m, "Baichuan7BForCausalLM")
+        .def_readonly("config", &Baichuan7BForCausalLM::config);
 
     py::class_<Baichuan13BForCausalLM, BaseModelForCausalLM>(m, "Baichuan13BForCausalLM")
         .def_readonly("config", &Baichuan13BForCausalLM::config);
+
+    // ===== Pipeline ====
 
     py::class_<Pipeline>(m, "Pipeline")
         .def(py::init<const std::string &>())

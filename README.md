@@ -21,7 +21,7 @@ Highlights:
 Support Matrix:
 * Hardwares: x86/arm CPU, NVIDIA GPU, Apple Silicon GPU
 * Platforms: Linux, MacOS, Windows
-* Models: [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [CodeGeeX2](https://github.com/THUDM/CodeGeeX2), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan2-13B](https://github.com/baichuan-inc/Baichuan2)
+* Models: [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [CodeGeeX2](https://github.com/THUDM/CodeGeeX2), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan-7B](https://github.com/baichuan-inc/Baichuan-7B), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan2](https://github.com/baichuan-inc/Baichuan2)
 
 ## Getting Started
 
@@ -48,8 +48,7 @@ The original model (`-i <model_name_or_path>`) can be a HuggingFace model name o
 * ChatGLM-6B: `THUDM/chatglm-6b`, `THUDM/chatglm-6b-int8`, `THUDM/chatglm-6b-int4`
 * ChatGLM2-6B: `THUDM/chatglm2-6b`, `THUDM/chatglm2-6b-int4`
 * CodeGeeX2: `THUDM/codegeex2-6b`, `THUDM/codegeex2-6b-int4`
-* Baichuan-13B: `baichuan-inc/Baichuan-13B-Chat`
-* Baichuan2-13B: `baichuan-inc/Baichuan2-13B-Chat`
+* Baichuan & Baichuan2: `baichuan-inc/Baichuan-13B-Chat`, `baichuan-inc/Baichuan2-7B-Chat`, `baichuan-inc/Baichuan2-13B-Chat`
 
 You are free to try any of the below quantization types by specifying `-t <type>`:
 * `q4_0`: 4-bit integer quantization with fp16 scales.
@@ -86,14 +85,19 @@ Run `./build/bin/main -h` to explore more options!
 
 **Try Other Models**
 
-* ChatGLM2-6B
+<details>
+<summary>ChatGLM2-6B</summary>
+
 ```sh
 python3 chatglm_cpp/convert.py -i THUDM/chatglm2-6b -t q4_0 -o chatglm2-ggml.bin
 ./build/bin/main -m chatglm2-ggml.bin -p 你好 --top_p 0.8 --temp 0.8
 # 你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。
 ```
+</details>
 
-* CodeGeeX2
+<details>
+<summary>CodeGeeX2</summary>
+
 ```sh
 $ python3 chatglm_cpp/convert.py -i THUDM/codegeex2-6b -t q4_0 -o codegeex2-ggml.bin
 $ ./build/bin/main -m codegeex2-ggml.bin --temp 0 --mode generate -p "\
@@ -112,19 +116,37 @@ def bubble_sort(list):
 
 print(bubble_sort([5, 4, 3, 2, 1]))
 ```
+</details>
 
-* Baichuan-13B-Chat
+<details>
+<summary>Baichuan-13B-Chat</summary>
+
 ```sh
-python3 chatglm_cpp/convert.py -i baichuan-inc/Baichuan-13B-Chat -t q4_0 -o baichuan13bchat-ggml.bin
-./build/bin/main -m baichuan13bchat-ggml.bin -p 你好呀 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1
-# 你好！很高兴见到你。请问有什么我可以帮助你的吗？
+python3 chatglm_cpp/convert.py -i baichuan-inc/Baichuan-13B-Chat -t q4_0 -o baichuan-13b-chat-ggml.bin
+./build/bin/main -m baichuan-13b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1
+# 你好！有什么我可以帮助你的吗？
 ```
+</details>
 
-* Baichuan2-13B-Chat
+<details>
+<summary>Baichuan2-7B-Chat</summary>
+
+```sh
+python3 chatglm_cpp/convert.py -i baichuan-inc/Baichuan2-7B-Chat -t q4_0 -o baichuan2-7b-chat-ggml.bin
+./build/bin/main -m baichuan2-7b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05
+# 你好！很高兴为您提供帮助。请问有什么问题我可以帮您解答？
+```
+</details>
+
+<details>
+<summary>Baichuan2-13B-Chat</summary>
+
 ```sh
 python3 chatglm_cpp/convert.py -i baichuan-inc/Baichuan2-13B-Chat -t q4_0 -o baichuan2-13b-chat-ggml.bin
-./build/bin/main -m baichuan2-13b-chat-ggml.bin -p 你好呀 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05
+./build/bin/main -m baichuan2-13b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05
+# 你好！今天我能为您提供什么帮助？
 ```
+</details>
 
 ## Using BLAS
 
@@ -211,13 +233,18 @@ python3 web_demo.py -m ../chatglm-ggml.bin
 
 For other models:
 
-* ChatGLM2-6B
+<details>
+<summary>ChatGLM2-6B</summary>
+
 ```sh
 python3 cli_chat.py -m ../chatglm2-ggml.bin -p 你好 --temp 0.8 --top_p 0.8  # CLI demo
 python3 web_demo.py -m ../chatglm2-ggml.bin --temp 0.8 --top_p 0.8  # web demo
 ```
+</details>
 
-* CodeGeeX2
+<details>
+<summary>CodeGeeX2</summary>
+
 ```sh
 # CLI demo
 python3 cli_chat.py -m ../codegeex2-ggml.bin --temp 0 --mode generate -p "\
@@ -227,18 +254,34 @@ python3 cli_chat.py -m ../codegeex2-ggml.bin --temp 0 --mode generate -p "\
 # web demo
 python3 web_demo.py -m ../codegeex2-ggml.bin --temp 0 --max_length 512 --mode generate --plain
 ```
+</details>
 
-* Baichuan-13B-Chat
+<details>
+<summary>Baichuan-13B-Chat</summary>
+
 ```sh
-python3 cli_chat.py -m ../baichuan13bchat-ggml.bin -p 你好呀 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1 # CLI demo
-python3 web_demo.py -m ../baichuan13bchat-ggml.bin --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1   # web demo
+python3 cli_chat.py -m ../baichuan-13b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1 # CLI demo
+python3 web_demo.py -m ../baichuan-13b-chat-ggml.bin --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1   # web demo
 ```
+</details>
 
-* Baichuan2-13B-Chat
+<details>
+<summary>Baichuan2-7B-Chat</summary>
+
 ```sh
-python3 cli_chat.py -m ../baichuan2-13b-chat-ggml.bin -p 你好呀 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05 # CLI demo
+python3 cli_chat.py -m ../baichuan2-7b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05 # CLI demo
+python3 web_demo.py -m ../baichuan2-7b-chat-ggml.bin --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05   # web demo
+```
+</details>
+
+<details>
+<summary>Baichuan2-13B-Chat</summary>
+
+```sh
+python3 cli_chat.py -m ../baichuan2-13b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05 # CLI demo
 python3 web_demo.py -m ../baichuan2-13b-chat-ggml.bin --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05   # web demo
 ```
+</details>
 
 **Load and optimize Hugging Face LLMs in one line of code**
 
@@ -390,6 +433,15 @@ ChatGLM2-6B / CodeGeeX2:
 | ms/token (MPS @ M2 Ultra)      | 11.0  | 11.7  | N/A   | N/A   | N/A   | 32.1  |
 | file size                      | 3.3G  | 3.7G  | 4.0G  | 4.4G  | 6.2G  | 12G   |
 | mem usage                      | 3.4G  | 3.8G  | 4.1G  | 4.5G  | 6.2G  | 12G   |
+
+Baichuan-7B / Baichuan2-7B:
+
+|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
+|--------------------------------|-------|-------|-------|-------|-------|-------|
+| ms/token (CPU @ Platinum 8260) | 85.3  | 94.8  | 103.4 | 109.6 | 136.8 | 248.5 |
+| ms/token (CUDA @ V100 SXM2)    | 8.7   | 9.2   | 10.2  | 10.3  | 13.2  | 21.0  |
+| file size                      | 4.0G  | 4.4G  | 4.9G  | 5.3G  | 7.5G  | 14G   |
+| mem usage                      | 4.5G  | 4.9G  | 5.3G  | 5.7G  | 7.8G  | 14G   |
 
 Baichuan-13B / Baichuan2-13B:
 

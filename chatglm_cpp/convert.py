@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import BinaryIO, Optional
 
 import torch
+import torch.nn.functional as F
 from tabulate import tabulate
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoTokenizer
@@ -322,9 +323,7 @@ class ChatGLM2Converter(BaseConverter):
         dump_state_dict(f, weight_names, model.state_dict(), model.config.quantization_bit, ggml_type)
 
 
-class Baichuan13BConverter(BaseConverter):
-    MODEL_TYPE = ModelType.BAICHUAN13B
-
+class BaichuanConverter(BaseConverter):
     @staticmethod
     def dump_config(f, config, ggml_type):
         assert config.hidden_act == "silu", "unimplemented: hidden_act must be silu"
@@ -368,7 +367,20 @@ class Baichuan13BConverter(BaseConverter):
             "model.norm.weight",
             "lm_head.weight",
         ]
+
+        if model.config.vocab_size == 125696:
+            # For Baichuan2, normalize lm_head weight
+            model.lm_head.weight.data = F.normalize(model.lm_head.weight.data)
+
         dump_state_dict(f, weight_names, model.state_dict(), quantization_bit=None, ggml_type=ggml_type)
+
+
+class Baichuan7BConverter(BaichuanConverter):
+    MODEL_TYPE = ModelType.BAICHUAN7B
+
+
+class Baichuan13BConverter(BaichuanConverter):
+    MODEL_TYPE = ModelType.BAICHUAN13B
 
 
 def convert(f: BinaryIO, model_name_or_path: str, lora_model_name_or_path: Optional[str] = None, dtype: str = "q4_0"):
@@ -384,7 +396,7 @@ def convert(f: BinaryIO, model_name_or_path: str, lora_model_name_or_path: Optio
     else:
         raise RuntimeError(f"Cannot find auto model class to load {model_name_or_path}")
 
-    model = auto_model_class.from_pretrained(model_name_or_path, trust_remote_code=True)
+    model = auto_model_class.from_pretrained(model_name_or_path, trust_remote_code=True, low_cpu_mem_usage=True)
 
     if lora_model_name_or_path is not None:
         from peft import PeftModel
@@ -401,7 +413,7 @@ def convert(f: BinaryIO, model_name_or_path: str, lora_model_name_or_path: Optio
         if model.config.hidden_size == 5120:
             Baichuan13BConverter.convert(f, model, tokenizer, ggml_type)
         else:
-            raise RuntimeError(f"Baichuan-7B is not yet supported")
+            Baichuan7BConverter.convert(f, model, tokenizer, ggml_type)
     else:
         raise RuntimeError(f"Unknown model type {model.config.model_type}")
 

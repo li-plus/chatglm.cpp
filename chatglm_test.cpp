@@ -785,18 +785,117 @@ TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
     }
 }
 
-TEST_F(ChatGLMTest, Baichuan13BModel) {
-    fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/baichuan13b_block.data";
+TEST_F(ChatGLMTest, Baichuan7BModel) {
+    fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/baichuan7b_model.data";
     MappedFile mapped_file(test_path.string());
     char *ptr = mapped_file.data;
 
-    Baichuan13BConfig config;
+    ModelConfig config;
     config.hidden_size = 32;
     config.num_attention_heads = 8;
+    config.num_kv_heads = config.num_attention_heads;
     config.intermediate_size = config.hidden_size * 3;
     config.num_hidden_layers = 1;
     config.vocab_size = 5;
     config.max_length = 8;
+    config.norm_eps = 1e-6;
+
+    constexpr int seq_len = 3;
+
+    Baichuan7BModel model(&ctx, config);
+
+    tensor_to_device(model.layers[0].attention.k_cache);
+    tensor_to_device(model.layers[0].attention.v_cache);
+
+    ggml_tensor *x1 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, seq_len);
+    ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size, seq_len);
+    ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
+    ggml_tensor *ref_y2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
+    ggml_tensor *x3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
+    ggml_tensor *ref_y3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
+
+    std::vector<ggml_tensor *> all_tensors{model.word_embeddings.weight,
+                                           model.layers[0].input_layernorm.weight,
+                                           model.layers[0].attention.query_key_value.weight,
+                                           model.layers[0].attention.dense.weight,
+                                           model.layers[0].post_attention_layernorm.weight,
+                                           model.layers[0].mlp.gate_proj.weight,
+                                           model.layers[0].mlp.down_proj.weight,
+                                           model.layers[0].mlp.up_proj.weight,
+                                           model.final_layernorm.weight,
+                                           x1,
+                                           ref_y1,
+                                           x2,
+                                           ref_y2,
+                                           x3,
+                                           ref_y3};
+    std::vector<ggml_tensor *> cpu_tensors{model.word_embeddings.weight, x1, x2, x3};
+
+    for (auto tensor : all_tensors) {
+        ptr = read_tensor_data(ptr, tensor);
+        if (std::find(cpu_tensors.begin(), cpu_tensors.end(), tensor) == cpu_tensors.end()) {
+            tensor_to_device(tensor);
+        }
+    }
+    ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
+
+    float eps = 5e-4;
+
+    // self attention
+    reset_cgraph();
+    {
+        ggml_tensor *out_y1 = model.forward(&ctx, x1, 0, seq_len);
+        EXPECT_EQ(out_y1->backend, ref_y1->backend);
+        out_y1->backend = GGML_BACKEND_CPU;
+        ggml_build_forward_expand(&ctx.gf, out_y1);
+        cpu_graph_compute(get_num_threads());
+
+        expect_all_close(ref_y1, out_y1, eps);
+    }
+
+    // cross attention
+    reset_cgraph();
+    {
+        ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len, seq_len);
+        EXPECT_EQ(out_y2->backend, ref_y2->backend);
+        out_y2->backend = GGML_BACKEND_CPU;
+        ggml_build_forward_expand(&ctx.gf, out_y2);
+        device_graph_compute(get_num_threads());
+
+        expect_all_close(ref_y2, out_y2, eps);
+    }
+    reset_cgraph();
+    {
+        ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1, seq_len);
+        EXPECT_EQ(out_y3->backend, ref_y3->backend);
+        out_y3->backend = GGML_BACKEND_CPU;
+        ggml_build_forward_expand(&ctx.gf, out_y3);
+        device_graph_compute(get_num_threads());
+
+        expect_all_close(ref_y3, out_y3, eps);
+    }
+
+    for (auto tensor : all_tensors) {
+        tensor_to_cpu(tensor);
+    }
+    tensor_to_cpu(model.layers[0].attention.k_cache);
+    tensor_to_cpu(model.layers[0].attention.v_cache);
+}
+
+TEST_F(ChatGLMTest, Baichuan13BModel) {
+    fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/baichuan13b_model.data";
+    MappedFile mapped_file(test_path.string());
+    char *ptr = mapped_file.data;
+
+    ModelConfig config;
+    config.hidden_size = 32;
+    config.num_attention_heads = 8;
+    config.num_kv_heads = config.num_attention_heads;
+    config.intermediate_size = config.hidden_size * 3;
+    config.num_hidden_layers = 1;
+    config.vocab_size = 5;
+    config.max_length = 8;
+    config.norm_eps = 1e-6;
 
     constexpr int seq_len = 3;
 
@@ -1170,7 +1269,7 @@ print(bubble_sort([5, 4, 3, 2, 1])))";
 }
 
 TEST(Pipeline, Baichuan13B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "baichuan13bchat-ggml.bin";
+    fs::path model_path = fs::path(__FILE__).parent_path() / "baichuan-13b-chat-ggml.bin";
     if (!fs::exists(model_path)) {
         GTEST_SKIP() << "Skipping Baichuan13B e2e test (ggml model not found)";
     }
@@ -1217,6 +1316,57 @@ TEST(Pipeline, Baichuan13B) {
         std::vector<std::string> history{"你好呀"};
         std::string output = pipeline.chat(history, gen_config);
         EXPECT_EQ(output, "你好！很高兴见到你。请问有什么我可以帮助你的吗？");
+    }
+}
+
+TEST(Pipeline, Baichuan2_7B) {
+    fs::path model_path = fs::path(__FILE__).parent_path() / "baichuan2-7b-chat-ggml.bin";
+    if (!fs::exists(model_path)) {
+        GTEST_SKIP() << "Skipping Baichuan2-7B e2e test (ggml model not found)";
+    }
+    Pipeline pipeline(model_path.string());
+    EXPECT_TRUE(dynamic_cast<Baichuan7BForCausalLM *>(pipeline.model.get()));
+
+    // tokenizer
+    {
+        std::vector<TokenizerTestCase> cases{
+            {"你是谁", {92067}},
+            {"我是百川大模型，是由百川智能的工程师们创造的大语言模型，我可以和人类进行自然交流、解答问题、协助创作，帮"
+             "助大众轻松、普惠的获得世界知识和专业服务。如果你有任何问题，可以随时向我提问",
+             {6461, 70335, 92366, 9528, 65,    10879, 70335, 3932, 92333, 8832,  92414, 5034,
+              3133, 5002,  9528,  65,   28756, 92385, 5243,  1697, 2559,  3341,  69,    10474,
+              1754, 69,    9036,  7356, 65,    2716,  7499,  4892, 69,    24816, 92333, 2693,
+              2089, 23672, 1940,  1760, 66,    4173,  23181, 1754, 65,    65351, 39975, 14590}}};
+        check_tokenizer(pipeline.tokenizer.get(), cases);
+
+        std::vector<std::string> history{"你好呀", "你好！很高兴和你交流。请问有什么问题我可以帮助你解决吗？",
+                                         "你叫什么名字？"};
+        std::vector<int> input_ids = pipeline.tokenizer->encode_history(history, 2048);
+        std::vector<int> target_input_ids{195, 16829, 94278, 196,   16829, 67,    52160, 10329, 3341,
+                                          66,  23216, 5817,  1754,  92392, 21777, 92430, 2740,  93122,
+                                          68,  195,   92430, 93410, 1747,  6642,  68,    196};
+        EXPECT_TRUE(equal(input_ids, target_input_ids));
+    }
+
+    // memory test
+    {
+        GenerationConfig gen_config;
+        gen_config.max_length = 2048;
+        gen_config.max_context_length = gen_config.max_length - 1;
+        gen_config.do_sample = false;
+
+        std::vector<int> input_ids(gen_config.max_context_length, 128);
+        pipeline.generate(input_ids, gen_config);
+    }
+
+    // chat
+    {
+        GenerationConfig gen_config;
+        gen_config.do_sample = false;
+        gen_config.repetition_penalty = 1.05;
+        std::vector<std::string> history{"你好呀"};
+        std::string output = pipeline.chat(history, gen_config);
+        EXPECT_EQ(output, "你好！很高兴为你服务。请问有什么问题我可以帮助你解决？");
     }
 }
 
@@ -1300,8 +1450,13 @@ TEST(Benchmark, ChatGLM2) {
     run_benchmark(model_path);
 }
 
-TEST(Benchmark, Baichuan13B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "baichuan13bchat-ggml.bin";
+TEST(Benchmark, Baichuan2_7B) {
+    fs::path model_path = fs::path(__FILE__).parent_path() / "baichuan2-7b-chat-ggml.bin";
+    run_benchmark(model_path);
+}
+
+TEST(Benchmark, Baichuan2_13B) {
+    fs::path model_path = fs::path(__FILE__).parent_path() / "baichuan2-13b-chat-ggml.bin";
     run_benchmark(model_path);
 }
 
