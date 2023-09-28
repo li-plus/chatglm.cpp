@@ -38,16 +38,11 @@ git submodule update --init --recursive
 ```
 
 **Quantize Model**
-Before quantize model, please make sure that `pip` has been upgrade to a newer version:
 
+Install necessary packages for loading and quantizing Hugging Face models:
 ```sh
-python3 -m pip install --upgrade pip`.
-```
-
-And install essential packages:
-
-```sh
-python -m pip install --user --no-cache-dir torch tabulate tqdm transformers sentencepiece
+python3 -m pip install -U pip
+python3 -m pip install torch tabulate tqdm transformers sentencepiece
 ```
 
 Use `convert.py` to transform ChatGLM-6B or ChatGLM2-6B into quantized GGML format. For example, to convert the fp16 original model to q4_0 (quantized int4) GGML model, run:
