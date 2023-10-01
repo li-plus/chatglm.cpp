@@ -173,7 +173,7 @@ CHATGLM_MODEL_PATH = Path(
 ).expanduser()
 
 CHATGLM2_MODEL_PATH = Path(
-    "~/.cache/huggingface/hub/models--THUDM--chatglm2-6b/snapshots/0ecfe0b857efd00836a4851b3dd2ed04bd4b197f"
+    "~/.cache/huggingface/hub/models--THUDM--chatglm2-6b/snapshots/b1502f4f75c71499a3d566b14463edd62620ce9f"
 ).expanduser()
 
 BAICHUAN7B_MODEL_PATH = Path(
@@ -326,7 +326,7 @@ def make_data_glm2_block():
     config.hidden_size = 32
     config.num_attention_heads = 8
     config.multi_query_group_num = 2
-    config.ffn_hidden_size = 6
+    config.ffn_hidden_size = 48
     config.kv_channels = config.hidden_size // config.num_attention_heads
     config.torch_dtype = torch.float32
     m = GLMBlock(config, layer_number=3).eval()
@@ -455,8 +455,8 @@ def main():
     # make_data_layernorm()
     # make_data_rms_norm()
     # make_data_glm_block()
-    # make_data_glm2_block()
-    make_data_baichuan7b_model()
+    make_data_glm2_block()
+    # make_data_baichuan7b_model()
     # make_data_baichuan13b_model()
 
 
