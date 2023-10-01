@@ -323,7 +323,7 @@ def make_data_glm2_block():
 
     config = AutoConfig.from_pretrained(CHATGLM2_MODEL_PATH, trust_remote_code=True)
     config.layernorm_epsilon = 1e-5
-    config.hidden_size = 256
+    config.hidden_size = 32
     config.num_attention_heads = 8
     config.multi_query_group_num = 2
     config.ffn_hidden_size = 48
