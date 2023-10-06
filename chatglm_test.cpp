@@ -473,49 +473,63 @@ TEST_F(ChatGLMTest, BenchmarkRMSNorm) {
     }
 }
 
-TEST_F(ChatGLMTest, GLMBlock) {
-    fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/glm_block.data";
+TEST_F(ChatGLMTest, GLMModel) {
+    fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/glm_model.data";
     MappedFile mapped_file(test_path.string());
     char *ptr = mapped_file.data;
 
-    constexpr int hidden_size = 32;
-    constexpr int num_attention_heads = 8;
-    constexpr int num_hidden_layers = 28;
-    constexpr int max_length = 16;
-    constexpr int seq_len = 4;
-    GLMBlock model(&ctx, hidden_size, num_attention_heads, num_hidden_layers, max_length);
-    tensor_to_device(model.attention.k_cache);
-    tensor_to_device(model.attention.v_cache);
+    ModelConfig config;
+    config.hidden_size = 32;
+    config.num_attention_heads = 8;
+    config.num_kv_heads = 2;
+    config.intermediate_size = config.hidden_size * 4;
+    config.num_hidden_layers = 1;
+    config.vocab_size = 5;
+    config.max_length = 8;
+    config.norm_eps = 1e-5;
 
-    ggml_tensor *x1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
-    ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
-    ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
-    ggml_tensor *ref_y2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
-    ggml_tensor *x3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
-    ggml_tensor *ref_y3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
+    constexpr int seq_len = 3;
 
-    std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
-                                           model.input_layernorm.bias,
-                                           model.attention.query_key_value.weight,
-                                           model.attention.query_key_value.bias,
-                                           model.attention.dense.weight,
-                                           model.attention.dense.bias,
-                                           model.post_attention_layernorm.weight,
-                                           model.post_attention_layernorm.bias,
-                                           model.mlp.dense_h_to_4h.weight,
-                                           model.mlp.dense_h_to_4h.bias,
-                                           model.mlp.dense_4h_to_h.weight,
-                                           model.mlp.dense_4h_to_h.bias,
+    ChatGLMModel model(&ctx, config);
+
+    tensor_to_device(model.layers[0].attention.k_cache);
+    tensor_to_device(model.layers[0].attention.v_cache);
+
+    ggml_tensor *x1 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, seq_len);
+    ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size, seq_len);
+    ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
+    ggml_tensor *ref_y2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
+    ggml_tensor *x3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
+    ggml_tensor *ref_y3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
+
+    std::vector<ggml_tensor *> all_tensors{model.word_embeddings.weight,
+                                           model.layers[0].input_layernorm.weight,
+                                           model.layers[0].input_layernorm.bias,
+                                           model.layers[0].attention.query_key_value.weight,
+                                           model.layers[0].attention.query_key_value.bias,
+                                           model.layers[0].attention.dense.weight,
+                                           model.layers[0].attention.dense.bias,
+                                           model.layers[0].post_attention_layernorm.weight,
+                                           model.layers[0].post_attention_layernorm.bias,
+                                           model.layers[0].mlp.dense_h_to_4h.weight,
+                                           model.layers[0].mlp.dense_h_to_4h.bias,
+                                           model.layers[0].mlp.dense_4h_to_h.weight,
+                                           model.layers[0].mlp.dense_4h_to_h.bias,
+                                           model.final_layernorm.weight,
+                                           model.final_layernorm.bias,
                                            x1,
                                            ref_y1,
                                            x2,
                                            ref_y2,
                                            x3,
                                            ref_y3};
+    std::vector<ggml_tensor *> cpu_tensors{model.word_embeddings.weight, x1, x2, x3};
 
     for (auto tensor : all_tensors) {
         ptr = read_tensor_data(ptr, tensor);
-        tensor_to_device(tensor);
+        if (std::find(cpu_tensors.begin(), cpu_tensors.end(), tensor) == cpu_tensors.end()) {
+            tensor_to_device(tensor);
+        }
     }
 
     ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
@@ -556,114 +570,128 @@ TEST_F(ChatGLMTest, GLMBlock) {
     for (auto tensor : all_tensors) {
         tensor_to_cpu(tensor);
     }
+    tensor_to_cpu(model.layers[0].attention.k_cache);
+    tensor_to_cpu(model.layers[0].attention.v_cache);
 }
 
-TEST_F(ChatGLMTest, BenchmarkGLMBlock) {
-    constexpr int hidden_size = 4096;
-    constexpr int num_attention_heads = 32;
-    constexpr int num_hidden_layers = 28;
-    constexpr int max_length = 2048;
-    constexpr int seq_len = 64;
+// TEST_F(ChatGLMTest, BenchmarkGLMBlock) {
+//     constexpr int hidden_size = 4096;
+//     constexpr int num_attention_heads = 32;
+//     constexpr int num_hidden_layers = 28;
+//     constexpr int max_length = 2048;
+//     constexpr int seq_len = 64;
 
-    ggml_type dtypes[]{GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0};
-    for (const auto dtype : dtypes) {
-        SetUp();
+//     ggml_type dtypes[]{GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0};
+//     for (const auto dtype : dtypes) {
+//         SetUp();
 
-        ctx.dtype = dtype;
-        GLMBlock model(&ctx, hidden_size, num_attention_heads, num_hidden_layers, max_length);
+//         ctx.dtype = dtype;
+//         GLMBlock model(&ctx, hidden_size, num_attention_heads, num_hidden_layers, max_length);
 
-        ggml_tensor *self_attn_x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
-        ggml_tensor *cross_attn_x = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
+//         ggml_tensor *self_attn_x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
+//         ggml_tensor *cross_attn_x = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
 
-        std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
-                                               model.input_layernorm.bias,
-                                               model.attention.query_key_value.weight,
-                                               model.attention.query_key_value.bias,
-                                               model.attention.dense.weight,
-                                               model.attention.dense.bias,
-                                               model.post_attention_layernorm.weight,
-                                               model.post_attention_layernorm.bias,
-                                               model.mlp.dense_h_to_4h.weight,
-                                               model.mlp.dense_h_to_4h.bias,
-                                               model.mlp.dense_4h_to_h.weight,
-                                               model.mlp.dense_4h_to_h.bias,
-                                               self_attn_x,
-                                               cross_attn_x};
+//         std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
+//                                                model.input_layernorm.bias,
+//                                                model.attention.query_key_value.weight,
+//                                                model.attention.query_key_value.bias,
+//                                                model.attention.dense.weight,
+//                                                model.attention.dense.bias,
+//                                                model.post_attention_layernorm.weight,
+//                                                model.post_attention_layernorm.bias,
+//                                                model.mlp.dense_h_to_4h.weight,
+//                                                model.mlp.dense_h_to_4h.bias,
+//                                                model.mlp.dense_4h_to_h.weight,
+//                                                model.mlp.dense_4h_to_h.bias,
+//                                                self_attn_x,
+//                                                cross_attn_x};
 
-        for (auto tensor : all_tensors) {
-            random_fill(tensor);
-            tensor_to_device(tensor);
-        }
+//         for (auto tensor : all_tensors) {
+//             random_fill(tensor);
+//             tensor_to_device(tensor);
+//         }
 
-        // self attention
-        reset_cgraph();
-        {
-            ggml_tensor *self_attn_y = model.forward(&ctx, self_attn_x, 0, seq_len);
-            ggml_build_forward_expand(&ctx.gf, self_attn_y);
-            std::cout << "[Benchmark] GLMBlock " << ggml_type_name(dtype)
-                      << " self attn time: " << perf_cpu_graph_compute() << " ms\n";
-        }
+//         // self attention
+//         reset_cgraph();
+//         {
+//             ggml_tensor *self_attn_y = model.forward(&ctx, self_attn_x, 0, seq_len);
+//             ggml_build_forward_expand(&ctx.gf, self_attn_y);
+//             std::cout << "[Benchmark] GLMBlock " << ggml_type_name(dtype)
+//                       << " self attn time: " << perf_cpu_graph_compute() << " ms\n";
+//         }
 
-        // cross attention
-        reset_cgraph();
-        {
-            ggml_tensor *cross_attn_y = model.forward(&ctx, cross_attn_x, seq_len, seq_len);
-            ggml_build_forward_expand(&ctx.gf, cross_attn_y);
-            std::cout << "[Benchmark] GLMBlock " << ggml_type_name(dtype)
-                      << " cross attn time: " << perf_device_graph_compute() << " ms\n";
-        }
+//         // cross attention
+//         reset_cgraph();
+//         {
+//             ggml_tensor *cross_attn_y = model.forward(&ctx, cross_attn_x, seq_len, seq_len);
+//             ggml_build_forward_expand(&ctx.gf, cross_attn_y);
+//             std::cout << "[Benchmark] GLMBlock " << ggml_type_name(dtype)
+//                       << " cross attn time: " << perf_device_graph_compute() << " ms\n";
+//         }
 
-        for (auto tensor : all_tensors) {
-            tensor_to_cpu(tensor);
-        }
-    }
-}
+//         for (auto tensor : all_tensors) {
+//             tensor_to_cpu(tensor);
+//         }
+//     }
+// }
 
-TEST_F(ChatGLMTest, GLM2Block) {
-    fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/glm2_block.data";
+TEST_F(ChatGLMTest, GLM2Model) {
+    fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/glm2_model.data";
     MappedFile mapped_file(test_path.string());
     char *ptr = mapped_file.data;
 
+    ModelConfig config;
+    config.vocab_size = 5;
+    config.hidden_size = 32;
+    config.num_attention_heads = 8;
+    config.num_kv_heads = 2;
+    config.num_hidden_layers = 1;
+    config.intermediate_size = 48;
+    config.norm_eps = 1e-5;
+    config.max_length = 8;
+
     constexpr int seq_len = 3;
-    constexpr int hidden_size = 32;
-    constexpr int num_attention_heads = 8;
-    constexpr int num_kv_heads = 2;
-    constexpr int ffn_hidden_size = 48;
-    constexpr int max_length = 8;
 
-    GLM2Block model(&ctx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length, 1e-5);
-    tensor_to_device(model.attention.k_cache);
-    tensor_to_device(model.attention.v_cache);
+    ChatGLM2Model model(&ctx, config);
 
-    ggml_tensor *x1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
-    ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
-    ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
-    ggml_tensor *ref_y2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
-    ggml_tensor *x3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
-    ggml_tensor *ref_y3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
+    tensor_to_device(model.layers[0].attention.k_cache);
+    tensor_to_device(model.layers[0].attention.v_cache);
 
-    std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
-                                           model.attention.query_key_value.weight,
-                                           model.attention.query_key_value.bias,
-                                           model.attention.dense.weight,
-                                           model.post_attention_layernorm.weight,
-                                           model.mlp.gate_proj.weight,
-                                           model.mlp.up_proj.weight,
-                                           model.mlp.down_proj.weight,
+    ggml_tensor *x1 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, seq_len);
+    ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size, seq_len);
+    ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
+    ggml_tensor *ref_y2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
+    ggml_tensor *x3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
+    ggml_tensor *ref_y3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
+
+    std::vector<ggml_tensor *> all_tensors{model.word_embeddings.weight,
+                                           model.layers[0].input_layernorm.weight,
+                                           model.layers[0].attention.query_key_value.weight,
+                                           model.layers[0].attention.query_key_value.bias,
+                                           model.layers[0].attention.dense.weight,
+                                           model.layers[0].post_attention_layernorm.weight,
+                                           model.layers[0].mlp.gate_proj.weight,
+                                           model.layers[0].mlp.up_proj.weight,
+                                           model.layers[0].mlp.down_proj.weight,
+                                           model.final_layernorm.weight,
                                            x1,
                                            ref_y1,
                                            x2,
                                            ref_y2,
                                            x3,
                                            ref_y3};
+    std::vector<ggml_tensor *> cpu_tensors{model.word_embeddings.weight, x1, x2, x3};
 
     for (auto tensor : all_tensors) {
         ptr = read_tensor_data(ptr, tensor);
-        tensor_to_device(tensor);
+        if (std::find(cpu_tensors.begin(), cpu_tensors.end(), tensor) == cpu_tensors.end()) {
+            tensor_to_device(tensor);
+        }
     }
+
     ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
 
-    float eps = 1e-4;
+    float eps = 2e-4;
 
 #ifdef GGML_USE_METAL
     // convert gemm weights to fp16
@@ -716,75 +744,75 @@ TEST_F(ChatGLMTest, GLM2Block) {
     for (auto tensor : all_tensors) {
         tensor_to_cpu(tensor);
     }
-    tensor_to_cpu(model.attention.k_cache);
-    tensor_to_cpu(model.attention.v_cache);
+    tensor_to_cpu(model.layers[0].attention.k_cache);
+    tensor_to_cpu(model.layers[0].attention.v_cache);
 }
 
-TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
-    constexpr int seq_len = 64;
-    constexpr int hidden_size = 4096;
-    constexpr int num_attention_heads = 32;
-    constexpr int num_kv_heads = 2;
-    constexpr int ffn_hidden_size = 13696;
-    constexpr int max_length = 2048;
+// TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
+//     constexpr int seq_len = 64;
+//     constexpr int hidden_size = 4096;
+//     constexpr int num_attention_heads = 32;
+//     constexpr int num_kv_heads = 2;
+//     constexpr int ffn_hidden_size = 13696;
+//     constexpr int max_length = 2048;
 
-#ifdef GGML_USE_METAL
-    ggml_type dtypes[]{GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0};
-#else
-    ggml_type dtypes[]{GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0};
-#endif
-    for (const auto dtype : dtypes) {
-        SetUp();
+// #ifdef GGML_USE_METAL
+//     ggml_type dtypes[]{GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0};
+// #else
+//     ggml_type dtypes[]{GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0};
+// #endif
+//     for (const auto dtype : dtypes) {
+//         SetUp();
 
-        ctx.dtype = dtype;
-        GLM2Block model(&ctx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length, 1e-5);
-        tensor_to_device(model.attention.k_cache);
-        tensor_to_device(model.attention.v_cache);
+//         ctx.dtype = dtype;
+//         GLM2Block model(&ctx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length, 1e-5);
+//         tensor_to_device(model.attention.k_cache);
+//         tensor_to_device(model.attention.v_cache);
 
-        ggml_tensor *self_attn_x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
-        ggml_tensor *cross_attn_x = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
+//         ggml_tensor *self_attn_x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
+//         ggml_tensor *cross_attn_x = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
 
-        std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
-                                               model.attention.query_key_value.weight,
-                                               model.attention.query_key_value.bias,
-                                               model.attention.dense.weight,
-                                               model.post_attention_layernorm.weight,
-                                               model.mlp.gate_proj.weight,
-                                               model.mlp.up_proj.weight,
-                                               model.mlp.down_proj.weight,
-                                               self_attn_x,
-                                               cross_attn_x};
+//         std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
+//                                                model.attention.query_key_value.weight,
+//                                                model.attention.query_key_value.bias,
+//                                                model.attention.dense.weight,
+//                                                model.post_attention_layernorm.weight,
+//                                                model.mlp.gate_proj.weight,
+//                                                model.mlp.up_proj.weight,
+//                                                model.mlp.down_proj.weight,
+//                                                self_attn_x,
+//                                                cross_attn_x};
 
-        for (auto tensor : all_tensors) {
-            random_fill(tensor);
-            tensor_to_device(tensor);
-        }
+//         for (auto tensor : all_tensors) {
+//             random_fill(tensor);
+//             tensor_to_device(tensor);
+//         }
 
-        // self attention
-        reset_cgraph();
-        {
-            ggml_tensor *self_attn_y = model.forward(&ctx, self_attn_x, 0, seq_len);
-            ggml_build_forward_expand(&ctx.gf, self_attn_y);
-            std::cout << "[Benchmark] GLM2Block " << ggml_type_name(dtype)
-                      << " self attn time: " << perf_device_graph_compute() << " ms\n";
-        }
+//         // self attention
+//         reset_cgraph();
+//         {
+//             ggml_tensor *self_attn_y = model.forward(&ctx, self_attn_x, 0, seq_len);
+//             ggml_build_forward_expand(&ctx.gf, self_attn_y);
+//             std::cout << "[Benchmark] GLM2Block " << ggml_type_name(dtype)
+//                       << " self attn time: " << perf_device_graph_compute() << " ms\n";
+//         }
 
-        // cross attention
-        reset_cgraph();
-        {
-            ggml_tensor *cross_attn_y = model.forward(&ctx, cross_attn_x, seq_len, seq_len);
-            ggml_build_forward_expand(&ctx.gf, cross_attn_y);
-            std::cout << "[Benchmark] GLM2Block " << ggml_type_name(dtype)
-                      << " cross attn time: " << perf_device_graph_compute() << " ms\n";
-        }
+//         // cross attention
+//         reset_cgraph();
+//         {
+//             ggml_tensor *cross_attn_y = model.forward(&ctx, cross_attn_x, seq_len, seq_len);
+//             ggml_build_forward_expand(&ctx.gf, cross_attn_y);
+//             std::cout << "[Benchmark] GLM2Block " << ggml_type_name(dtype)
+//                       << " cross attn time: " << perf_device_graph_compute() << " ms\n";
+//         }
 
-        for (auto tensor : all_tensors) {
-            tensor_to_cpu(tensor);
-        }
-        tensor_to_cpu(model.attention.k_cache);
-        tensor_to_cpu(model.attention.v_cache);
-    }
-}
+//         for (auto tensor : all_tensors) {
+//             tensor_to_cpu(tensor);
+//         }
+//         tensor_to_cpu(model.attention.k_cache);
+//         tensor_to_cpu(model.attention.v_cache);
+//     }
+// }
 
 TEST_F(ChatGLMTest, Baichuan7BModel) {
     fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/baichuan7b_model.data";

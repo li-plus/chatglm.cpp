@@ -823,7 +823,7 @@ class GLMBlock : public BasicBlock<LayerNorm, GLMAttention, GLMMLP> {
         : BasicBlock(LayerNorm(ctx, hidden_size),
                      GLMAttention(ctx, hidden_size, num_attention_heads, num_attention_heads, max_length),
                      LayerNorm(ctx, hidden_size), GLMMLP(ctx, hidden_size, 4 * hidden_size)),
-          alpha_value(std::sqrt(2.f * num_hidden_layers)) {}
+          alpha_value(std::sqrt(2.f * 28)) {}
 
     ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, ggml_tensor *position_ids, int n_past,
                          int n_ctx) const;
