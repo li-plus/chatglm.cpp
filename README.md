@@ -419,7 +419,7 @@ Python demo and API servers are also supported in pre-built image. Use it in the
 Environment:
 * CPU backend performance is measured on a Linux server with Intel(R) Xeon(R) Platinum 8260 CPU @ 2.40GHz using 16 threads.
 * CUDA backend is measured on a V100-SXM2-32GB GPU using 1 thread.
-* MPS backend is measured on an Apple M2 Ultra device using 1 thread (currently only supports ChatGLM2).
+* MPS backend is measured on an Apple M2 Ultra device using 1 thread.
 
 ChatGLM-6B:
 
@@ -436,7 +436,7 @@ ChatGLM2-6B / CodeGeeX2:
 |--------------------------------|-------|-------|-------|-------|-------|-------|
 | ms/token (CPU @ Platinum 8260) | 64    | 71    | 79    | 83    | 106   | 189   |
 | ms/token (CUDA @ V100 SXM2)    | 7.9   | 8.3   | 9.2   | 9.2   | 11.7  | 18.5  |
-| ms/token (MPS @ M2 Ultra)      | 11.0  | 11.7  | N/A   | N/A   | N/A   | 32.1  |
+| ms/token (MPS @ M2 Ultra)      | 10.0  | 10.8  | N/A   | N/A   | 14.5  | 22.2  |
 | file size                      | 3.3G  | 3.7G  | 4.0G  | 4.4G  | 6.2G  | 12G   |
 | mem usage                      | 3.4G  | 3.8G  | 4.1G  | 4.5G  | 6.2G  | 12G   |
 
@@ -446,6 +446,7 @@ Baichuan-7B / Baichuan2-7B:
 |--------------------------------|-------|-------|-------|-------|-------|-------|
 | ms/token (CPU @ Platinum 8260) | 85.3  | 94.8  | 103.4 | 109.6 | 136.8 | 248.5 |
 | ms/token (CUDA @ V100 SXM2)    | 8.7   | 9.2   | 10.2  | 10.3  | 13.2  | 21.0  |
+| ms/token (MPS @ M2 Ultra)      | 11.3  | 12.0  | N/A   | N/A   | 16.4  | 25.6  |
 | file size                      | 4.0G  | 4.4G  | 4.9G  | 5.3G  | 7.5G  | 14G   |
 | mem usage                      | 4.5G  | 4.9G  | 5.3G  | 5.7G  | 7.8G  | 14G   |
 
@@ -455,6 +456,7 @@ Baichuan-13B / Baichuan2-13B:
 |--------------------------------|-------|-------|-------|-------|-------|-------|
 | ms/token (CPU @ Platinum 8260) | 161.7 | 175.8 | 189.9 | 192.3 | 255.6 | 459.6 |
 | ms/token (CUDA @ V100 SXM2)    | 13.7  | 15.1  | 16.3  | 16.9  | 21.9  | 36.8  |
+| ms/token (MPS @ M2 Ultra)      | 18.2  | 18.8  | N/A   | N/A   | 27.2  |       |
 | file size                      | 7.0G  | 7.8G  | 8.5G  | 9.3G  | 14G   | 25G   |
 | mem usage                      | 7.8G  | 8.8G  | 9.5G  | 10G   | 14G   | 25G   |
 

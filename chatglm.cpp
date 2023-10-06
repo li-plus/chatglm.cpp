@@ -780,13 +780,14 @@ ggml_tensor *GLMContextMasker::operator()(ModelContext *ctx, ggml_tensor *attn_s
     return attn_scores;
 }
 
-ggml_tensor *GLMBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
+ggml_tensor *GLMBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, ggml_tensor *position_ids, int n_past,
+                               int n_ctx) const {
     ggml_context *gctx = ctx->ctx_b.get();
 
     ggml_tensor *alpha = ggml_new_f32(gctx, alpha_value);
 
     ggml_tensor *attn_input = input_layernorm.forward(ctx, hidden_states);
-    ggml_tensor *attn_output = attention.forward(ctx, attn_input, n_past, n_ctx);
+    ggml_tensor *attn_output = attention.forward(ctx, attn_input, position_ids, n_past, n_ctx);
     ggml_build_forward_expand(&ctx->gf, attn_output);
     attn_input = tensor_assign_buffers(ggml_scale_inplace(gctx, attn_input, alpha));
     hidden_states = tensor_assign_buffers(ggml_add_inplace(gctx, attn_input, attn_output));

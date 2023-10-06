@@ -299,13 +299,14 @@ enum RopeType {
 };
 
 struct NoopRoper {
-    ggml_tensor *operator()(ggml_context *ctx, ggml_tensor *a, int n_past, int n_ctx) const { return a; }
+    ggml_tensor *operator()(ggml_context *ctx, ggml_tensor *a, ggml_tensor *b, int n_ctx) const { return a; }
 };
 
 template <RopeType MODE, int DIM_SCALE>
 struct BasicRoper {
-    ggml_tensor *operator()(ggml_context *ctx, ggml_tensor *a, int n_past, int n_ctx) const {
+    ggml_tensor *operator()(ggml_context *ctx, ggml_tensor *a, ggml_tensor *b, int n_ctx) const {
         // tensor a (activation) is of shape [qlen, heads, head_size]
+        // tensor b (position_ids) is of shape [qlen]
 #ifdef GGML_USE_CUBLAS
         if (!ggml_is_contiguous(a)) {
             a = tensor_assign_buffers(ggml_cont(ctx, a));
@@ -313,7 +314,7 @@ struct BasicRoper {
 #endif
         const int head_size = a->ne[0];
         const int rope_dim = head_size / DIM_SCALE;
-        a = tensor_assign_buffers(ggml_rope_inplace(ctx, a, n_past, rope_dim, MODE, n_ctx)); // [qlen, heads, head_size]
+        a = tensor_assign_buffers(ggml_rope_inplace(ctx, a, b, rope_dim, MODE, n_ctx)); // [qlen, heads, head_size]
         return a;
     }
 };
@@ -333,7 +334,8 @@ class BasicAttention {
           v_cache(ggml_new_tensor_3d(ctx->ctx_kv.get(), GGML_TYPE_F16, max_length, hidden_size / num_attention_heads,
                                      num_kv_heads)) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, ggml_tensor *position_ids, int n_past,
+                         int n_ctx) const {
         ggml_context *gctx = ctx->ctx_b.get();
 
         const int hidden_size = hidden_states->ne[0];
@@ -368,8 +370,8 @@ class BasicAttention {
                                        qkv->nb[1], (hidden_size + head_size * num_kv_heads) * ggml_element_size(qkv));
         }
 
-        query_layer = roper_(gctx, query_layer, n_past, n_ctx);
-        key_layer = roper_(gctx, key_layer, n_past, n_ctx);
+        query_layer = roper_(gctx, query_layer, position_ids, n_ctx);
+        key_layer = roper_(gctx, key_layer, position_ids, n_ctx);
 
         query_layer = tensor_assign_buffers(
             ggml_cont(gctx, ggml_permute(gctx, query_layer, 0, 2, 1, 3))); // [heads, qlen, head_size]
@@ -462,12 +464,13 @@ class BasicBlock {
           attention(ctx, hidden_size, num_attention_heads, num_kv_heads, max_length),
           post_attention_layernorm(ctx, hidden_size, false, norm_eps), mlp(ctx, hidden_size, intermediate_size) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, ggml_tensor *position_ids, int n_past,
+                         int n_ctx) const {
         ggml_context *gctx = ctx->ctx_b.get();
 
         ggml_tensor *residual = hidden_states;
         hidden_states = input_layernorm.forward(ctx, hidden_states);
-        hidden_states = attention.forward(ctx, hidden_states, n_past, n_ctx);
+        hidden_states = attention.forward(ctx, hidden_states, position_ids, n_past, n_ctx);
         hidden_states = tensor_assign_buffers(ggml_add_inplace(gctx, hidden_states, residual));
 
         residual = hidden_states;
@@ -504,15 +507,24 @@ class BasicModel {
 
     ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const {
         ggml_context *gctx = ctx->ctx_b.get();
+        ggml_tensor *position_ids = make_position_ids(gctx, input_ids->ne[0], n_past);
         ggml_tensor *hidden_states = word_embeddings.forward(ctx, input_ids);
         for (const auto &layer : layers) {
             ggml_set_scratch(gctx, ctx->scratch);
-            hidden_states = layer.forward(ctx, hidden_states, n_past, n_ctx);
+            hidden_states = layer.forward(ctx, hidden_states, position_ids, n_past, n_ctx);
         }
         ggml_scratch empty_scratch = {0, 0, nullptr};
         ggml_set_scratch(gctx, empty_scratch);
         hidden_states = final_layernorm.forward(ctx, hidden_states);
         return hidden_states;
+    }
+
+    static ggml_tensor *make_position_ids(ggml_context *ctx, int qlen, int n_past) {
+        ggml_tensor *position_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, qlen);
+        for (int i = 0; i < qlen; i++) {
+            ((int *)position_ids->data)[i] = n_past + i;
+        }
+        return tensor_to_device(position_ids);
     }
 
   private:
@@ -813,7 +825,8 @@ class GLMBlock : public BasicBlock<LayerNorm, GLMAttention, GLMMLP> {
                      LayerNorm(ctx, hidden_size), GLMMLP(ctx, hidden_size, 4 * hidden_size)),
           alpha_value(std::sqrt(2.f * num_hidden_layers)) {}
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const;
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, ggml_tensor *position_ids, int n_past,
+                         int n_ctx) const;
 
   public:
     float alpha_value;

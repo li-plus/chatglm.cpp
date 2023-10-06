@@ -628,7 +628,7 @@ TEST_F(ChatGLMTest, GLM2Block) {
     constexpr int hidden_size = 32;
     constexpr int num_attention_heads = 8;
     constexpr int num_kv_heads = 2;
-    constexpr int ffn_hidden_size = 6;
+    constexpr int ffn_hidden_size = 48;
     constexpr int max_length = 8;
 
     GLM2Block model(&ctx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length, 1e-5);
@@ -668,7 +668,8 @@ TEST_F(ChatGLMTest, GLM2Block) {
 #ifdef GGML_USE_METAL
     // convert gemm weights to fp16
     std::vector<ggml_tensor **> gemm_weight_ptrs{&model.attention.query_key_value.weight, &model.attention.dense.weight,
-                                                 &model.mlp.dense_h_to_4h.weight, &model.mlp.dense_4h_to_h.weight};
+                                                 &model.mlp.gate_proj.weight, &model.mlp.up_proj.weight,
+                                                 &model.mlp.down_proj.weight};
     for (auto weight_ptr : gemm_weight_ptrs) {
         ggml_tensor *weight = *weight_ptr;
         ggml_tensor *fp16_weight = ggml_new_tensor(ctx.ctx_b.get(), GGML_TYPE_F16, weight->n_dims, weight->ne);
@@ -728,7 +729,7 @@ TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
     constexpr int max_length = 2048;
 
 #ifdef GGML_USE_METAL
-    ggml_type dtypes[]{GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1};
+    ggml_type dtypes[]{GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0};
 #else
     ggml_type dtypes[]{GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0};
 #endif
@@ -938,10 +939,12 @@ TEST_F(ChatGLMTest, Baichuan13BModel) {
 
     float eps = 5e-4;
 
-#if 0 // TODO: GGML_METAL
+#ifdef GGML_USE_METAL
     // convert gemm weights to fp16
-    std::vector<ggml_tensor **> gemm_weight_ptrs{&model.attention.query_key_value.weight, &model.attention.dense.weight,
-                                                 &model.mlp.dense_h_to_4h.weight, &model.mlp.dense_4h_to_h.weight};
+    std::vector<ggml_tensor **> gemm_weight_ptrs{
+        &model.layers[0].attention.query_key_value.weight, &model.layers[0].attention.dense.weight,
+        &model.layers[0].mlp.gate_proj.weight, &model.layers[0].mlp.down_proj.weight,
+        &model.layers[0].mlp.up_proj.weight};
     for (auto weight_ptr : gemm_weight_ptrs) {
         ggml_tensor *weight = *weight_ptr;
         ggml_tensor *fp16_weight = ggml_new_tensor(ctx.ctx_b.get(), GGML_TYPE_F16, weight->n_dims, weight->ne);
@@ -958,7 +961,7 @@ TEST_F(ChatGLMTest, Baichuan13BModel) {
         EXPECT_EQ(out_y1->backend, ref_y1->backend);
         out_y1->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y1);
-        cpu_graph_compute(get_num_threads());
+        device_graph_compute(get_num_threads());
 
         expect_all_close(ref_y1, out_y1, eps);
     }
