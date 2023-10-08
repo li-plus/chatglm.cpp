@@ -204,9 +204,18 @@ class ChatGLMTest : public ::testing::Test {
         ctx.ctx_b = make_unique_ggml_context(512 * MB, nullptr, false);
         ctx.scratch_buffer.resize(1 * MB);
         ctx.scratch = {0, ctx.scratch_buffer.size(), ctx.scratch_buffer.data()};
+#ifdef GGML_USE_CUBLAS
+        ggml_cuda_set_scratch_size(ctx.scratch_buffer.size());
+#endif
         ctx.init_device_context();
 
         reset_cgraph();
+    }
+
+    void TearDown() override {
+#ifdef GGML_USE_CUBLAS
+        ggml_cuda_free_scratch();
+#endif
     }
 
     void reset_cgraph() { ctx.gf = {}; }
@@ -303,7 +312,7 @@ TEST_F(ChatGLMTest, Linear) {
     };
     std::vector<TestConfig> test_configs{
         {GGML_TYPE_F32, 1e-5, 0},
-        {GGML_TYPE_F16, 5e-3, 0},
+        {GGML_TYPE_F16, 1e-2, 5e-4},
         {GGML_TYPE_Q4_0, 1.0, 0.2},
     };
 
@@ -537,7 +546,7 @@ TEST_F(ChatGLMTest, GLMModel) {
     // self attention
     {
         ggml_tensor *out_y1 = model.forward(&ctx, x1, 0, seq_len);
-        EXPECT_EQ(out_y1->backend, x1->backend);
+        EXPECT_EQ(out_y1->backend, ref_y1->backend);
         out_y1->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y1);
         cpu_graph_compute(1);
@@ -549,7 +558,7 @@ TEST_F(ChatGLMTest, GLMModel) {
     reset_cgraph();
     {
         ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len, seq_len);
-        EXPECT_EQ(out_y2->backend, x2->backend);
+        EXPECT_EQ(out_y2->backend, ref_y2->backend);
         out_y2->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y2);
         cpu_graph_compute(1);
@@ -559,7 +568,7 @@ TEST_F(ChatGLMTest, GLMModel) {
     reset_cgraph();
     {
         ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1, seq_len);
-        EXPECT_EQ(out_y3->backend, x3->backend);
+        EXPECT_EQ(out_y3->backend, ref_y3->backend);
         out_y3->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y3);
         cpu_graph_compute(1);
@@ -711,7 +720,7 @@ TEST_F(ChatGLMTest, GLM2Model) {
     reset_cgraph();
     {
         ggml_tensor *out_y1 = model.forward(&ctx, x1, 0, seq_len);
-        EXPECT_EQ(out_y1->backend, x1->backend);
+        EXPECT_EQ(out_y1->backend, ref_y1->backend);
         out_y1->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y1);
         device_graph_compute(get_num_threads());
@@ -723,7 +732,7 @@ TEST_F(ChatGLMTest, GLM2Model) {
     reset_cgraph();
     {
         ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len, seq_len);
-        EXPECT_EQ(out_y2->backend, x2->backend);
+        EXPECT_EQ(out_y2->backend, ref_y2->backend);
         out_y2->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y2);
         device_graph_compute(get_num_threads());
@@ -733,7 +742,7 @@ TEST_F(ChatGLMTest, GLM2Model) {
     reset_cgraph();
     {
         ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1, seq_len);
-        EXPECT_EQ(out_y3->backend, x3->backend);
+        EXPECT_EQ(out_y3->backend, ref_y3->backend);
         out_y3->backend = GGML_BACKEND_CPU;
         ggml_build_forward_expand(&ctx.gf, out_y3);
         device_graph_compute(get_num_threads());

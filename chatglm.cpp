@@ -437,6 +437,9 @@ BaseModelForCausalLM::BaseModelForCausalLM(ModelType model_type, ModelConfig con
     ctx_.compute_buffer.resize(mem_size);
     ctx_.scratch_buffer.resize(scratch_size);
     ctx_.scratch = {0, ctx_.scratch_buffer.size(), ctx_.scratch_buffer.data()};
+#ifdef GGML_USE_CUBLAS
+    ggml_cuda_set_scratch_size(scratch_size);
+#endif
 }
 
 int BaseModelForCausalLM::generate_next_token(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
@@ -799,16 +802,6 @@ ggml_tensor *GLMBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, gg
     ggml_tensor *output = tensor_assign_buffers(ggml_add_inplace(gctx, mlp_input, mlp_output));
 
     return output;
-}
-
-std::vector<GLMBlock> ChatGLMModel::build_layers(ModelContext *ctx, const ModelConfig &config) {
-    std::vector<GLMBlock> layers;
-    layers.reserve(config.num_hidden_layers);
-    for (int layer_id = 0; layer_id < config.num_hidden_layers; layer_id++) {
-        layers.emplace_back(ctx, config.hidden_size, config.num_attention_heads, config.num_hidden_layers,
-                            config.max_length);
-    }
-    return layers;
 }
 
 ChatGLMForCausalLM::ChatGLMForCausalLM(const ModelConfig &config)

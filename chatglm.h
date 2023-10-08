@@ -299,22 +299,65 @@ enum RopeType {
 };
 
 struct NoopRoper {
-    ggml_tensor *operator()(ggml_context *ctx, ggml_tensor *a, ggml_tensor *b, int n_ctx) const { return a; }
+    ggml_tensor *operator()(ModelContext *ctx, ggml_tensor *a, ggml_tensor *b, int n_ctx) const { return a; }
 };
 
 template <RopeType MODE, int DIM_SCALE>
 struct BasicRoper {
-    ggml_tensor *operator()(ggml_context *ctx, ggml_tensor *a, ggml_tensor *b, int n_ctx) const {
+    ggml_tensor *operator()(ModelContext *ctx, ggml_tensor *a, ggml_tensor *b, int n_ctx) const {
         // tensor a (activation) is of shape [qlen, heads, head_size]
         // tensor b (position_ids) is of shape [qlen]
+        ggml_context *gctx = ctx->ctx_b.get();
 #ifdef GGML_USE_CUBLAS
         if (!ggml_is_contiguous(a)) {
-            a = tensor_assign_buffers(ggml_cont(ctx, a));
+            a = tensor_assign_buffers(ggml_cont(gctx, a));
         }
 #endif
         const int head_size = a->ne[0];
         const int rope_dim = head_size / DIM_SCALE;
-        a = tensor_assign_buffers(ggml_rope_inplace(ctx, a, b, rope_dim, MODE, n_ctx)); // [qlen, heads, head_size]
+        a = tensor_assign_buffers(ggml_rope_inplace(gctx, a, b, rope_dim, MODE, n_ctx)); // [qlen, heads, head_size]
+
+        return a;
+    }
+};
+
+struct GLMRoper {
+    ggml_tensor *operator()(ModelContext *ctx, ggml_tensor *a, ggml_tensor *b, int n_ctx) const {
+        // tensor a (activation) is of shape [qlen, heads, head_size]
+        // tensor b (position_ids) is of shape [2 * qlen]
+        ggml_context *gctx = ctx->ctx_b.get();
+
+        const int head_size = a->ne[0];
+        const int num_heads = a->ne[1];
+        const int qlen = a->ne[2];
+        const int rope_dim = head_size / 2;
+
+        ggml_tensor *b1 = ggml_view_1d(gctx, b, qlen, 0);
+        ggml_tensor *b2 = ggml_view_1d(gctx, b, qlen, qlen * ggml_element_size(b));
+
+        ggml_tensor *a1 = ggml_view_3d(gctx, a, head_size / 2, num_heads, qlen, a->nb[1], a->nb[2], 0);
+        ggml_tensor *a2 = ggml_view_3d(gctx, a, head_size / 2, num_heads, qlen, a->nb[1], a->nb[2],
+                                       head_size / 2 * ggml_element_size(a));
+
+        ggml_tensor *a1_rope = a1;
+        ggml_tensor *a2_rope = a2;
+#ifdef GGML_USE_CUBLAS
+        a1_rope = tensor_assign_buffers(ggml_cont(gctx, a1_rope));
+        a2_rope = tensor_assign_buffers(ggml_cont(gctx, a2_rope));
+#endif
+
+        a1_rope = tensor_assign_buffers(
+            ggml_rope_inplace(gctx, a1_rope, b1, rope_dim, ROPE_TYPE_NEOX, n_ctx)); // [qlen, heads, head_size/2]
+        a2_rope = tensor_assign_buffers(
+            ggml_rope_inplace(gctx, a2_rope, b2, rope_dim, ROPE_TYPE_NEOX, n_ctx)); // [qlen, heads, head_size/2]
+
+#ifdef GGML_USE_CUBLAS
+        a1_rope = ggml_cpy(gctx, a1_rope, a1);
+        a2_rope = ggml_cpy(gctx, a2_rope, a2);
+#endif
+        ggml_build_forward_expand(&ctx->gf, a1_rope);
+        ggml_build_forward_expand(&ctx->gf, a2_rope);
+
         return a;
     }
 };
@@ -370,8 +413,8 @@ class BasicAttention {
                                        qkv->nb[1], (hidden_size + head_size * num_kv_heads) * ggml_element_size(qkv));
         }
 
-        query_layer = roper_(gctx, query_layer, position_ids, n_ctx);
-        key_layer = roper_(gctx, key_layer, position_ids, n_ctx);
+        query_layer = roper_(ctx, query_layer, position_ids, n_ctx);
+        key_layer = roper_(ctx, key_layer, position_ids, n_ctx);
 
         query_layer = tensor_assign_buffers(
             ggml_cont(gctx, ggml_permute(gctx, query_layer, 0, 2, 1, 3))); // [heads, qlen, head_size]
@@ -493,7 +536,33 @@ class BasicBlock {
     MLP mlp;
 };
 
-template <typename Block, typename Norm>
+struct NoopPositionIdsGenerator {
+    ggml_tensor *operator()(ggml_context *ctx, int qlen, int n_past, int n_ctx) const { return nullptr; }
+};
+
+struct BasicPositionIdsGenerator {
+    ggml_tensor *operator()(ggml_context *ctx, int qlen, int n_past, int n_ctx) const {
+        ggml_tensor *position_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, qlen);
+        for (int i = 0; i < qlen; i++) {
+            ((int *)position_ids->data)[i] = n_past + i;
+        }
+        return tensor_to_device(position_ids);
+    }
+};
+
+struct GLMPositionIdsGenerator {
+    ggml_tensor *operator()(ggml_context *ctx, int qlen, int n_past, int n_ctx) const {
+        ggml_tensor *position_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, qlen * 2);
+        for (int i = 0; i < qlen; i++) {
+            const int p = n_past + i;
+            ((int *)position_ids->data)[i] = std::min(p, n_ctx - 2);
+            ((int *)position_ids->data)[qlen + i] = std::max(p - (n_ctx - 2), 0);
+        }
+        return tensor_to_device(position_ids);
+    }
+};
+
+template <typename Block, typename Norm, typename PositionIdsGenerator>
 class BasicModel {
   public:
     BasicModel() = default;
@@ -507,7 +576,7 @@ class BasicModel {
 
     ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const {
         ggml_context *gctx = ctx->ctx_b.get();
-        ggml_tensor *position_ids = make_position_ids(gctx, input_ids->ne[0], n_past);
+        ggml_tensor *position_ids = pos_ids_gen_(gctx, input_ids->ne[0], n_past, n_ctx);
         ggml_tensor *hidden_states = word_embeddings.forward(ctx, input_ids);
         for (const auto &layer : layers) {
             ggml_set_scratch(gctx, ctx->scratch);
@@ -517,14 +586,6 @@ class BasicModel {
         ggml_set_scratch(gctx, empty_scratch);
         hidden_states = final_layernorm.forward(ctx, hidden_states);
         return hidden_states;
-    }
-
-    static ggml_tensor *make_position_ids(ggml_context *ctx, int qlen, int n_past) {
-        ggml_tensor *position_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, qlen);
-        for (int i = 0; i < qlen; i++) {
-            ((int *)position_ids->data)[i] = n_past + i;
-        }
-        return tensor_to_device(position_ids);
     }
 
   private:
@@ -543,6 +604,9 @@ class BasicModel {
     Embedding word_embeddings;
     std::vector<Block> layers;
     Norm final_layernorm;
+
+  private:
+    PositionIdsGenerator pos_ids_gen_;
 };
 
 class BaseStreamer {
@@ -812,17 +876,18 @@ struct GLMContextMasker {
     ggml_tensor *operator()(ModelContext *ctx, ggml_tensor *attn_scores, int n_past) const;
 };
 
-using GLMAttention = BasicAttention<true, true, true, BasicRoper<ROPE_TYPE_CHATGLM, 2>, false, GLMContextMasker>;
+using GLMAttention = BasicAttention<true, true, true, GLMRoper, false, GLMContextMasker>;
 
 using GLMMLP = BasicMLP<ACT_TYPE_GELU>;
 
 class GLMBlock : public BasicBlock<LayerNorm, GLMAttention, GLMMLP> {
   public:
     GLMBlock() = default;
-    GLMBlock(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_hidden_layers, int max_length)
-        : BasicBlock(LayerNorm(ctx, hidden_size),
+    GLMBlock(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int intermediate_size,
+             int max_length, float norm_eps)
+        : BasicBlock(LayerNorm(ctx, hidden_size, true, norm_eps),
                      GLMAttention(ctx, hidden_size, num_attention_heads, num_attention_heads, max_length),
-                     LayerNorm(ctx, hidden_size), GLMMLP(ctx, hidden_size, 4 * hidden_size)),
+                     LayerNorm(ctx, hidden_size, true, norm_eps), GLMMLP(ctx, hidden_size, intermediate_size)),
           alpha_value(std::sqrt(2.f * 28)) {}
 
     ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, ggml_tensor *position_ids, int n_past,
@@ -832,16 +897,7 @@ class GLMBlock : public BasicBlock<LayerNorm, GLMAttention, GLMMLP> {
     float alpha_value;
 };
 
-class ChatGLMModel : public BasicModel<GLMBlock, LayerNorm> {
-  public:
-    ChatGLMModel() = default;
-    ChatGLMModel(ModelContext *ctx, const ModelConfig &config)
-        : BasicModel(Embedding(ctx, config.vocab_size, config.hidden_size), build_layers(ctx, config),
-                     LayerNorm(ctx, config.hidden_size)) {}
-
-  private:
-    static std::vector<GLMBlock> build_layers(ModelContext *ctx, const ModelConfig &config);
-};
+using ChatGLMModel = BasicModel<GLMBlock, LayerNorm, GLMPositionIdsGenerator>;
 
 class ChatGLMForCausalLM : public BasicModelForCausalLM<ChatGLMModel> {
   public:
@@ -885,7 +941,7 @@ using GLM2MLP = BasicGLU<ACT_TYPE_SILU, false>;
 
 using GLM2Block = BasicBlock<RMSNorm, GLM2Attention, GLM2MLP>;
 
-using ChatGLM2Model = BasicModel<GLM2Block, RMSNorm>;
+using ChatGLM2Model = BasicModel<GLM2Block, RMSNorm, BasicPositionIdsGenerator>;
 
 class ChatGLM2ForCausalLM : public BasicModelForCausalLM<ChatGLM2Model> {
   public:
@@ -934,7 +990,7 @@ using Baichuan7BMLP = BasicGLU<ACT_TYPE_SILU, false>;
 
 using Baichuan7BBlock = BasicBlock<RMSNorm, Baichuan7BAttention, Baichuan7BMLP>;
 
-using Baichuan7BModel = BasicModel<Baichuan7BBlock, RMSNorm>;
+using Baichuan7BModel = BasicModel<Baichuan7BBlock, RMSNorm, BasicPositionIdsGenerator>;
 
 class Baichuan7BForCausalLM : public BasicModelForCausalLM<Baichuan7BModel> {
   public:
@@ -955,7 +1011,7 @@ using Baichuan13BMLP = BasicGLU<ACT_TYPE_SILU, false>;
 
 using Baichuan13BBlock = BasicBlock<RMSNorm, Baichuan13BAttention, Baichuan13BMLP>;
 
-using Baichuan13BModel = BasicModel<Baichuan13BBlock, RMSNorm>;
+using Baichuan13BModel = BasicModel<Baichuan13BBlock, RMSNorm, NoopPositionIdsGenerator>;
 
 class Baichuan13BForCausalLM : public BasicModelForCausalLM<Baichuan13BModel> {
   public:
