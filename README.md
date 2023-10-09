@@ -13,10 +13,10 @@ C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B) and [Cha
 ## Features
 
 Highlights:
-* [x] Pure C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp).
-* [x] Accelerated memory-efficient CPU inference with int4/int8 quantization, optimized KV cache and parallel computing.
-* [x] Streaming generation with typewriter effect.
-* [x] Python binding, web demo, api servers and more possibilities.
+* Pure C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp).
+* Accelerated memory-efficient CPU inference with int4/int8 quantization, optimized KV cache and parallel computing.
+* Streaming generation with typewriter effect.
+* Python binding, web demo, api servers and more possibilities.
 
 Support Matrix:
 * Hardwares: x86/arm CPU, NVIDIA GPU, Apple Silicon GPU
@@ -427,6 +427,7 @@ ChatGLM-6B:
 |--------------------------------|-------|-------|-------|-------|-------|-------|
 | ms/token (CPU @ Platinum 8260) | 74    | 77    | 86    | 89    | 114   | 189   |
 | ms/token (CUDA @ V100 SXM2)    | 8.1   | 8.7   | 9.4   | 9.5   | 12.0  | 19.1  |
+| ms/token (MPS @ M2 Ultra)      | 11.5  | 12.3  | N/A   | N/A   | 16.1  | 24.4  |
 | file size                      | 3.3G  | 3.7G  | 4.0G  | 4.4G  | 6.2G  | 12G   |
 | mem usage                      | 4.0G  | 4.4G  | 4.7G  | 5.1G  | 6.9G  | 13G   |
 
@@ -456,7 +457,7 @@ Baichuan-13B / Baichuan2-13B:
 |--------------------------------|-------|-------|-------|-------|-------|-------|
 | ms/token (CPU @ Platinum 8260) | 161.7 | 175.8 | 189.9 | 192.3 | 255.6 | 459.6 |
 | ms/token (CUDA @ V100 SXM2)    | 13.7  | 15.1  | 16.3  | 16.9  | 21.9  | 36.8  |
-| ms/token (MPS @ M2 Ultra)      | 18.2  | 18.8  | N/A   | N/A   | 27.2  |       |
+| ms/token (MPS @ M2 Ultra)      | 18.2  | 18.8  | N/A   | N/A   | 27.2  | 44.4  |
 | file size                      | 7.0G  | 7.8G  | 8.5G  | 9.3G  | 14G   | 25G   |
 | mem usage                      | 7.8G  | 8.8G  | 9.5G  | 10G   | 14G   | 25G   |
 
