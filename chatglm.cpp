@@ -437,6 +437,9 @@ BaseModelForCausalLM::BaseModelForCausalLM(ModelType model_type, ModelConfig con
     ctx_.compute_buffer.resize(mem_size);
     ctx_.scratch_buffer.resize(scratch_size);
     ctx_.scratch = {0, ctx_.scratch_buffer.size(), ctx_.scratch_buffer.data()};
+#ifdef GGML_USE_CUBLAS
+    ggml_cuda_set_scratch_size(scratch_size);
+#endif
 }
 
 int BaseModelForCausalLM::generate_next_token(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
@@ -472,6 +475,11 @@ int BaseModelForCausalLM::generate_next_token(const std::vector<int> &input_ids,
 
     int vocab_size = lm_logits->ne[0];
     float *next_token_logits = (float *)lm_logits->data;
+
+    // check nan
+    for (int i = 0; i < vocab_size; i++) {
+        CHATGLM_CHECK(std::isfinite(next_token_logits[i])) << "nan/inf encountered at lm_logits[" << i << "]";
+    }
 
     // logits pre-process
     if (gen_config.repetition_penalty != 1.f) {
@@ -780,13 +788,14 @@ ggml_tensor *GLMContextMasker::operator()(ModelContext *ctx, ggml_tensor *attn_s
     return attn_scores;
 }
 
-ggml_tensor *GLMBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, int n_past, int n_ctx) const {
+ggml_tensor *GLMBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, ggml_tensor *position_ids, int n_past,
+                               int n_ctx) const {
     ggml_context *gctx = ctx->ctx_b.get();
 
     ggml_tensor *alpha = ggml_new_f32(gctx, alpha_value);
 
     ggml_tensor *attn_input = input_layernorm.forward(ctx, hidden_states);
-    ggml_tensor *attn_output = attention.forward(ctx, attn_input, n_past, n_ctx);
+    ggml_tensor *attn_output = attention.forward(ctx, attn_input, position_ids, n_past, n_ctx);
     ggml_build_forward_expand(&ctx->gf, attn_output);
     attn_input = tensor_assign_buffers(ggml_scale_inplace(gctx, attn_input, alpha));
     hidden_states = tensor_assign_buffers(ggml_add_inplace(gctx, attn_input, attn_output));
@@ -798,16 +807,6 @@ ggml_tensor *GLMBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, in
     ggml_tensor *output = tensor_assign_buffers(ggml_add_inplace(gctx, mlp_input, mlp_output));
 
     return output;
-}
-
-std::vector<GLMBlock> ChatGLMModel::build_layers(ModelContext *ctx, const ModelConfig &config) {
-    std::vector<GLMBlock> layers;
-    layers.reserve(config.num_hidden_layers);
-    for (int layer_id = 0; layer_id < config.num_hidden_layers; layer_id++) {
-        layers.emplace_back(ctx, config.hidden_size, config.num_attention_heads, config.num_hidden_layers,
-                            config.max_length);
-    }
-    return layers;
 }
 
 ChatGLMForCausalLM::ChatGLMForCausalLM(const ModelConfig &config)

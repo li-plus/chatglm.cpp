@@ -13,10 +13,10 @@ C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B) and [Cha
 ## Features
 
 Highlights:
-* [x] Pure C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp).
-* [x] Accelerated memory-efficient CPU inference with int4/int8 quantization, optimized KV cache and parallel computing.
-* [x] Streaming generation with typewriter effect.
-* [x] Python binding, web demo, api servers and more possibilities.
+* Pure C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp).
+* Accelerated memory-efficient CPU inference with int4/int8 quantization, optimized KV cache and parallel computing.
+* Streaming generation with typewriter effect.
+* Python binding, web demo, api servers and more possibilities.
 
 Support Matrix:
 * Hardwares: x86/arm CPU, NVIDIA GPU, Apple Silicon GPU
@@ -42,7 +42,7 @@ git submodule update --init --recursive
 Install necessary packages for loading and quantizing Hugging Face models:
 ```sh
 python3 -m pip install -U pip
-python3 -m pip install torch tabulate tqdm transformers sentencepiece
+python3 -m pip install torch tabulate tqdm transformers accelerate sentencepiece
 ```
 
 Use `convert.py` to transform ChatGLM-6B or ChatGLM2-6B into quantized GGML format. For example, to convert the fp16 original model to q4_0 (quantized int4) GGML model, run:
@@ -176,7 +176,11 @@ cuBLAS uses NVIDIA GPU to accelerate BLAS. Add the CMake flag `-DGGML_CUBLAS=ON`
 cmake -B build -DGGML_CUBLAS=ON && cmake --build build -j
 ```
 
-Note that the current GGML CUDA implementation is really slow. The community is making efforts to optimize it.
+By default, all kernels will be compiled for all possible CUDA architectures and it takes some time. To run on a specific type of device, you may specify `CUDA_ARCHITECTURES` to speed up the nvcc compilation. For example:
+```sh
+cmake -B build -DGGML_CUBLAS=ON -DCUDA_ARCHITECTURES="80"       # for A100
+cmake -B build -DGGML_CUBLAS=ON -DCUDA_ARCHITECTURES="70;75"    # compatible with both V100 and T4
+```
 
 **Metal**
 
@@ -419,7 +423,7 @@ Python demo and API servers are also supported in pre-built image. Use it in the
 Environment:
 * CPU backend performance is measured on a Linux server with Intel(R) Xeon(R) Platinum 8260 CPU @ 2.40GHz using 16 threads.
 * CUDA backend is measured on a V100-SXM2-32GB GPU using 1 thread.
-* MPS backend is measured on an Apple M2 Ultra device using 1 thread (currently only supports ChatGLM2).
+* MPS backend is measured on an Apple M2 Ultra device using 1 thread.
 
 ChatGLM-6B:
 
@@ -427,6 +431,7 @@ ChatGLM-6B:
 |--------------------------------|-------|-------|-------|-------|-------|-------|
 | ms/token (CPU @ Platinum 8260) | 74    | 77    | 86    | 89    | 114   | 189   |
 | ms/token (CUDA @ V100 SXM2)    | 8.1   | 8.7   | 9.4   | 9.5   | 12.0  | 19.1  |
+| ms/token (MPS @ M2 Ultra)      | 11.5  | 12.3  | N/A   | N/A   | 16.1  | 24.4  |
 | file size                      | 3.3G  | 3.7G  | 4.0G  | 4.4G  | 6.2G  | 12G   |
 | mem usage                      | 4.0G  | 4.4G  | 4.7G  | 5.1G  | 6.9G  | 13G   |
 
@@ -436,7 +441,7 @@ ChatGLM2-6B / CodeGeeX2:
 |--------------------------------|-------|-------|-------|-------|-------|-------|
 | ms/token (CPU @ Platinum 8260) | 64    | 71    | 79    | 83    | 106   | 189   |
 | ms/token (CUDA @ V100 SXM2)    | 7.9   | 8.3   | 9.2   | 9.2   | 11.7  | 18.5  |
-| ms/token (MPS @ M2 Ultra)      | 11.0  | 11.7  | N/A   | N/A   | N/A   | 32.1  |
+| ms/token (MPS @ M2 Ultra)      | 10.0  | 10.8  | N/A   | N/A   | 14.5  | 22.2  |
 | file size                      | 3.3G  | 3.7G  | 4.0G  | 4.4G  | 6.2G  | 12G   |
 | mem usage                      | 3.4G  | 3.8G  | 4.1G  | 4.5G  | 6.2G  | 12G   |
 
@@ -446,6 +451,7 @@ Baichuan-7B / Baichuan2-7B:
 |--------------------------------|-------|-------|-------|-------|-------|-------|
 | ms/token (CPU @ Platinum 8260) | 85.3  | 94.8  | 103.4 | 109.6 | 136.8 | 248.5 |
 | ms/token (CUDA @ V100 SXM2)    | 8.7   | 9.2   | 10.2  | 10.3  | 13.2  | 21.0  |
+| ms/token (MPS @ M2 Ultra)      | 11.3  | 12.0  | N/A   | N/A   | 16.4  | 25.6  |
 | file size                      | 4.0G  | 4.4G  | 4.9G  | 5.3G  | 7.5G  | 14G   |
 | mem usage                      | 4.5G  | 4.9G  | 5.3G  | 5.7G  | 7.8G  | 14G   |
 
@@ -455,6 +461,7 @@ Baichuan-13B / Baichuan2-13B:
 |--------------------------------|-------|-------|-------|-------|-------|-------|
 | ms/token (CPU @ Platinum 8260) | 161.7 | 175.8 | 189.9 | 192.3 | 255.6 | 459.6 |
 | ms/token (CUDA @ V100 SXM2)    | 13.7  | 15.1  | 16.3  | 16.9  | 21.9  | 36.8  |
+| ms/token (MPS @ M2 Ultra)      | 18.2  | 18.8  | N/A   | N/A   | 27.2  | 44.4  |
 | file size                      | 7.0G  | 7.8G  | 8.5G  | 9.3G  | 14G   | 25G   |
 | mem usage                      | 7.8G  | 8.8G  | 9.5G  | 10G   | 14G   | 25G   |
 
