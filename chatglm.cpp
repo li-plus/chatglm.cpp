@@ -476,6 +476,11 @@ int BaseModelForCausalLM::generate_next_token(const std::vector<int> &input_ids,
     int vocab_size = lm_logits->ne[0];
     float *next_token_logits = (float *)lm_logits->data;
 
+    // check nan
+    for (int i = 0; i < vocab_size; i++) {
+        CHATGLM_CHECK(std::isfinite(next_token_logits[i])) << "nan/inf encountered at lm_logits[" << i << "]";
+    }
+
     // logits pre-process
     if (gen_config.repetition_penalty != 1.f) {
         sampling_repetition_penalty(next_token_logits, next_token_logits + vocab_size, input_ids,

@@ -546,7 +546,7 @@ struct BasicPositionIdsGenerator {
         for (int i = 0; i < qlen; i++) {
             ((int *)position_ids->data)[i] = n_past + i;
         }
-        return tensor_to_device(position_ids);
+        return position_ids;
     }
 };
 
@@ -558,7 +558,7 @@ struct GLMPositionIdsGenerator {
             ((int *)position_ids->data)[i] = std::min(p, n_ctx - 2);
             ((int *)position_ids->data)[qlen + i] = std::max(p - (n_ctx - 2), 0);
         }
-        return tensor_to_device(position_ids);
+        return position_ids;
     }
 };
 
@@ -577,10 +577,16 @@ class BasicModel {
     ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const {
         ggml_context *gctx = ctx->ctx_b.get();
         ggml_tensor *position_ids = pos_ids_gen_(gctx, input_ids->ne[0], n_past, n_ctx);
+        if (position_ids) {
+            tensor_to_device(position_ids);
+        }
         ggml_tensor *hidden_states = word_embeddings.forward(ctx, input_ids);
         for (const auto &layer : layers) {
             ggml_set_scratch(gctx, ctx->scratch);
             hidden_states = layer.forward(ctx, hidden_states, position_ids, n_past, n_ctx);
+        }
+        if (position_ids) {
+            tensor_to_cpu(position_ids);
         }
         ggml_scratch empty_scratch = {0, 0, nullptr};
         ggml_set_scratch(gctx, empty_scratch);
