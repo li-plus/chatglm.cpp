@@ -15,6 +15,7 @@ endif ()
 
 # third-party libraries
 add_compile_definitions(GGML_CUDA_MMV_Y=2)  # for large vocab
+set(BUILD_SHARED_LIBS OFF)
 include_directories(third_party/ggml/include/ggml third_party/ggml/src)
 add_subdirectory(third_party/ggml)
 
@@ -25,7 +26,8 @@ add_subdirectory(third_party/sentencepiece)
 
 if (GGML_CUBLAS)
     add_compile_definitions(GGML_USE_CUBLAS)
-    set_property(TARGET ggml PROPERTY CUDA_ARCHITECTURES "52;61;70;75;80;86")
+    set(CUDA_ARCHITECTURES "52;61;70;75;80;86" CACHE STRING "chatglm: cuda architectures to compile")
+    set_property(TARGET ggml PROPERTY CUDA_ARCHITECTURES ${CUDA_ARCHITECTURES})
 endif ()
 
 if (GGML_METAL)
@@ -72,7 +74,7 @@ if (CHATGLM_ENABLE_TESTING)
     gtest_discover_tests(chatglm_test)
 endif ()
 
-option(CHATGLM_ENABLE_PYBIND, "chatglm: enable python binding" OFF)
+option(CHATGLM_ENABLE_PYBIND "chatglm: enable python binding" OFF)
 if (CHATGLM_ENABLE_PYBIND)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR})
     set_target_properties(chatglm ggml sentencepiece-static PROPERTIES POSITION_INDEPENDENT_CODE TRUE)

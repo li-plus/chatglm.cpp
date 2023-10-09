@@ -176,7 +176,11 @@ cuBLAS uses NVIDIA GPU to accelerate BLAS. Add the CMake flag `-DGGML_CUBLAS=ON`
 cmake -B build -DGGML_CUBLAS=ON && cmake --build build -j
 ```
 
-Note that the current GGML CUDA implementation is really slow. The community is making efforts to optimize it.
+By default, all kernels will be compiled for all possible CUDA architectures and it takes some time. To run on a specific type of device, you may specify `CUDA_ARCHITECTURES` to speed up the nvcc compilation. For example:
+```sh
+cmake -B build -DGGML_CUBLAS=ON -DCUDA_ARCHITECTURES="80"       # for A100
+cmake -B build -DGGML_CUBLAS=ON -DCUDA_ARCHITECTURES="70;75"    # compatible with both V100 and T4
+```
 
 **Metal**
 
