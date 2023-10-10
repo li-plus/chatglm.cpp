@@ -886,14 +886,15 @@ using GLMAttention = BasicAttention<true, true, true, GLMRoper, false, GLMContex
 
 using GLMMLP = BasicMLP<ACT_TYPE_GELU>;
 
+// NOTE: disable inplace norm since it causes nonsense on cuda when sequence length >= 144
 class GLMBlock : public BasicBlock<LayerNorm, GLMAttention, GLMMLP> {
   public:
     GLMBlock() = default;
     GLMBlock(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int intermediate_size,
              int max_length, float norm_eps)
-        : BasicBlock(LayerNorm(ctx, hidden_size, true, norm_eps),
+        : BasicBlock(LayerNorm(ctx, hidden_size, false, norm_eps),
                      GLMAttention(ctx, hidden_size, num_attention_heads, num_attention_heads, max_length),
-                     LayerNorm(ctx, hidden_size, true, norm_eps), GLMMLP(ctx, hidden_size, intermediate_size)),
+                     LayerNorm(ctx, hidden_size, false, norm_eps), GLMMLP(ctx, hidden_size, intermediate_size)),
           alpha_value(std::sqrt(2.f * 28)) {}
 
     ggml_tensor *forward(ModelContext *ctx, ggml_tensor *hidden_states, ggml_tensor *position_ids, int n_past,
