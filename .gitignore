@@ -16,3 +16,6 @@ build/
 
 # model
 *.bin
+
+# clangd
+.cache/

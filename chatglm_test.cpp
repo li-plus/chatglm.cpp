@@ -1649,4 +1649,14 @@ TEST(Benchmark, Baichuan2_13B) {
     run_benchmark(model_path);
 }
 
+TEST(Benchmark, InternLM7B) {
+    fs::path model_path = fs::path(__FILE__).parent_path() / "internlm-chat-7b-ggml.bin";
+    run_benchmark(model_path);
+}
+
+TEST(Benchmark, InternLM20B) {
+    fs::path model_path = fs::path(__FILE__).parent_path() / "internlm-chat-20b-ggml.bin";
+    run_benchmark(model_path);
+}
+
 } // namespace chatglm
