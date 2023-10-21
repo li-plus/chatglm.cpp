@@ -426,6 +426,8 @@ std::string to_string(ModelType model_type) {
         return "Baichuan7B";
     case MODEL_TYPE_BAICHUAN13B:
         return "Baichuan13B";
+    case MODEL_TYPE_INTERNLM:
+        return "InternLM";
     default:
         CHATGLM_THROW << "unknown model type " << model_type;
     }
@@ -1165,6 +1167,174 @@ void Baichuan13BForCausalLM::load(ModelLoader &loader) {
     ctx_.init_device_context();
 }
 
+// ===== InternLM =====
+
+InternLMTokenizer::InternLMTokenizer(std::string_view serialized_model_proto) {
+    const auto status = sp.LoadFromSerializedProto(serialized_model_proto);
+    CHATGLM_CHECK(status.ok()) << status.ToString();
+}
+
+std::vector<int> InternLMTokenizer::encode(const std::string &text, int max_length) const {
+    std::vector<int> ids;
+    sp.Encode(text, &ids);
+    ids.insert(ids.begin(), {bos_token_id}); // special prefix
+    if ((int)ids.size() > max_length) {
+        // sliding window: drop the least recent history while keeping the special prefix
+        int num_drop = (int)ids.size() - max_length;
+        ids.erase(ids.begin() + 1, ids.begin() + 1 + num_drop);
+    }
+    return ids;
+}
+
+std::string InternLMTokenizer::decode(const std::vector<int> &ids) const {
+    // filter out special tokens
+    std::vector<int> normal_ids(ids);
+    normal_ids.erase(std::remove_if(normal_ids.begin(), normal_ids.end(), [this](int id) { return is_special_id(id); }),
+                     normal_ids.end());
+
+    std::string text;
+    sp.Decode(normal_ids, &text);
+    // remove <eoa> and its following
+    size_t eoa_pos = text.find("<eoa>");
+    if (eoa_pos != std::string::npos) {
+        text.erase(eoa_pos);
+    }
+    return text;
+}
+
+std::vector<int> InternLMTokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
+    std::string prompt = build_prompt(history);
+    std::vector<int> input_ids = encode(prompt, max_length);
+    return input_ids;
+}
+
+std::string InternLMTokenizer::build_prompt(const std::vector<std::string> &history) {
+    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
+
+    std::ostringstream oss_prompt;
+    for (size_t i = 0; i < history.size(); i += 2) {
+        oss_prompt << "<|User|>:" << history[i] << "<eoh>\n<|Bot|>:";
+        if (i < history.size() - 1) {
+            oss_prompt << history[i + 1] << "<eoa>\n";
+        }
+    }
+    return oss_prompt.str();
+}
+
+InternLM7BForCausalLM::InternLM7BForCausalLM(const ModelConfig &config)
+    : BasicModelForCausalLM(MODEL_TYPE_INTERNLM, config, MEM_SIZE, SCRATCH_SIZE) {
+    constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
+    const size_t num_weights = 3 + config.num_hidden_layers * 9;
+    const size_t ctx_w_size = num_weights * tensor_ovhd;
+    const size_t ctx_kv_size = 2 * config.num_hidden_layers *
+                               (config.max_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16) + tensor_ovhd);
+    ctx_.dtype = config.dtype;
+    ctx_.ctx_w = make_unique_ggml_context(ctx_w_size, nullptr, true);
+    ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size + 1 * MB, nullptr, false); // 1MB extra for MPS
+
+    transformer = InternLM7BModel(&ctx_, config);
+    lm_head = Linear(&ctx_, config.hidden_size, config.vocab_size, false);
+    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_w.get()) == ggml_get_mem_size(ctx_.ctx_w.get())) << "corrupted model weights";
+    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ctx_kv_size) << "corrupted kv cache";
+
+    // build state_dict
+    state_dict_.reserve(num_weights);
+    state_dict_.emplace_back("model.embed_tokens.weight", transformer.word_embeddings.weight);
+    for (int i = 0; i < config.num_hidden_layers; i++) {
+        std::string layer_prefix = "model.layers." + std::to_string(i) + '.';
+        state_dict_.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
+        state_dict_.emplace_back(layer_prefix + "self_attn.qkv_proj.weight",
+                                 transformer.layers[i].attention.query_key_value.weight);
+        if (transformer.layers[i].attention.query_key_value.bias) {
+            state_dict_.emplace_back(layer_prefix + "self_attn.qkv_proj.bias",
+                                     transformer.layers[i].attention.query_key_value.bias);
+        }
+        state_dict_.emplace_back(layer_prefix + "self_attn.o_proj.weight",
+                                 transformer.layers[i].attention.dense.weight);
+        if (transformer.layers[i].attention.dense.bias) {
+            state_dict_.emplace_back(layer_prefix + "self_attn.o_proj.bias",
+                                     transformer.layers[i].attention.dense.bias);
+        }
+        state_dict_.emplace_back(layer_prefix + "post_attention_layernorm.weight",
+                                 transformer.layers[i].post_attention_layernorm.weight);
+        state_dict_.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
+        state_dict_.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
+        state_dict_.emplace_back(layer_prefix + "mlp.down_proj.weight", transformer.layers[i].mlp.down_proj.weight);
+    }
+    state_dict_.emplace_back("model.norm.weight", transformer.final_layernorm.weight);
+    state_dict_.emplace_back("lm_head.weight", lm_head.weight);
+}
+
+void InternLM7BForCausalLM::load(ModelLoader &loader) {
+    for (auto &item : state_dict_) {
+        const std::string &name = item.first;
+        ggml_tensor *tensor = item.second;
+        loader.read_tensor(name, tensor);
+    }
+
+    to_device("model.embed_tokens.weight");
+
+    ctx_.weight_buffer = std::string_view(loader.data, loader.size);
+    ctx_.init_device_context();
+}
+
+InternLM20BForCausalLM::InternLM20BForCausalLM(const ModelConfig &config)
+    : BasicModelForCausalLM(MODEL_TYPE_INTERNLM, config, MEM_SIZE, SCRATCH_SIZE) {
+    constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
+    const size_t num_weights = 3 + config.num_hidden_layers * 7;
+    const size_t ctx_w_size = num_weights * tensor_ovhd;
+    const size_t ctx_kv_size = 2 * config.num_hidden_layers *
+                               (config.max_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16) + tensor_ovhd);
+    ctx_.dtype = config.dtype;
+    ctx_.ctx_w = make_unique_ggml_context(ctx_w_size, nullptr, true);
+    ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size + 1 * MB, nullptr, false); // 1MB extra for MPS
+
+    transformer = InternLM20BModel(&ctx_, config);
+    lm_head = Linear(&ctx_, config.hidden_size, config.vocab_size, false);
+    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_w.get()) == ggml_get_mem_size(ctx_.ctx_w.get())) << "corrupted model weights";
+    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ctx_kv_size) << "corrupted kv cache";
+
+    // build state_dict
+    state_dict_.reserve(num_weights);
+    state_dict_.emplace_back("model.embed_tokens.weight", transformer.word_embeddings.weight);
+    for (int i = 0; i < config.num_hidden_layers; i++) {
+        std::string layer_prefix = "model.layers." + std::to_string(i) + '.';
+        state_dict_.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
+        state_dict_.emplace_back(layer_prefix + "self_attn.qkv_proj.weight",
+                                 transformer.layers[i].attention.query_key_value.weight);
+        if (transformer.layers[i].attention.query_key_value.bias) {
+            state_dict_.emplace_back(layer_prefix + "self_attn.qkv_proj.bias",
+                                     transformer.layers[i].attention.query_key_value.bias);
+        }
+        state_dict_.emplace_back(layer_prefix + "self_attn.o_proj.weight",
+                                 transformer.layers[i].attention.dense.weight);
+        if (transformer.layers[i].attention.dense.bias) {
+            state_dict_.emplace_back(layer_prefix + "self_attn.o_proj.bias",
+                                     transformer.layers[i].attention.dense.bias);
+        }
+        state_dict_.emplace_back(layer_prefix + "post_attention_layernorm.weight",
+                                 transformer.layers[i].post_attention_layernorm.weight);
+        state_dict_.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
+        state_dict_.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
+        state_dict_.emplace_back(layer_prefix + "mlp.down_proj.weight", transformer.layers[i].mlp.down_proj.weight);
+    }
+    state_dict_.emplace_back("model.norm.weight", transformer.final_layernorm.weight);
+    state_dict_.emplace_back("lm_head.weight", lm_head.weight);
+}
+
+void InternLM20BForCausalLM::load(ModelLoader &loader) {
+    for (auto &item : state_dict_) {
+        const std::string &name = item.first;
+        ggml_tensor *tensor = item.second;
+        loader.read_tensor(name, tensor);
+    }
+
+    to_device("model.embed_tokens.weight");
+
+    ctx_.weight_buffer = std::string_view(loader.data, loader.size);
+    ctx_.init_device_context();
+}
+
 // ===== pipeline =====
 
 Pipeline::Pipeline(const std::string &path) {
@@ -1240,6 +1410,26 @@ Pipeline::Pipeline(const std::string &path) {
 
         // load model
         model = std::make_unique<Baichuan13BForCausalLM>(config);
+        model->load(loader);
+    } else if (model_type == MODEL_TYPE_INTERNLM) {
+        CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
+
+        // load config
+        ModelConfig config(loader.read_basic<ConfigRecordV1>());
+        config.norm_eps = 1e-6;
+
+        // load tokenizer
+        int proto_size = loader.read_basic<int>();
+        std::string_view serialized_model_proto((char *)mapped_file->data + loader.tell(), proto_size);
+        loader.seek(proto_size, SEEK_CUR);
+        tokenizer = std::make_unique<InternLMTokenizer>(serialized_model_proto);
+
+        // load model
+        if (config.hidden_size == 4096) {
+            model = std::make_unique<InternLM7BForCausalLM>(config);
+        } else {
+            model = std::make_unique<InternLM20BForCausalLM>(config);
+        }
         model->load(loader);
     } else {
         CHATGLM_THROW << "invalid model type " << model_type;

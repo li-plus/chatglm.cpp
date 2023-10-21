@@ -184,6 +184,10 @@ BAICHUAN13B_MODEL_PATH = Path(
     "~/.cache/huggingface/hub/models--baichuan-inc--Baichuan-13B-Chat/snapshots/a4a558127068f2ce965aa56aeb826bf501a68970"
 ).expanduser()
 
+INTERNLM_MODEL_PATH = Path(
+    "~/.cache/huggingface/hub/models--internlm--internlm-chat-7b-v1_1/snapshots/1359d2199215552bd0a0cb138e21c6e97d538c0e"
+).expanduser()
+
 
 def make_data_embedding():
     m = torch.nn.Embedding(4, 3)
@@ -373,16 +377,11 @@ def make_data_glm2_model():
         # m.output_layer.weight.data.numpy().tofile(f)
 
         x1.int().numpy().tofile(f)
-        print(x1)
         y1.numpy().tofile(f)
-        print(y1)
         x2.int().numpy().tofile(f)
-        print(x2)
         y2.numpy().tofile(f)
-        print(y2)
         x3.int().numpy().tofile(f)
         y3.numpy().tofile(f)
-        print(x3, y3)
 
 
 def _make_data_baichuan_model(model_path, out_name):
@@ -457,6 +456,91 @@ def make_data_baichuan13b_model():
     _make_data_baichuan_model(BAICHUAN13B_MODEL_PATH, "baichuan13b_model.data")
 
 
+def make_internlm_model():
+    sys.path.append(str(INTERNLM_MODEL_PATH))
+    from modeling_internlm import InternLMModel
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained(INTERNLM_MODEL_PATH, trust_remote_code=True)
+    config.hidden_size = 32
+    config.num_attention_heads = 8
+    config.intermediate_size = config.hidden_size * 3
+    config.num_hidden_layers = 1
+    config.torch_dtype = torch.float32
+    config.vocab_size = 5
+
+    m = InternLMModel(config).float().eval()
+    for param in m.parameters():
+        param.data.uniform_(-0.5, 0.5)
+
+    seq_len = 3
+
+    # self attention
+    x1 = torch.arange(seq_len, dtype=torch.int64)[None, :]
+    attn_mask = torch.ones(1, seq_len, dtype=torch.int64)
+    position_ids = torch.arange(seq_len, dtype=torch.int64)[None, :]
+    with torch.no_grad():
+        out = m(x1, attention_mask=attn_mask, position_ids=position_ids, use_cache=True)
+        y1 = out.last_hidden_state
+        kv_cache = out.past_key_values
+
+    # cross attention
+    x2 = torch.tensor([[seq_len]], dtype=torch.int64)
+    attn_mask = torch.ones(1, seq_len + 1, dtype=torch.int64)
+    position_ids = torch.tensor([[seq_len]], dtype=torch.int64)
+    with torch.no_grad():
+        out = m(x2, attention_mask=attn_mask, position_ids=position_ids, past_key_values=kv_cache, use_cache=True)
+        y2 = out.last_hidden_state
+        kv_cache = out.past_key_values
+
+    # cross attention
+    x3 = torch.tensor([[seq_len + 1]], dtype=torch.int64)
+    attn_mask = torch.ones(1, seq_len + 2, dtype=torch.int64)
+    position_ids = torch.tensor([[seq_len + 1]], dtype=torch.int64)
+    with torch.no_grad():
+        out = m(x3, attention_mask=attn_mask, position_ids=position_ids, past_key_values=kv_cache, use_cache=True)
+        y3 = out.last_hidden_state
+        kv_cache = out.past_key_values
+
+    print(m)
+
+    with open(HERE / f"data/internlm_model.data", "wb") as f:
+        m.embed_tokens.weight.data.numpy().tofile(f)
+        m.layers[0].input_layernorm.weight.data.numpy().tofile(f)
+        qkv_proj = torch.cat(
+            (
+                m.layers[0].self_attn.q_proj.weight.data,
+                m.layers[0].self_attn.k_proj.weight.data,
+                m.layers[0].self_attn.v_proj.weight.data,
+            ),
+            dim=0,
+        )
+        qkv_proj.numpy().tofile(f)
+        qkv_bias = torch.cat(
+            (
+                m.layers[0].self_attn.q_proj.bias.data,
+                m.layers[0].self_attn.k_proj.bias.data,
+                m.layers[0].self_attn.v_proj.bias.data,
+            ),
+            dim=0,
+        )
+        qkv_bias.numpy().tofile(f)
+        m.layers[0].self_attn.o_proj.weight.data.numpy().tofile(f)
+        m.layers[0].self_attn.o_proj.bias.data.numpy().tofile(f)
+        m.layers[0].post_attention_layernorm.weight.data.numpy().tofile(f)
+        m.layers[0].mlp.gate_proj.weight.data.numpy().tofile(f)
+        m.layers[0].mlp.up_proj.weight.data.numpy().tofile(f)
+        m.layers[0].mlp.down_proj.weight.data.numpy().tofile(f)
+        m.norm.weight.data.numpy().tofile(f)
+
+        x1.int().numpy().tofile(f)
+        y1.numpy().tofile(f)
+        x2.int().numpy().tofile(f)
+        y2.numpy().tofile(f)
+        x3.int().numpy().tofile(f)
+        y3.numpy().tofile(f)
+
+
 def main():
     torch.manual_seed(0)
     (HERE / "data").mkdir(parents=True, exist_ok=True)
@@ -464,9 +548,10 @@ def main():
     # make_data_layernorm()
     # make_data_rms_norm()
     # make_data_glm_model()
-    make_data_glm2_model()
+    # make_data_glm2_model()
     # make_data_baichuan7b_model()
     # make_data_baichuan13b_model()
+    make_internlm_model()
 
 
 if __name__ == "__main__":
