@@ -21,7 +21,7 @@ Highlights:
 Support Matrix:
 * Hardwares: x86/arm CPU, NVIDIA GPU, Apple Silicon GPU
 * Platforms: Linux, MacOS, Windows
-* Models: [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [CodeGeeX2](https://github.com/THUDM/CodeGeeX2), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan-7B](https://github.com/baichuan-inc/Baichuan-7B), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan2](https://github.com/baichuan-inc/Baichuan2)
+* Models: [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [CodeGeeX2](https://github.com/THUDM/CodeGeeX2), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan-7B](https://github.com/baichuan-inc/Baichuan-7B), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan2](https://github.com/baichuan-inc/Baichuan2), [InternLM](https://github.com/InternLM/InternLM)
 
 ## Getting Started
 
@@ -151,6 +151,26 @@ python3 chatglm_cpp/convert.py -i baichuan-inc/Baichuan2-7B-Chat -t q4_0 -o baic
 python3 chatglm_cpp/convert.py -i baichuan-inc/Baichuan2-13B-Chat -t q4_0 -o baichuan2-13b-chat-ggml.bin
 ./build/bin/main -m baichuan2-13b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05
 # 你好！今天我能为您提供什么帮助？
+```
+</details>
+
+<details>
+<summary>InternLM-Chat-7B</summary>
+
+```sh
+python3 chatglm_cpp/convert.py -i internlm/internlm-chat-7b-v1_1 -t q4_0 -o internlm-chat-7b-ggml.bin
+./build/bin/main -m internlm-chat-7b-ggml.bin -p 你好 --top_p 0.8 --temp 0.8
+# 你好，我是书生·浦语，有什么可以帮助你的吗？
+```
+</details>
+
+<details>
+<summary>InternLM-Chat-20B</summary>
+
+```sh
+python3 chatglm_cpp/convert.py -i internlm/internlm-chat-20b -t q4_0 -o internlm-chat-20b-ggml.bin
+./build/bin/main -m internlm-chat-20b-ggml.bin -p 你好 --top_p 0.8 --temp 0.8
+# 你好！有什么我可以帮到你的吗？
 ```
 </details>
 
@@ -290,6 +310,24 @@ python3 web_demo.py -m ../baichuan2-7b-chat-ggml.bin --top_k 5 --top_p 0.85 --te
 ```sh
 python3 cli_chat.py -m ../baichuan2-13b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05 # CLI demo
 python3 web_demo.py -m ../baichuan2-13b-chat-ggml.bin --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05   # web demo
+```
+</details>
+
+<details>
+<summary>InternLM-Chat-7B</summary>
+
+```sh
+python3 cli_chat.py -m ../internlm-chat-7b-ggml.bin -p 你好 --top_p 0.8 --temp 0.8  # CLI demo
+python3 web_demo.py -m ../internlm-chat-7b-ggml.bin --top_p 0.8 --temp 0.8  # web demo
+```
+</details>
+
+<details>
+<summary>InternLM-Chat-20B</summary>
+
+```sh
+python3 cli_chat.py -m ../internlm-chat-20b-ggml.bin -p 你好 --top_p 0.8 --temp 0.8 # CLI demo
+python3 web_demo.py -m ../internlm-chat-20b-ggml.bin --top_p 0.8 --temp 0.8 # web demo
 ```
 </details>
 
@@ -464,6 +502,20 @@ Baichuan-13B / Baichuan2-13B:
 | ms/token (MPS @ M2 Ultra)      | 18.2  | 18.8  | N/A   | N/A   | 27.2  | 44.4  |
 | file size                      | 7.0G  | 7.8G  | 8.5G  | 9.3G  | 14G   | 25G   |
 | mem usage                      | 7.8G  | 8.8G  | 9.5G  | 10G   | 14G   | 25G   |
+
+InternLM-7B:
+
+|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
+|--------------------------------|-------|-------|-------|-------|-------|-------|
+| ms/token (CPU @ Platinum 8260) | 85.3  | 90.1  | 103.5 | 112.5 | 137.3 | 232.2 |
+| ms/token (CUDA @ V100 SXM2)    | 9.1   | 9.4   | 10.5  | 10.5  | 13.3  | 21.1  |
+
+InternLM-20B:
+
+|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
+|--------------------------------|-------|-------|-------|-------|-------|-------|
+| ms/token (CPU @ Platinum 8260) | 230.0 | 236.7 | 276.6 | 290.6 | 357.1 | N/A   |
+| ms/token (CUDA @ V100 SXM2)    | 21.6  | 23.2  | 25.0  | 25.9  | 33.4  | N/A   |
 
 ## Development
 

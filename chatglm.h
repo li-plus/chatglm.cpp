@@ -739,6 +739,7 @@ enum ModelType {
     MODEL_TYPE_CHATGLM2 = 2,
     MODEL_TYPE_BAICHUAN7B = 1024,
     MODEL_TYPE_BAICHUAN13B = 1025,
+    MODEL_TYPE_INTERNLM = 1280,
 };
 
 int get_num_physical_cores();
@@ -1029,6 +1030,69 @@ class Baichuan13BForCausalLM : public BasicModelForCausalLM<Baichuan13BModel> {
   public:
     static constexpr size_t MEM_SIZE = 512 * MB;
     static constexpr size_t SCRATCH_SIZE = 1280 * MB;
+};
+
+// ===== InternLM =====
+
+class InternLMTokenizer : public BaseTokenizer {
+  public:
+    InternLMTokenizer(std::string_view serialized_model_proto);
+
+    std::vector<int> encode(const std::string &text, int max_length) const override;
+
+    std::string decode(const std::vector<int> &ids) const override;
+
+    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
+
+    static std::string build_prompt(const std::vector<std::string> &history);
+
+    bool is_special_id(int id) const { return id == unk_token_id || id == bos_token_id || id == eos_token_id; }
+
+  public:
+    sentencepiece::SentencePieceProcessor sp;
+    static constexpr int unk_token_id = 0;
+    static constexpr int bos_token_id = 1;
+    static constexpr int eos_token_id = 2;
+};
+
+using InternLM7BAttention =
+    BasicAttention<true, true, false, BasicRoper<ROPE_TYPE_NEOX, 1>, false, CausalContextMasker>;
+
+using InternLM7BMLP = BasicGLU<ACT_TYPE_SILU, false>;
+
+using InternLM7BBlock = BasicBlock<RMSNorm, InternLM7BAttention, InternLM7BMLP>;
+
+using InternLM7BModel = BasicModel<InternLM7BBlock, RMSNorm, BasicPositionIdsGenerator>;
+
+class InternLM7BForCausalLM : public BasicModelForCausalLM<InternLM7BModel> {
+  public:
+    InternLM7BForCausalLM(const ModelConfig &config);
+
+    void load(ModelLoader &loader) override;
+
+  public:
+    static constexpr size_t MEM_SIZE = 512 * MB;
+    static constexpr size_t SCRATCH_SIZE = 1024 * MB;
+};
+
+using InternLM20BAttention =
+    BasicAttention<false, false, false, BasicRoper<ROPE_TYPE_NEOX, 1>, false, CausalContextMasker>;
+
+using InternLM20BMLP = BasicGLU<ACT_TYPE_SILU, false>;
+
+using InternLM20BBlock = BasicBlock<RMSNorm, InternLM20BAttention, InternLM20BMLP>;
+
+using InternLM20BModel = BasicModel<InternLM20BBlock, RMSNorm, BasicPositionIdsGenerator>;
+
+class InternLM20BForCausalLM : public BasicModelForCausalLM<InternLM20BModel> {
+  public:
+    InternLM20BForCausalLM(const ModelConfig &config);
+
+    void load(ModelLoader &loader) override;
+
+  public:
+    static constexpr size_t MEM_SIZE = 512 * MB;
+    static constexpr size_t SCRATCH_SIZE = 1024 * MB;
 };
 
 // ===== pipeline =====

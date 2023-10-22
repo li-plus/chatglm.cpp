@@ -3,12 +3,16 @@ from pathlib import Path
 import chatglm_cpp
 import pytest
 
-CHATGLM_MODEL_PATH = Path(__file__).resolve().parent.parent / "chatglm-ggml.bin"
-CHATGLM2_MODEL_PATH = Path(__file__).resolve().parent.parent / "chatglm2-ggml.bin"
-CODEGEEX2_MODEL_PATH = Path(__file__).resolve().parent.parent / "codegeex2-ggml.bin"
-BAICHUAN13B_MODEL_PATH = Path(__file__).resolve().parent.parent / "baichuan-13b-chat-ggml.bin"
-BAICHUAN2_7B_MODEL_PATH = Path(__file__).resolve().parent.parent / "baichuan2-7b-chat-ggml.bin"
-BAICHUAN2_13B_MODEL_PATH = Path(__file__).resolve().parent.parent / "baichuan2-13b-chat-ggml.bin"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+CHATGLM_MODEL_PATH = PROJECT_ROOT / "chatglm-ggml.bin"
+CHATGLM2_MODEL_PATH = PROJECT_ROOT / "chatglm2-ggml.bin"
+CODEGEEX2_MODEL_PATH = PROJECT_ROOT / "codegeex2-ggml.bin"
+BAICHUAN13B_MODEL_PATH = PROJECT_ROOT / "baichuan-13b-chat-ggml.bin"
+BAICHUAN2_7B_MODEL_PATH = PROJECT_ROOT / "baichuan2-7b-chat-ggml.bin"
+BAICHUAN2_13B_MODEL_PATH = PROJECT_ROOT / "baichuan2-13b-chat-ggml.bin"
+INTERNLM7B_MODEL_PATH = PROJECT_ROOT / "internlm-chat-7b-ggml.bin"
+INTERNLM20B_MODEL_PATH = PROJECT_ROOT / "internlm-chat-20b-ggml.bin"
 
 
 def test_chatglm_version():
@@ -123,6 +127,46 @@ def test_baichuan2_13b_pipeline():
     gen_kwargs = dict(do_sample=False, repetition_penalty=1.05)
 
     pipeline = chatglm_cpp.Pipeline(BAICHUAN2_13B_MODEL_PATH)
+    output = pipeline.chat(history, **gen_kwargs)
+    assert output == target
+
+    stream_output = pipeline.stream_chat(history, **gen_kwargs)
+    stream_output = "".join(stream_output)
+    assert stream_output == target
+
+    stream_output = pipeline.chat(history, **gen_kwargs, stream=True)
+    stream_output = "".join(stream_output)
+    assert stream_output == target
+
+
+@pytest.mark.skipif(not INTERNLM7B_MODEL_PATH.exists(), reason="model file not found")
+def test_internlm7b_pipeline():
+    history = ["你好"]
+    target = "你好，有什么我可以帮助你的吗？"
+
+    gen_kwargs = dict(do_sample=False)
+
+    pipeline = chatglm_cpp.Pipeline(INTERNLM7B_MODEL_PATH)
+    output = pipeline.chat(history, **gen_kwargs)
+    assert output == target
+
+    stream_output = pipeline.stream_chat(history, **gen_kwargs)
+    stream_output = "".join(stream_output)
+    assert stream_output == target
+
+    stream_output = pipeline.chat(history, **gen_kwargs, stream=True)
+    stream_output = "".join(stream_output)
+    assert stream_output == target
+
+
+@pytest.mark.skipif(not INTERNLM20B_MODEL_PATH.exists(), reason="model file not found")
+def test_internlm20b_pipeline():
+    history = ["你好"]
+    target = "你好！有什么我可以帮助你的吗？"
+
+    gen_kwargs = dict(do_sample=False)
+
+    pipeline = chatglm_cpp.Pipeline(INTERNLM20B_MODEL_PATH)
     output = pipeline.chat(history, **gen_kwargs)
     assert output == target
 

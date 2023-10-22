@@ -57,7 +57,8 @@ PYBIND11_MODULE(_C, m) {
 
     py::class_<BaseModelForCausalLM, PyBaseModelForCausalLM>(m, "BaseModelForCausalLM")
         .def_property_readonly("type_name", &BaseModelForCausalLM::type_name)
-        .def("generate_next_token", &BaseModelForCausalLM::generate_next_token);
+        .def("generate_next_token", &BaseModelForCausalLM::generate_next_token)
+        .def_readonly("config", &BaseModelForCausalLM::config);
 
     py::class_<GenerationConfig>(m, "GenerationConfig")
         .def(py::init<int, int, bool, int, float, float, float, int>(), "max_length"_a = 2048,
@@ -76,25 +77,29 @@ PYBIND11_MODULE(_C, m) {
 
     py::class_<ChatGLMTokenizer, BaseTokenizer>(m, "ChatGLMTokenizer");
 
-    py::class_<ChatGLMForCausalLM, BaseModelForCausalLM>(m, "ChatGLMForCausalLM")
-        .def_readonly("config", &ChatGLMForCausalLM::config);
+    py::class_<ChatGLMForCausalLM, BaseModelForCausalLM>(m, "ChatGLMForCausalLM");
 
     // ===== ChatGLM2 =====
 
     py::class_<ChatGLM2Tokenizer, BaseTokenizer>(m, "ChatGLM2Tokenizer");
 
-    py::class_<ChatGLM2ForCausalLM, BaseModelForCausalLM>(m, "ChatGLM2ForCausalLM")
-        .def_readonly("config", &ChatGLM2ForCausalLM::config);
+    py::class_<ChatGLM2ForCausalLM, BaseModelForCausalLM>(m, "ChatGLM2ForCausalLM");
 
     // ===== Baichuan7B/13B =====
 
     py::class_<BaichuanTokenizer, BaseTokenizer>(m, "BaichuanTokenizer");
 
-    py::class_<Baichuan7BForCausalLM, BaseModelForCausalLM>(m, "Baichuan7BForCausalLM")
-        .def_readonly("config", &Baichuan7BForCausalLM::config);
+    py::class_<Baichuan7BForCausalLM, BaseModelForCausalLM>(m, "Baichuan7BForCausalLM");
 
-    py::class_<Baichuan13BForCausalLM, BaseModelForCausalLM>(m, "Baichuan13BForCausalLM")
-        .def_readonly("config", &Baichuan13BForCausalLM::config);
+    py::class_<Baichuan13BForCausalLM, BaseModelForCausalLM>(m, "Baichuan13BForCausalLM");
+
+    // ===== InternLM =====
+
+    py::class_<InternLMTokenizer, BaseTokenizer>(m, "InternLMTokenizer");
+
+    py::class_<InternLM7BForCausalLM, BaseModelForCausalLM>(m, "InternLM7BForCausalLM");
+
+    py::class_<InternLM20BForCausalLM, BaseModelForCausalLM>(m, "InternLM20BForCausalLM");
 
     // ===== Pipeline ====
 
