@@ -251,6 +251,78 @@ class ChatGLMTest : public ::testing::Test {
 
     float perf_cpu_graph_compute() { return _perf_graph_compute_impl<true>(); }
     float perf_device_graph_compute() { return _perf_graph_compute_impl<false>(); }
+
+    template <typename Model>
+    void test_model(const Model &model, const ModelConfig &config, const std::string &data_path, int seq_len,
+                    const std::vector<ggml_tensor *> &all_weights) {
+        ASSERT_EQ(config.num_hidden_layers, 1);
+
+        MappedFile mapped_file(data_path);
+        char *ptr = mapped_file.data;
+
+        tensor_to_device(model.layers[0].attention.k_cache);
+        tensor_to_device(model.layers[0].attention.v_cache);
+
+        ggml_tensor *x1 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, seq_len);
+        ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size, seq_len);
+        ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
+        ggml_tensor *ref_y2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
+        ggml_tensor *x3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
+        ggml_tensor *ref_y3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
+
+        std::vector<ggml_tensor *> all_tensors = all_weights;
+        all_tensors.insert(all_tensors.end(), {x1, ref_y1, x2, ref_y2, x3, ref_y3});
+
+        std::vector<ggml_tensor *> cpu_tensors{model.word_embeddings.weight, x1, x2, x3};
+
+        for (auto tensor : all_tensors) {
+            ptr = read_tensor_data(ptr, tensor);
+            if (std::find(cpu_tensors.begin(), cpu_tensors.end(), tensor) == cpu_tensors.end()) {
+                tensor_to_device(tensor);
+            }
+        }
+
+        ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
+
+        // self attention
+        {
+            ggml_tensor *out_y1 = model.forward(&ctx, x1, 0, seq_len);
+            EXPECT_EQ(out_y1->backend, ref_y1->backend);
+            out_y1->backend = GGML_BACKEND_CPU;
+            ggml_build_forward_expand(&ctx.gf, out_y1);
+            device_graph_compute(1);
+
+            expect_all_close(ref_y1, out_y1, 5e-4);
+        }
+
+        // cross attention
+        reset_cgraph();
+        {
+            ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len, seq_len);
+            EXPECT_EQ(out_y2->backend, ref_y2->backend);
+            out_y2->backend = GGML_BACKEND_CPU;
+            ggml_build_forward_expand(&ctx.gf, out_y2);
+            device_graph_compute(1);
+
+            expect_all_close(ref_y2, out_y2, 5e-4);
+        }
+        reset_cgraph();
+        {
+            ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1, seq_len);
+            EXPECT_EQ(out_y3->backend, ref_y3->backend);
+            out_y3->backend = GGML_BACKEND_CPU;
+            ggml_build_forward_expand(&ctx.gf, out_y3);
+            device_graph_compute(1);
+
+            expect_all_close(ref_y3, out_y3, 5e-4);
+        }
+
+        for (auto tensor : all_tensors) {
+            tensor_to_cpu(tensor);
+        }
+        tensor_to_cpu(model.layers[0].attention.k_cache);
+        tensor_to_cpu(model.layers[0].attention.v_cache);
+    }
 };
 
 TEST_F(ChatGLMTest, Embedding) {
@@ -483,9 +555,7 @@ TEST_F(ChatGLMTest, BenchmarkRMSNorm) {
 }
 
 TEST_F(ChatGLMTest, GLMModel) {
-    fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/glm_model.data";
-    MappedFile mapped_file(test_path.string());
-    char *ptr = mapped_file.data;
+    fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/glm_model.data";
 
     ModelConfig config;
     config.hidden_size = 32;
@@ -501,17 +571,7 @@ TEST_F(ChatGLMTest, GLMModel) {
 
     ChatGLMModel model(&ctx, config);
 
-    tensor_to_device(model.layers[0].attention.k_cache);
-    tensor_to_device(model.layers[0].attention.v_cache);
-
-    ggml_tensor *x1 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, seq_len);
-    ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size, seq_len);
-    ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
-    ggml_tensor *ref_y2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
-    ggml_tensor *x3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
-    ggml_tensor *ref_y3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
-
-    std::vector<ggml_tensor *> all_tensors{model.word_embeddings.weight,
+    std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
                                            model.layers[0].input_layernorm.weight,
                                            model.layers[0].input_layernorm.bias,
                                            model.layers[0].attention.query_key_value.weight,
@@ -525,62 +585,9 @@ TEST_F(ChatGLMTest, GLMModel) {
                                            model.layers[0].mlp.dense_4h_to_h.weight,
                                            model.layers[0].mlp.dense_4h_to_h.bias,
                                            model.final_layernorm.weight,
-                                           model.final_layernorm.bias,
-                                           x1,
-                                           ref_y1,
-                                           x2,
-                                           ref_y2,
-                                           x3,
-                                           ref_y3};
-    std::vector<ggml_tensor *> cpu_tensors{model.word_embeddings.weight, x1, x2, x3};
+                                           model.final_layernorm.bias};
 
-    for (auto tensor : all_tensors) {
-        ptr = read_tensor_data(ptr, tensor);
-        if (std::find(cpu_tensors.begin(), cpu_tensors.end(), tensor) == cpu_tensors.end()) {
-            tensor_to_device(tensor);
-        }
-    }
-
-    ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
-
-    // self attention
-    {
-        ggml_tensor *out_y1 = model.forward(&ctx, x1, 0, seq_len);
-        EXPECT_EQ(out_y1->backend, ref_y1->backend);
-        out_y1->backend = GGML_BACKEND_CPU;
-        ggml_build_forward_expand(&ctx.gf, out_y1);
-        device_graph_compute(1);
-
-        expect_all_close(ref_y1, out_y1, 5e-4);
-    }
-
-    // cross attention
-    reset_cgraph();
-    {
-        ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len, seq_len);
-        EXPECT_EQ(out_y2->backend, ref_y2->backend);
-        out_y2->backend = GGML_BACKEND_CPU;
-        ggml_build_forward_expand(&ctx.gf, out_y2);
-        device_graph_compute(1);
-
-        expect_all_close(ref_y2, out_y2, 5e-4);
-    }
-    reset_cgraph();
-    {
-        ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1, seq_len);
-        EXPECT_EQ(out_y3->backend, ref_y3->backend);
-        out_y3->backend = GGML_BACKEND_CPU;
-        ggml_build_forward_expand(&ctx.gf, out_y3);
-        device_graph_compute(1);
-
-        expect_all_close(ref_y3, out_y3, 5e-4);
-    }
-
-    for (auto tensor : all_tensors) {
-        tensor_to_cpu(tensor);
-    }
-    tensor_to_cpu(model.layers[0].attention.k_cache);
-    tensor_to_cpu(model.layers[0].attention.v_cache);
+    test_model(model, config, data_path, seq_len, all_weights);
 }
 
 // TEST_F(ChatGLMTest, BenchmarkGLMBlock) {
@@ -645,9 +652,7 @@ TEST_F(ChatGLMTest, GLMModel) {
 // }
 
 TEST_F(ChatGLMTest, GLM2Model) {
-    fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/glm2_model.data";
-    MappedFile mapped_file(test_path.string());
-    char *ptr = mapped_file.data;
+    fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/glm2_model.data";
 
     ModelConfig config;
     config.vocab_size = 5;
@@ -666,14 +671,7 @@ TEST_F(ChatGLMTest, GLM2Model) {
     tensor_to_device(model.layers[0].attention.k_cache);
     tensor_to_device(model.layers[0].attention.v_cache);
 
-    ggml_tensor *x1 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, seq_len);
-    ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size, seq_len);
-    ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
-    ggml_tensor *ref_y2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
-    ggml_tensor *x3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
-    ggml_tensor *ref_y3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
-
-    std::vector<ggml_tensor *> all_tensors{model.word_embeddings.weight,
+    std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
                                            model.layers[0].input_layernorm.weight,
                                            model.layers[0].attention.query_key_value.weight,
                                            model.layers[0].attention.query_key_value.bias,
@@ -682,80 +680,9 @@ TEST_F(ChatGLMTest, GLM2Model) {
                                            model.layers[0].mlp.gate_proj.weight,
                                            model.layers[0].mlp.up_proj.weight,
                                            model.layers[0].mlp.down_proj.weight,
-                                           model.final_layernorm.weight,
-                                           x1,
-                                           ref_y1,
-                                           x2,
-                                           ref_y2,
-                                           x3,
-                                           ref_y3};
-    std::vector<ggml_tensor *> cpu_tensors{model.word_embeddings.weight, x1, x2, x3};
+                                           model.final_layernorm.weight};
 
-    for (auto tensor : all_tensors) {
-        ptr = read_tensor_data(ptr, tensor);
-        if (std::find(cpu_tensors.begin(), cpu_tensors.end(), tensor) == cpu_tensors.end()) {
-            tensor_to_device(tensor);
-        }
-    }
-
-    ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
-
-    float eps = 2e-4;
-
-#ifdef GGML_USE_METAL
-    // convert gemm weights to fp16
-    std::vector<ggml_tensor **> gemm_weight_ptrs{
-        &model.layers[0].attention.query_key_value.weight, &model.layers[0].attention.dense.weight,
-        &model.layers[0].mlp.gate_proj.weight, &model.layers[0].mlp.up_proj.weight,
-        &model.layers[0].mlp.down_proj.weight};
-    for (auto weight_ptr : gemm_weight_ptrs) {
-        ggml_tensor *weight = *weight_ptr;
-        ggml_tensor *fp16_weight = ggml_new_tensor(ctx.ctx_b.get(), GGML_TYPE_F16, weight->n_dims, weight->ne);
-        ggml_fp32_to_fp16_row((float *)weight->data, (ggml_fp16_t *)fp16_weight->data, ggml_nelements(weight));
-        *weight_ptr = fp16_weight;
-    }
-    eps = 5e-4;
-#endif
-
-    // self attention
-    reset_cgraph();
-    {
-        ggml_tensor *out_y1 = model.forward(&ctx, x1, 0, seq_len);
-        EXPECT_EQ(out_y1->backend, ref_y1->backend);
-        out_y1->backend = GGML_BACKEND_CPU;
-        ggml_build_forward_expand(&ctx.gf, out_y1);
-        device_graph_compute(get_num_threads());
-
-        expect_all_close(ref_y1, out_y1, eps);
-    }
-
-    // cross attention
-    reset_cgraph();
-    {
-        ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len, seq_len);
-        EXPECT_EQ(out_y2->backend, ref_y2->backend);
-        out_y2->backend = GGML_BACKEND_CPU;
-        ggml_build_forward_expand(&ctx.gf, out_y2);
-        device_graph_compute(get_num_threads());
-
-        expect_all_close(ref_y2, out_y2, eps);
-    }
-    reset_cgraph();
-    {
-        ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1, seq_len);
-        EXPECT_EQ(out_y3->backend, ref_y3->backend);
-        out_y3->backend = GGML_BACKEND_CPU;
-        ggml_build_forward_expand(&ctx.gf, out_y3);
-        device_graph_compute(get_num_threads());
-
-        expect_all_close(ref_y3, out_y3, eps);
-    }
-
-    for (auto tensor : all_tensors) {
-        tensor_to_cpu(tensor);
-    }
-    tensor_to_cpu(model.layers[0].attention.k_cache);
-    tensor_to_cpu(model.layers[0].attention.v_cache);
+    test_model(model, config, data_path, seq_len, all_weights);
 }
 
 // TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
@@ -825,9 +752,7 @@ TEST_F(ChatGLMTest, GLM2Model) {
 // }
 
 TEST_F(ChatGLMTest, Baichuan7BModel) {
-    fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/baichuan7b_model.data";
-    MappedFile mapped_file(test_path.string());
-    char *ptr = mapped_file.data;
+    fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/baichuan7b_model.data";
 
     ModelConfig config;
     config.hidden_size = 32;
@@ -843,17 +768,7 @@ TEST_F(ChatGLMTest, Baichuan7BModel) {
 
     Baichuan7BModel model(&ctx, config);
 
-    tensor_to_device(model.layers[0].attention.k_cache);
-    tensor_to_device(model.layers[0].attention.v_cache);
-
-    ggml_tensor *x1 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, seq_len);
-    ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size, seq_len);
-    ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
-    ggml_tensor *ref_y2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
-    ggml_tensor *x3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
-    ggml_tensor *ref_y3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
-
-    std::vector<ggml_tensor *> all_tensors{model.word_embeddings.weight,
+    std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
                                            model.layers[0].input_layernorm.weight,
                                            model.layers[0].attention.query_key_value.weight,
                                            model.layers[0].attention.dense.weight,
@@ -861,70 +776,13 @@ TEST_F(ChatGLMTest, Baichuan7BModel) {
                                            model.layers[0].mlp.gate_proj.weight,
                                            model.layers[0].mlp.down_proj.weight,
                                            model.layers[0].mlp.up_proj.weight,
-                                           model.final_layernorm.weight,
-                                           x1,
-                                           ref_y1,
-                                           x2,
-                                           ref_y2,
-                                           x3,
-                                           ref_y3};
-    std::vector<ggml_tensor *> cpu_tensors{model.word_embeddings.weight, x1, x2, x3};
+                                           model.final_layernorm.weight};
 
-    for (auto tensor : all_tensors) {
-        ptr = read_tensor_data(ptr, tensor);
-        if (std::find(cpu_tensors.begin(), cpu_tensors.end(), tensor) == cpu_tensors.end()) {
-            tensor_to_device(tensor);
-        }
-    }
-    ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
-
-    float eps = 5e-4;
-
-    // self attention
-    reset_cgraph();
-    {
-        ggml_tensor *out_y1 = model.forward(&ctx, x1, 0, seq_len);
-        EXPECT_EQ(out_y1->backend, ref_y1->backend);
-        out_y1->backend = GGML_BACKEND_CPU;
-        ggml_build_forward_expand(&ctx.gf, out_y1);
-        device_graph_compute(get_num_threads());
-
-        expect_all_close(ref_y1, out_y1, eps);
-    }
-
-    // cross attention
-    reset_cgraph();
-    {
-        ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len, seq_len);
-        EXPECT_EQ(out_y2->backend, ref_y2->backend);
-        out_y2->backend = GGML_BACKEND_CPU;
-        ggml_build_forward_expand(&ctx.gf, out_y2);
-        device_graph_compute(get_num_threads());
-
-        expect_all_close(ref_y2, out_y2, eps);
-    }
-    reset_cgraph();
-    {
-        ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1, seq_len);
-        EXPECT_EQ(out_y3->backend, ref_y3->backend);
-        out_y3->backend = GGML_BACKEND_CPU;
-        ggml_build_forward_expand(&ctx.gf, out_y3);
-        device_graph_compute(get_num_threads());
-
-        expect_all_close(ref_y3, out_y3, eps);
-    }
-
-    for (auto tensor : all_tensors) {
-        tensor_to_cpu(tensor);
-    }
-    tensor_to_cpu(model.layers[0].attention.k_cache);
-    tensor_to_cpu(model.layers[0].attention.v_cache);
+    test_model(model, config, data_path, seq_len, all_weights);
 }
 
 TEST_F(ChatGLMTest, Baichuan13BModel) {
-    fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/baichuan13b_model.data";
-    MappedFile mapped_file(test_path.string());
-    char *ptr = mapped_file.data;
+    fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/baichuan13b_model.data";
 
     ModelConfig config;
     config.hidden_size = 32;
@@ -940,17 +798,7 @@ TEST_F(ChatGLMTest, Baichuan13BModel) {
 
     Baichuan13BModel model(&ctx, config);
 
-    tensor_to_device(model.layers[0].attention.k_cache);
-    tensor_to_device(model.layers[0].attention.v_cache);
-
-    ggml_tensor *x1 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, seq_len);
-    ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size, seq_len);
-    ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
-    ggml_tensor *ref_y2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
-    ggml_tensor *x3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
-    ggml_tensor *ref_y3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
-
-    std::vector<ggml_tensor *> all_tensors{model.word_embeddings.weight,
+    std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
                                            model.layers[0].input_layernorm.weight,
                                            model.layers[0].attention.query_key_value.weight,
                                            model.layers[0].attention.dense.weight,
@@ -958,85 +806,13 @@ TEST_F(ChatGLMTest, Baichuan13BModel) {
                                            model.layers[0].mlp.gate_proj.weight,
                                            model.layers[0].mlp.down_proj.weight,
                                            model.layers[0].mlp.up_proj.weight,
-                                           model.final_layernorm.weight,
-                                           x1,
-                                           ref_y1,
-                                           x2,
-                                           ref_y2,
-                                           x3,
-                                           ref_y3};
-    std::vector<ggml_tensor *> cpu_tensors{model.word_embeddings.weight, x1, x2, x3};
+                                           model.final_layernorm.weight};
 
-    for (auto tensor : all_tensors) {
-        ptr = read_tensor_data(ptr, tensor);
-        if (std::find(cpu_tensors.begin(), cpu_tensors.end(), tensor) == cpu_tensors.end()) {
-            tensor_to_device(tensor);
-        }
-    }
-    ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
-
-    float eps = 5e-4;
-
-#ifdef GGML_USE_METAL
-    // convert gemm weights to fp16
-    std::vector<ggml_tensor **> gemm_weight_ptrs{
-        &model.layers[0].attention.query_key_value.weight, &model.layers[0].attention.dense.weight,
-        &model.layers[0].mlp.gate_proj.weight, &model.layers[0].mlp.down_proj.weight,
-        &model.layers[0].mlp.up_proj.weight};
-    for (auto weight_ptr : gemm_weight_ptrs) {
-        ggml_tensor *weight = *weight_ptr;
-        ggml_tensor *fp16_weight = ggml_new_tensor(ctx.ctx_b.get(), GGML_TYPE_F16, weight->n_dims, weight->ne);
-        ggml_fp32_to_fp16_row((float *)weight->data, (ggml_fp16_t *)fp16_weight->data, ggml_nelements(weight));
-        *weight_ptr = fp16_weight;
-    }
-    eps = 5e-4;
-#endif
-
-    // self attention
-    reset_cgraph();
-    {
-        ggml_tensor *out_y1 = model.forward(&ctx, x1, 0, seq_len);
-        EXPECT_EQ(out_y1->backend, ref_y1->backend);
-        out_y1->backend = GGML_BACKEND_CPU;
-        ggml_build_forward_expand(&ctx.gf, out_y1);
-        device_graph_compute(get_num_threads());
-
-        expect_all_close(ref_y1, out_y1, eps);
-    }
-
-    // cross attention
-    reset_cgraph();
-    {
-        ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len, seq_len);
-        EXPECT_EQ(out_y2->backend, ref_y2->backend);
-        out_y2->backend = GGML_BACKEND_CPU;
-        ggml_build_forward_expand(&ctx.gf, out_y2);
-        device_graph_compute(get_num_threads());
-
-        expect_all_close(ref_y2, out_y2, eps);
-    }
-    reset_cgraph();
-    {
-        ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1, seq_len);
-        EXPECT_EQ(out_y3->backend, ref_y3->backend);
-        out_y3->backend = GGML_BACKEND_CPU;
-        ggml_build_forward_expand(&ctx.gf, out_y3);
-        device_graph_compute(get_num_threads());
-
-        expect_all_close(ref_y3, out_y3, eps);
-    }
-
-    for (auto tensor : all_tensors) {
-        tensor_to_cpu(tensor);
-    }
-    tensor_to_cpu(model.layers[0].attention.k_cache);
-    tensor_to_cpu(model.layers[0].attention.v_cache);
+    test_model(model, config, data_path, seq_len, all_weights);
 }
 
 TEST_F(ChatGLMTest, InternLMModel) {
-    fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/internlm_model.data";
-    MappedFile mapped_file(test_path.string());
-    char *ptr = mapped_file.data;
+    fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/internlm_model.data";
 
     ModelConfig config;
     config.hidden_size = 32;
@@ -1052,17 +828,7 @@ TEST_F(ChatGLMTest, InternLMModel) {
 
     InternLM7BModel model(&ctx, config);
 
-    tensor_to_device(model.layers[0].attention.k_cache);
-    tensor_to_device(model.layers[0].attention.v_cache);
-
-    ggml_tensor *x1 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, seq_len);
-    ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size, seq_len);
-    ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
-    ggml_tensor *ref_y2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
-    ggml_tensor *x3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
-    ggml_tensor *ref_y3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
-
-    std::vector<ggml_tensor *> all_tensors{model.word_embeddings.weight,
+    std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
                                            model.layers[0].input_layernorm.weight,
                                            model.layers[0].attention.query_key_value.weight,
                                            model.layers[0].attention.query_key_value.bias,
@@ -1072,64 +838,9 @@ TEST_F(ChatGLMTest, InternLMModel) {
                                            model.layers[0].mlp.gate_proj.weight,
                                            model.layers[0].mlp.up_proj.weight,
                                            model.layers[0].mlp.down_proj.weight,
-                                           model.final_layernorm.weight,
-                                           x1,
-                                           ref_y1,
-                                           x2,
-                                           ref_y2,
-                                           x3,
-                                           ref_y3};
-    std::vector<ggml_tensor *> cpu_tensors{model.word_embeddings.weight, x1, x2, x3};
+                                           model.final_layernorm.weight};
 
-    for (auto tensor : all_tensors) {
-        ptr = read_tensor_data(ptr, tensor);
-        if (std::find(cpu_tensors.begin(), cpu_tensors.end(), tensor) == cpu_tensors.end()) {
-            tensor_to_device(tensor);
-        }
-    }
-    ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
-
-    float eps = 5e-4;
-
-    // self attention
-    reset_cgraph();
-    {
-        ggml_tensor *out_y1 = model.forward(&ctx, x1, 0, seq_len);
-        EXPECT_EQ(out_y1->backend, ref_y1->backend);
-        out_y1->backend = GGML_BACKEND_CPU;
-        ggml_build_forward_expand(&ctx.gf, out_y1);
-        device_graph_compute(get_num_threads());
-
-        expect_all_close(ref_y1, out_y1, eps);
-    }
-
-    // cross attention
-    reset_cgraph();
-    {
-        ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len, seq_len);
-        EXPECT_EQ(out_y2->backend, ref_y2->backend);
-        out_y2->backend = GGML_BACKEND_CPU;
-        ggml_build_forward_expand(&ctx.gf, out_y2);
-        device_graph_compute(get_num_threads());
-
-        expect_all_close(ref_y2, out_y2, eps);
-    }
-    reset_cgraph();
-    {
-        ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1, seq_len);
-        EXPECT_EQ(out_y3->backend, ref_y3->backend);
-        out_y3->backend = GGML_BACKEND_CPU;
-        ggml_build_forward_expand(&ctx.gf, out_y3);
-        device_graph_compute(get_num_threads());
-
-        expect_all_close(ref_y3, out_y3, eps);
-    }
-
-    for (auto tensor : all_tensors) {
-        tensor_to_cpu(tensor);
-    }
-    tensor_to_cpu(model.layers[0].attention.k_cache);
-    tensor_to_cpu(model.layers[0].attention.v_cache);
+    test_model(model, config, data_path, seq_len, all_weights);
 }
 
 TEST_F(ChatGLMTest, quantize) {
