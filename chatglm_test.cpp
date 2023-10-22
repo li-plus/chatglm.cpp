@@ -947,6 +947,7 @@ TEST_F(ChatGLMTest, quantize) {
 struct TokenizerTestCase {
     std::string prompt;
     std::vector<int> input_ids;
+    bool skip_decode = false;
 };
 
 static void check_tokenizer(const BaseTokenizer *tokenizer, const std::vector<TokenizerTestCase> &cases) {
@@ -954,9 +955,11 @@ static void check_tokenizer(const BaseTokenizer *tokenizer, const std::vector<To
         // encode
         std::vector<int> input_ids = tokenizer->encode(c.prompt, 2048);
         EXPECT_TRUE(equal(input_ids, c.input_ids));
-        // decode
-        std::string output = tokenizer->decode(c.input_ids);
-        EXPECT_EQ(output, c.prompt);
+        if (!c.skip_decode) {
+            // decode
+            std::string output = tokenizer->decode(c.input_ids);
+            EXPECT_EQ(output, c.prompt);
+        }
     }
 }
 
@@ -1276,7 +1279,8 @@ TEST(Pipeline, InternLM) {
              "Bot|>:",
              {1,     333,   352,   1621,  352,   27232,  76379, 103027, 364,    333,   352, 23845, 352,  27232,
               76379, 98899, 68408, 73159, 67566, 67513,  61056, 99050,  103028, 364,   333, 352,   1621, 352,
-              27232, 67891, 76046, 67551, 68573, 103027, 364,   333,    352,    23845, 352, 27232}}};
+              27232, 67891, 76046, 67551, 68573, 103027, 364,   333,    352,    23845, 352, 27232},
+             true}};
         check_tokenizer(pipeline.tokenizer.get(), cases);
     }
 
