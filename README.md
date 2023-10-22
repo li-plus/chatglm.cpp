@@ -91,7 +91,7 @@ Run `./build/bin/main -h` to explore more options!
 
 **Try Other Models**
 
-<details>
+<details open>
 <summary>ChatGLM2-6B</summary>
 
 ```sh
@@ -263,7 +263,7 @@ python3 web_demo.py -m ../chatglm-ggml.bin
 
 For other models:
 
-<details>
+<details open>
 <summary>ChatGLM2-6B</summary>
 
 ```sh

@@ -1072,7 +1072,7 @@ class InternLM7BForCausalLM : public BasicModelForCausalLM<InternLM7BModel> {
 
   public:
     static constexpr size_t MEM_SIZE = 512 * MB;
-    static constexpr size_t SCRATCH_SIZE = 1024 * MB;
+    static constexpr size_t SCRATCH_SIZE = 1280 * MB;
 };
 
 using InternLM20BAttention =
