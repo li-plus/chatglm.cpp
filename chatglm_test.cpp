@@ -253,11 +253,11 @@ class ChatGLMTest : public ::testing::Test {
     float perf_device_graph_compute() { return _perf_graph_compute_impl<false>(); }
 
     template <typename Model>
-    void test_model(const Model &model, const ModelConfig &config, const std::string &data_path, int seq_len,
+    void test_model(const Model &model, const ModelConfig &config, const fs::path &data_path, int seq_len,
                     const std::vector<ggml_tensor *> &all_weights) {
         ASSERT_EQ(config.num_hidden_layers, 1);
 
-        MappedFile mapped_file(data_path);
+        MappedFile mapped_file(data_path.string());
         char *ptr = mapped_file.data;
 
         tensor_to_device(model.layers[0].attention.k_cache);
