@@ -839,12 +839,11 @@ class BasicModelForCausalLM : public BaseModelForCausalLM {
         }
     }
 
-    void to_device(const std::string &embedding_key) {
-        // should not place embedding onto device
+    void to_device() {
         for (auto &item : state_dict_) {
-            const std::string &name = item.first;
             ggml_tensor *tensor = item.second;
-            if (name != embedding_key) {
+            // should not place embedding onto device
+            if (tensor != transformer.word_embeddings.weight) {
                 tensor_to_device(tensor);
             }
         }

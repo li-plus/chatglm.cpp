@@ -835,7 +835,7 @@ void ChatGLMForCausalLM::load(ModelLoader &loader) {
     }
     lm_head.weight->data = transformer.word_embeddings.weight->data; // tied weight
 
-    to_device("transformer.word_embeddings.weight");
+    to_device();
 
     ctx_.weight_buffer = std::string_view(loader.data, loader.size);
     ctx_.init_device_context();
@@ -968,7 +968,7 @@ void ChatGLM2ForCausalLM::load(ModelLoader &loader) {
         }
     }
 
-    to_device("transformer.embedding.word_embeddings.weight");
+    to_device();
 
     ctx_.weight_buffer = std::string_view(loader.data, loader.size);
     ctx_.init_device_context();
@@ -1067,7 +1067,7 @@ void Baichuan7BForCausalLM::load(ModelLoader &loader) {
         loader.read_tensor(name, tensor);
     }
 
-    to_device("model.embed_tokens.weight");
+    to_device();
 
     ctx_.weight_buffer = std::string_view(loader.data, loader.size);
     ctx_.init_device_context();
@@ -1109,7 +1109,7 @@ void Baichuan13BForCausalLM::load(ModelLoader &loader) {
         loader.read_tensor(name, tensor);
     }
 
-    to_device("model.embed_tokens.weight");
+    to_device();
 
     ctx_.weight_buffer = std::string_view(loader.data, loader.size);
     ctx_.init_device_context();
@@ -1205,7 +1205,7 @@ void InternLMForCausalLM<InternLMModel>::load(ModelLoader &loader) {
         loader.read_tensor(name, tensor);
     }
 
-    this->to_device("model.embed_tokens.weight");
+    this->to_device();
 
     this->ctx_.weight_buffer = std::string_view(loader.data, loader.size);
     this->ctx_.init_device_context();
