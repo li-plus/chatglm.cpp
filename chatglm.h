@@ -764,7 +764,8 @@ struct TokenIdScore {
 
 class BaseModelForCausalLM {
   public:
-    BaseModelForCausalLM(ModelType model_type, ModelConfig config, size_t mem_size, size_t scratch_size);
+    BaseModelForCausalLM(ModelType model_type, ModelConfig config, size_t mem_size, size_t scratch_size,
+                         size_t num_weights);
     virtual ~BaseModelForCausalLM() = default;
 
     virtual void load(ModelLoader &loader) = 0;
@@ -797,11 +798,20 @@ class BaseModelForCausalLM {
     ModelConfig config;
 };
 
+using StateDict = std::vector<std::pair<std::string, ggml_tensor *>>;
+
 template <typename Model>
 class BasicModelForCausalLM : public BaseModelForCausalLM {
   protected:
-    BasicModelForCausalLM(ModelType model_type, const ModelConfig &config, size_t mem_size, size_t scratch_size)
-        : BaseModelForCausalLM(model_type, config, mem_size, scratch_size) {}
+    BasicModelForCausalLM(ModelType model_type, const ModelConfig &config, size_t mem_size, size_t scratch_size,
+                          size_t num_weights)
+        : BaseModelForCausalLM(model_type, config, mem_size, scratch_size, num_weights), transformer(&ctx_, config),
+          lm_head(&ctx_, config.hidden_size, config.vocab_size, false) {
+        CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_w.get()) == ggml_get_mem_size(ctx_.ctx_w.get()))
+            << "corrupted model weights";
+        CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) + 1 * MB == ggml_get_mem_size(ctx_.ctx_kv.get()))
+            << "corrupted kv cache";
+    }
     ~BasicModelForCausalLM() { to_cpu(); }
 
   public:
@@ -848,7 +858,9 @@ class BasicModelForCausalLM : public BaseModelForCausalLM {
   public:
     Model transformer;
     Linear lm_head;
-    std::vector<std::pair<std::string, ggml_tensor *>> state_dict_;
+
+  protected:
+    StateDict state_dict_;
 };
 
 // ===== ChatGLM-6B =====
@@ -913,6 +925,11 @@ class ChatGLMForCausalLM : public BasicModelForCausalLM<ChatGLMModel> {
 
     void load(ModelLoader &loader) override;
 
+    static int num_weights(int num_hidden_layers) { return 4 + num_hidden_layers * 12; }
+
+  private:
+    StateDict state_dict() const;
+
   public:
     static constexpr size_t MEM_SIZE = 512 * MB;      // 2k context
     static constexpr size_t SCRATCH_SIZE = 1024 * MB; // 2k context
@@ -956,6 +973,11 @@ class ChatGLM2ForCausalLM : public BasicModelForCausalLM<ChatGLM2Model> {
     ChatGLM2ForCausalLM(const ModelConfig &config);
 
     void load(ModelLoader &loader) override;
+
+    static int num_weights(int num_hidden_layers) { return 3 + num_hidden_layers * 8; }
+
+  private:
+    StateDict state_dict() const;
 
   public:
     static constexpr size_t MEM_SIZE = 512 * MB;      // 2k context
@@ -1006,6 +1028,11 @@ class Baichuan7BForCausalLM : public BasicModelForCausalLM<Baichuan7BModel> {
 
     void load(ModelLoader &loader) override;
 
+    static int num_weights(int num_hidden_layers) { return 3 + num_hidden_layers * 7; }
+
+  private:
+    StateDict state_dict() const;
+
   public:
     static constexpr size_t MEM_SIZE = 512 * MB;
     static constexpr size_t SCRATCH_SIZE = 1280 * MB;
@@ -1026,6 +1053,11 @@ class Baichuan13BForCausalLM : public BasicModelForCausalLM<Baichuan13BModel> {
     Baichuan13BForCausalLM(const ModelConfig &config);
 
     void load(ModelLoader &loader) override;
+
+    static int num_weights(int num_hidden_layers) { return 3 + num_hidden_layers * 7; }
+
+  private:
+    StateDict state_dict() const;
 
   public:
     static constexpr size_t MEM_SIZE = 512 * MB;
@@ -1064,17 +1096,6 @@ using InternLM7BBlock = BasicBlock<RMSNorm, InternLM7BAttention, InternLM7BMLP>;
 
 using InternLM7BModel = BasicModel<InternLM7BBlock, RMSNorm, BasicPositionIdsGenerator>;
 
-class InternLM7BForCausalLM : public BasicModelForCausalLM<InternLM7BModel> {
-  public:
-    InternLM7BForCausalLM(const ModelConfig &config);
-
-    void load(ModelLoader &loader) override;
-
-  public:
-    static constexpr size_t MEM_SIZE = 512 * MB;
-    static constexpr size_t SCRATCH_SIZE = 1280 * MB;
-};
-
 using InternLM20BAttention =
     BasicAttention<false, false, false, BasicRoper<ROPE_TYPE_NEOX, 1>, false, CausalContextMasker>;
 
@@ -1084,16 +1105,28 @@ using InternLM20BBlock = BasicBlock<RMSNorm, InternLM20BAttention, InternLM20BML
 
 using InternLM20BModel = BasicModel<InternLM20BBlock, RMSNorm, BasicPositionIdsGenerator>;
 
-class InternLM20BForCausalLM : public BasicModelForCausalLM<InternLM20BModel> {
+template <typename InternLMModel>
+class InternLMForCausalLM : public BasicModelForCausalLM<InternLMModel> {
   public:
-    InternLM20BForCausalLM(const ModelConfig &config);
+    InternLMForCausalLM(const ModelConfig &config);
 
     void load(ModelLoader &loader) override;
 
+    static int num_weights(int num_hidden_layers) {
+        return 3 + num_hidden_layers * (std::is_same_v<InternLMModel, InternLM7BModel> ? 9 : 7);
+    }
+
+  private:
+    StateDict state_dict() const;
+
   public:
     static constexpr size_t MEM_SIZE = 512 * MB;
-    static constexpr size_t SCRATCH_SIZE = 1024 * MB;
+    static constexpr size_t SCRATCH_SIZE = 1280 * MB;
 };
+
+using InternLM7BForCausalLM = InternLMForCausalLM<InternLM7BModel>;
+
+using InternLM20BForCausalLM = InternLMForCausalLM<InternLM20BModel>;
 
 // ===== pipeline =====
 

@@ -149,7 +149,7 @@ void ggml_graph_compute_helper(std::vector<uninitialized_char> &buf, ggml_cgraph
 }
 
 // for debugging purpose
-static inline ggml_tensor *add_zero(ggml_context *ctx, ggml_tensor *tensor) {
+[[maybe_unused]] static inline ggml_tensor *add_zero(ggml_context *ctx, ggml_tensor *tensor) {
     ggml_tensor *zeros = ggml_new_tensor(ctx, tensor->type, tensor->n_dims, tensor->ne);
     ggml_set_f32(zeros, 0);
     tensor_to_device(zeros);
@@ -434,8 +434,17 @@ std::string to_string(ModelType model_type) {
 }
 
 BaseModelForCausalLM::BaseModelForCausalLM(ModelType model_type, ModelConfig config, size_t mem_size,
-                                           size_t scratch_size)
+                                           size_t scratch_size, size_t num_weights)
     : model_type_(model_type), config(config) {
+    ctx_.dtype = config.dtype;
+    const size_t ctx_w_size = num_weights * ggml_tensor_overhead();
+    const size_t ctx_kv_size = 2 * config.num_hidden_layers *
+                               (config.max_length * config.hidden_size / config.num_attention_heads *
+                                    config.num_kv_heads * ggml_type_size(GGML_TYPE_F16) +
+                                ggml_tensor_overhead());
+    ctx_.ctx_w = make_unique_ggml_context(ctx_w_size, nullptr, true);
+    ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size + 1 * MB, nullptr, false); // 1MB extra for MPS
+
     ctx_.compute_buffer.resize(mem_size);
     ctx_.scratch_buffer.resize(scratch_size);
     ctx_.scratch = {0, ctx_.scratch_buffer.size(), ctx_.scratch_buffer.data()};
@@ -812,48 +821,8 @@ ggml_tensor *GLMBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, gg
 }
 
 ChatGLMForCausalLM::ChatGLMForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM(MODEL_TYPE_CHATGLM, config, MEM_SIZE, SCRATCH_SIZE) {
-    constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
-    const size_t num_weights = 4 + config.num_hidden_layers * 12;
-    const size_t ctx_w_size = num_weights * tensor_ovhd;
-    const size_t ctx_kv_size = 2 * config.num_hidden_layers *
-                               (config.max_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16) + tensor_ovhd);
-    ctx_.dtype = config.dtype;
-    ctx_.ctx_w = make_unique_ggml_context(ctx_w_size, nullptr, true);
-    ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size, nullptr, false);
-
-    transformer = ChatGLMModel(&ctx_, config);
-    lm_head = Linear(&ctx_, config.hidden_size, config.vocab_size, false);
-    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_w.get()) == ggml_get_mem_size(ctx_.ctx_w.get())) << "corrupted model weights";
-    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ggml_get_mem_size(ctx_.ctx_kv.get())) << "corrupted kv cache";
-
-    // build state_dict
-    state_dict_.reserve(num_weights);
-    state_dict_.emplace_back("transformer.word_embeddings.weight", transformer.word_embeddings.weight);
-    for (int i = 0; i < config.num_hidden_layers; i++) {
-        std::string layer_prefix = "transformer.layers." + std::to_string(i) + '.';
-        state_dict_.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
-        state_dict_.emplace_back(layer_prefix + "input_layernorm.bias", transformer.layers[i].input_layernorm.bias);
-        state_dict_.emplace_back(layer_prefix + "attention.query_key_value.weight",
-                                 transformer.layers[i].attention.query_key_value.weight);
-        state_dict_.emplace_back(layer_prefix + "attention.query_key_value.bias",
-                                 transformer.layers[i].attention.query_key_value.bias);
-        state_dict_.emplace_back(layer_prefix + "attention.dense.weight", transformer.layers[i].attention.dense.weight);
-        state_dict_.emplace_back(layer_prefix + "attention.dense.bias", transformer.layers[i].attention.dense.bias);
-        state_dict_.emplace_back(layer_prefix + "post_attention_layernorm.weight",
-                                 transformer.layers[i].post_attention_layernorm.weight);
-        state_dict_.emplace_back(layer_prefix + "post_attention_layernorm.bias",
-                                 transformer.layers[i].post_attention_layernorm.bias);
-        state_dict_.emplace_back(layer_prefix + "mlp.dense_h_to_4h.weight",
-                                 transformer.layers[i].mlp.dense_h_to_4h.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.dense_h_to_4h.bias", transformer.layers[i].mlp.dense_h_to_4h.bias);
-        state_dict_.emplace_back(layer_prefix + "mlp.dense_4h_to_h.weight",
-                                 transformer.layers[i].mlp.dense_4h_to_h.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.dense_4h_to_h.bias", transformer.layers[i].mlp.dense_4h_to_h.bias);
-    }
-    state_dict_.emplace_back("transformer.final_layernorm.weight", transformer.final_layernorm.weight);
-    state_dict_.emplace_back("transformer.final_layernorm.bias", transformer.final_layernorm.bias);
-    state_dict_.emplace_back("lm_head.weight", lm_head.weight);
+    : BasicModelForCausalLM(MODEL_TYPE_CHATGLM, config, MEM_SIZE, SCRATCH_SIZE, num_weights(config.num_hidden_layers)) {
+    state_dict_ = state_dict();
 }
 
 void ChatGLMForCausalLM::load(ModelLoader &loader) {
@@ -870,6 +839,35 @@ void ChatGLMForCausalLM::load(ModelLoader &loader) {
 
     ctx_.weight_buffer = std::string_view(loader.data, loader.size);
     ctx_.init_device_context();
+}
+
+StateDict ChatGLMForCausalLM::state_dict() const {
+    StateDict sd;
+    sd.reserve(num_weights(config.num_hidden_layers));
+    sd.emplace_back("transformer.word_embeddings.weight", transformer.word_embeddings.weight);
+    for (int i = 0; i < config.num_hidden_layers; i++) {
+        std::string layer_prefix = "transformer.layers." + std::to_string(i) + '.';
+        sd.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
+        sd.emplace_back(layer_prefix + "input_layernorm.bias", transformer.layers[i].input_layernorm.bias);
+        sd.emplace_back(layer_prefix + "attention.query_key_value.weight",
+                        transformer.layers[i].attention.query_key_value.weight);
+        sd.emplace_back(layer_prefix + "attention.query_key_value.bias",
+                        transformer.layers[i].attention.query_key_value.bias);
+        sd.emplace_back(layer_prefix + "attention.dense.weight", transformer.layers[i].attention.dense.weight);
+        sd.emplace_back(layer_prefix + "attention.dense.bias", transformer.layers[i].attention.dense.bias);
+        sd.emplace_back(layer_prefix + "post_attention_layernorm.weight",
+                        transformer.layers[i].post_attention_layernorm.weight);
+        sd.emplace_back(layer_prefix + "post_attention_layernorm.bias",
+                        transformer.layers[i].post_attention_layernorm.bias);
+        sd.emplace_back(layer_prefix + "mlp.dense_h_to_4h.weight", transformer.layers[i].mlp.dense_h_to_4h.weight);
+        sd.emplace_back(layer_prefix + "mlp.dense_h_to_4h.bias", transformer.layers[i].mlp.dense_h_to_4h.bias);
+        sd.emplace_back(layer_prefix + "mlp.dense_4h_to_h.weight", transformer.layers[i].mlp.dense_4h_to_h.weight);
+        sd.emplace_back(layer_prefix + "mlp.dense_4h_to_h.bias", transformer.layers[i].mlp.dense_4h_to_h.bias);
+    }
+    sd.emplace_back("transformer.final_layernorm.weight", transformer.final_layernorm.weight);
+    sd.emplace_back("transformer.final_layernorm.bias", transformer.final_layernorm.bias);
+    sd.emplace_back("lm_head.weight", lm_head.weight);
+    return sd;
 }
 
 // ===== ChatGLM2-6B =====
@@ -935,44 +933,9 @@ bool ChatGLM2Tokenizer::is_special_id(int id) const {
 }
 
 ChatGLM2ForCausalLM::ChatGLM2ForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM(MODEL_TYPE_CHATGLM2, config, MEM_SIZE, SCRATCH_SIZE) {
-    constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
-    const size_t num_weights = 3 + config.num_hidden_layers * 8;
-    const size_t ctx_w_size = num_weights * tensor_ovhd;
-    const size_t ctx_kv_size = 2 * config.num_hidden_layers *
-                               (config.max_length * config.hidden_size / config.num_attention_heads *
-                                    config.num_kv_heads * ggml_type_size(GGML_TYPE_F16) +
-                                tensor_ovhd);
-    ctx_.dtype = config.dtype;
-    ctx_.ctx_w = make_unique_ggml_context(ctx_w_size, nullptr, true);
-    ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size + 1 * MB, nullptr, false); // 1MB extra for MPS
-
-    transformer = ChatGLM2Model(&ctx_, config);
-    lm_head = Linear(&ctx_, config.hidden_size, config.vocab_size, false);
-    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_w.get()) == ggml_get_mem_size(ctx_.ctx_w.get())) << "corrupted model weights";
-    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ctx_kv_size) << "corrupted kv cache";
-
-    // build state_dict
-    state_dict_.reserve(num_weights);
-    state_dict_.emplace_back("transformer.embedding.word_embeddings.weight", transformer.word_embeddings.weight);
-    for (int i = 0; i < config.num_hidden_layers; i++) {
-        std::string layer_prefix = "transformer.encoder.layers." + std::to_string(i) + '.';
-        state_dict_.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
-        state_dict_.emplace_back(layer_prefix + "self_attention.query_key_value.weight",
-                                 transformer.layers[i].attention.query_key_value.weight);
-        state_dict_.emplace_back(layer_prefix + "self_attention.query_key_value.bias",
-                                 transformer.layers[i].attention.query_key_value.bias);
-        state_dict_.emplace_back(layer_prefix + "self_attention.dense.weight",
-                                 transformer.layers[i].attention.dense.weight);
-        state_dict_.emplace_back(layer_prefix + "post_attention_layernorm.weight",
-                                 transformer.layers[i].post_attention_layernorm.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
-        // for compatibility
-        state_dict_.emplace_back(layer_prefix + "mlp.dense_4h_to_h.weight", transformer.layers[i].mlp.down_proj.weight);
-    }
-    state_dict_.emplace_back("transformer.encoder.final_layernorm.weight", transformer.final_layernorm.weight);
-    state_dict_.emplace_back("transformer.output_layer.weight", lm_head.weight);
+    : BasicModelForCausalLM(MODEL_TYPE_CHATGLM2, config, MEM_SIZE, SCRATCH_SIZE,
+                            num_weights(config.num_hidden_layers)) {
+    state_dict_ = state_dict();
 }
 
 void ChatGLM2ForCausalLM::load(ModelLoader &loader) {
@@ -1009,6 +972,30 @@ void ChatGLM2ForCausalLM::load(ModelLoader &loader) {
 
     ctx_.weight_buffer = std::string_view(loader.data, loader.size);
     ctx_.init_device_context();
+}
+
+StateDict ChatGLM2ForCausalLM::state_dict() const {
+    StateDict sd;
+    sd.reserve(num_weights(config.num_hidden_layers));
+    sd.emplace_back("transformer.embedding.word_embeddings.weight", transformer.word_embeddings.weight);
+    for (int i = 0; i < config.num_hidden_layers; i++) {
+        std::string layer_prefix = "transformer.encoder.layers." + std::to_string(i) + '.';
+        sd.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
+        sd.emplace_back(layer_prefix + "self_attention.query_key_value.weight",
+                        transformer.layers[i].attention.query_key_value.weight);
+        sd.emplace_back(layer_prefix + "self_attention.query_key_value.bias",
+                        transformer.layers[i].attention.query_key_value.bias);
+        sd.emplace_back(layer_prefix + "self_attention.dense.weight", transformer.layers[i].attention.dense.weight);
+        sd.emplace_back(layer_prefix + "post_attention_layernorm.weight",
+                        transformer.layers[i].post_attention_layernorm.weight);
+        sd.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
+        sd.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
+        // for compatibility
+        sd.emplace_back(layer_prefix + "mlp.dense_4h_to_h.weight", transformer.layers[i].mlp.down_proj.weight);
+    }
+    sd.emplace_back("transformer.encoder.final_layernorm.weight", transformer.final_layernorm.weight);
+    sd.emplace_back("transformer.output_layer.weight", lm_head.weight);
+    return sd;
 }
 
 // ===== Baichuan =====
@@ -1068,39 +1055,9 @@ void BaichuanTokenizer::truncate(std::vector<int> &ids, int max_length) {
 // ===== Baichuan-7B =====
 
 Baichuan7BForCausalLM::Baichuan7BForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM(MODEL_TYPE_BAICHUAN7B, config, MEM_SIZE, SCRATCH_SIZE) {
-    constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
-    const size_t num_weights = 3 + config.num_hidden_layers * 7;
-    const size_t ctx_w_size = num_weights * tensor_ovhd;
-    const size_t ctx_kv_size = 2 * config.num_hidden_layers *
-                               (config.max_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16) + tensor_ovhd);
-    ctx_.dtype = config.dtype;
-    ctx_.ctx_w = make_unique_ggml_context(ctx_w_size, nullptr, true);
-    ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size + 1 * MB, nullptr, false); // 1MB extra for MPS
-
-    transformer = Baichuan7BModel(&ctx_, config);
-    lm_head = Linear(&ctx_, config.hidden_size, config.vocab_size, false);
-    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_w.get()) == ggml_get_mem_size(ctx_.ctx_w.get())) << "corrupted model weights";
-    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ctx_kv_size) << "corrupted kv cache";
-
-    // build state_dict
-    state_dict_.reserve(num_weights);
-    state_dict_.emplace_back("model.embed_tokens.weight", transformer.word_embeddings.weight);
-    for (int i = 0; i < config.num_hidden_layers; i++) {
-        std::string layer_prefix = "model.layers." + std::to_string(i) + '.';
-        state_dict_.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
-        state_dict_.emplace_back(layer_prefix + "self_attn.W_pack.weight",
-                                 transformer.layers[i].attention.query_key_value.weight);
-        state_dict_.emplace_back(layer_prefix + "self_attn.o_proj.weight",
-                                 transformer.layers[i].attention.dense.weight);
-        state_dict_.emplace_back(layer_prefix + "post_attention_layernorm.weight",
-                                 transformer.layers[i].post_attention_layernorm.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.down_proj.weight", transformer.layers[i].mlp.down_proj.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
-    }
-    state_dict_.emplace_back("model.norm.weight", transformer.final_layernorm.weight);
-    state_dict_.emplace_back("lm_head.weight", lm_head.weight);
+    : BasicModelForCausalLM(MODEL_TYPE_BAICHUAN7B, config, MEM_SIZE, SCRATCH_SIZE,
+                            num_weights(config.num_hidden_layers)) {
+    state_dict_ = state_dict();
 }
 
 void Baichuan7BForCausalLM::load(ModelLoader &loader) {
@@ -1116,42 +1073,33 @@ void Baichuan7BForCausalLM::load(ModelLoader &loader) {
     ctx_.init_device_context();
 }
 
+StateDict Baichuan7BForCausalLM::state_dict() const {
+    StateDict sd;
+    sd.reserve(num_weights(config.num_hidden_layers));
+    sd.emplace_back("model.embed_tokens.weight", transformer.word_embeddings.weight);
+    for (int i = 0; i < config.num_hidden_layers; i++) {
+        std::string layer_prefix = "model.layers." + std::to_string(i) + '.';
+        sd.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
+        sd.emplace_back(layer_prefix + "self_attn.W_pack.weight",
+                        transformer.layers[i].attention.query_key_value.weight);
+        sd.emplace_back(layer_prefix + "self_attn.o_proj.weight", transformer.layers[i].attention.dense.weight);
+        sd.emplace_back(layer_prefix + "post_attention_layernorm.weight",
+                        transformer.layers[i].post_attention_layernorm.weight);
+        sd.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
+        sd.emplace_back(layer_prefix + "mlp.down_proj.weight", transformer.layers[i].mlp.down_proj.weight);
+        sd.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
+    }
+    sd.emplace_back("model.norm.weight", transformer.final_layernorm.weight);
+    sd.emplace_back("lm_head.weight", lm_head.weight);
+    return sd;
+}
+
 // ===== Baichuan-13B =====
 
 Baichuan13BForCausalLM::Baichuan13BForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM(MODEL_TYPE_BAICHUAN13B, config, MEM_SIZE, SCRATCH_SIZE) {
-    constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
-    const size_t num_weights = 3 + config.num_hidden_layers * 7;
-    const size_t ctx_w_size = num_weights * tensor_ovhd;
-    const size_t ctx_kv_size = 2 * config.num_hidden_layers *
-                               (config.max_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16) + tensor_ovhd);
-    ctx_.dtype = config.dtype;
-    ctx_.ctx_w = make_unique_ggml_context(ctx_w_size, nullptr, true);
-    ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size + 1 * MB, nullptr, false); // 1MB extra for MPS
-
-    transformer = Baichuan13BModel(&ctx_, config);
-    lm_head = Linear(&ctx_, config.hidden_size, config.vocab_size, false);
-    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_w.get()) == ggml_get_mem_size(ctx_.ctx_w.get())) << "corrupted model weights";
-    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ctx_kv_size) << "corrupted kv cache";
-
-    // build state_dict
-    state_dict_.reserve(num_weights);
-    state_dict_.emplace_back("model.embed_tokens.weight", transformer.word_embeddings.weight);
-    for (int i = 0; i < config.num_hidden_layers; i++) {
-        std::string layer_prefix = "model.layers." + std::to_string(i) + '.';
-        state_dict_.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
-        state_dict_.emplace_back(layer_prefix + "self_attn.W_pack.weight",
-                                 transformer.layers[i].attention.query_key_value.weight);
-        state_dict_.emplace_back(layer_prefix + "self_attn.o_proj.weight",
-                                 transformer.layers[i].attention.dense.weight);
-        state_dict_.emplace_back(layer_prefix + "post_attention_layernorm.weight",
-                                 transformer.layers[i].post_attention_layernorm.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.down_proj.weight", transformer.layers[i].mlp.down_proj.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
-    }
-    state_dict_.emplace_back("model.norm.weight", transformer.final_layernorm.weight);
-    state_dict_.emplace_back("lm_head.weight", lm_head.weight);
+    : BasicModelForCausalLM(MODEL_TYPE_BAICHUAN13B, config, MEM_SIZE, SCRATCH_SIZE,
+                            num_weights(config.num_hidden_layers)) {
+    state_dict_ = state_dict();
 }
 
 void Baichuan13BForCausalLM::load(ModelLoader &loader) {
@@ -1165,6 +1113,27 @@ void Baichuan13BForCausalLM::load(ModelLoader &loader) {
 
     ctx_.weight_buffer = std::string_view(loader.data, loader.size);
     ctx_.init_device_context();
+}
+
+StateDict Baichuan13BForCausalLM::state_dict() const {
+    StateDict sd;
+    sd.reserve(num_weights(config.num_hidden_layers));
+    sd.emplace_back("model.embed_tokens.weight", transformer.word_embeddings.weight);
+    for (int i = 0; i < config.num_hidden_layers; i++) {
+        std::string layer_prefix = "model.layers." + std::to_string(i) + '.';
+        sd.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
+        sd.emplace_back(layer_prefix + "self_attn.W_pack.weight",
+                        transformer.layers[i].attention.query_key_value.weight);
+        sd.emplace_back(layer_prefix + "self_attn.o_proj.weight", transformer.layers[i].attention.dense.weight);
+        sd.emplace_back(layer_prefix + "post_attention_layernorm.weight",
+                        transformer.layers[i].post_attention_layernorm.weight);
+        sd.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
+        sd.emplace_back(layer_prefix + "mlp.down_proj.weight", transformer.layers[i].mlp.down_proj.weight);
+        sd.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
+    }
+    sd.emplace_back("model.norm.weight", transformer.final_layernorm.weight);
+    sd.emplace_back("lm_head.weight", lm_head.weight);
+    return sd;
 }
 
 // ===== InternLM =====
@@ -1221,118 +1190,54 @@ std::string InternLMTokenizer::build_prompt(const std::vector<std::string> &hist
     return oss_prompt.str();
 }
 
-InternLM7BForCausalLM::InternLM7BForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM(MODEL_TYPE_INTERNLM, config, MEM_SIZE, SCRATCH_SIZE) {
-    constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
-    const size_t num_weights = 3 + config.num_hidden_layers * 9;
-    const size_t ctx_w_size = num_weights * tensor_ovhd;
-    const size_t ctx_kv_size = 2 * config.num_hidden_layers *
-                               (config.max_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16) + tensor_ovhd);
-    ctx_.dtype = config.dtype;
-    ctx_.ctx_w = make_unique_ggml_context(ctx_w_size, nullptr, true);
-    ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size + 1 * MB, nullptr, false); // 1MB extra for MPS
-
-    transformer = InternLM7BModel(&ctx_, config);
-    lm_head = Linear(&ctx_, config.hidden_size, config.vocab_size, false);
-    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_w.get()) == ggml_get_mem_size(ctx_.ctx_w.get())) << "corrupted model weights";
-    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ctx_kv_size) << "corrupted kv cache";
-
-    // build state_dict
-    state_dict_.reserve(num_weights);
-    state_dict_.emplace_back("model.embed_tokens.weight", transformer.word_embeddings.weight);
-    for (int i = 0; i < config.num_hidden_layers; i++) {
-        std::string layer_prefix = "model.layers." + std::to_string(i) + '.';
-        state_dict_.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
-        state_dict_.emplace_back(layer_prefix + "self_attn.qkv_proj.weight",
-                                 transformer.layers[i].attention.query_key_value.weight);
-        if (transformer.layers[i].attention.query_key_value.bias) {
-            state_dict_.emplace_back(layer_prefix + "self_attn.qkv_proj.bias",
-                                     transformer.layers[i].attention.query_key_value.bias);
-        }
-        state_dict_.emplace_back(layer_prefix + "self_attn.o_proj.weight",
-                                 transformer.layers[i].attention.dense.weight);
-        if (transformer.layers[i].attention.dense.bias) {
-            state_dict_.emplace_back(layer_prefix + "self_attn.o_proj.bias",
-                                     transformer.layers[i].attention.dense.bias);
-        }
-        state_dict_.emplace_back(layer_prefix + "post_attention_layernorm.weight",
-                                 transformer.layers[i].post_attention_layernorm.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.down_proj.weight", transformer.layers[i].mlp.down_proj.weight);
-    }
-    state_dict_.emplace_back("model.norm.weight", transformer.final_layernorm.weight);
-    state_dict_.emplace_back("lm_head.weight", lm_head.weight);
+template <typename InternLMModel>
+InternLMForCausalLM<InternLMModel>::InternLMForCausalLM(const ModelConfig &config)
+    : BasicModelForCausalLM<InternLMModel>(MODEL_TYPE_INTERNLM, config, MEM_SIZE, SCRATCH_SIZE,
+                                           num_weights(config.num_hidden_layers)) {
+    this->state_dict_ = state_dict();
 }
 
-void InternLM7BForCausalLM::load(ModelLoader &loader) {
-    for (auto &item : state_dict_) {
+template <typename InternLMModel>
+void InternLMForCausalLM<InternLMModel>::load(ModelLoader &loader) {
+    for (auto &item : this->state_dict_) {
         const std::string &name = item.first;
         ggml_tensor *tensor = item.second;
         loader.read_tensor(name, tensor);
     }
 
-    to_device("model.embed_tokens.weight");
+    this->to_device("model.embed_tokens.weight");
 
-    ctx_.weight_buffer = std::string_view(loader.data, loader.size);
-    ctx_.init_device_context();
+    this->ctx_.weight_buffer = std::string_view(loader.data, loader.size);
+    this->ctx_.init_device_context();
 }
 
-InternLM20BForCausalLM::InternLM20BForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM(MODEL_TYPE_INTERNLM, config, MEM_SIZE, SCRATCH_SIZE) {
-    constexpr size_t tensor_ovhd = GGML_TENSOR_SIZE + GGML_OBJECT_SIZE;
-    const size_t num_weights = 3 + config.num_hidden_layers * 7;
-    const size_t ctx_w_size = num_weights * tensor_ovhd;
-    const size_t ctx_kv_size = 2 * config.num_hidden_layers *
-                               (config.max_length * config.hidden_size * ggml_type_size(GGML_TYPE_F16) + tensor_ovhd);
-    ctx_.dtype = config.dtype;
-    ctx_.ctx_w = make_unique_ggml_context(ctx_w_size, nullptr, true);
-    ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size + 1 * MB, nullptr, false); // 1MB extra for MPS
-
-    transformer = InternLM20BModel(&ctx_, config);
-    lm_head = Linear(&ctx_, config.hidden_size, config.vocab_size, false);
-    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_w.get()) == ggml_get_mem_size(ctx_.ctx_w.get())) << "corrupted model weights";
-    CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_kv.get()) == ctx_kv_size) << "corrupted kv cache";
-
-    // build state_dict
-    state_dict_.reserve(num_weights);
-    state_dict_.emplace_back("model.embed_tokens.weight", transformer.word_embeddings.weight);
-    for (int i = 0; i < config.num_hidden_layers; i++) {
+template <typename InternLMModel>
+StateDict InternLMForCausalLM<InternLMModel>::state_dict() const {
+    StateDict sd;
+    sd.reserve(num_weights(this->config.num_hidden_layers));
+    sd.emplace_back("model.embed_tokens.weight", this->transformer.word_embeddings.weight);
+    for (int i = 0; i < this->config.num_hidden_layers; i++) {
         std::string layer_prefix = "model.layers." + std::to_string(i) + '.';
-        state_dict_.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
-        state_dict_.emplace_back(layer_prefix + "self_attn.qkv_proj.weight",
-                                 transformer.layers[i].attention.query_key_value.weight);
-        if (transformer.layers[i].attention.query_key_value.bias) {
-            state_dict_.emplace_back(layer_prefix + "self_attn.qkv_proj.bias",
-                                     transformer.layers[i].attention.query_key_value.bias);
+        sd.emplace_back(layer_prefix + "input_layernorm.weight", this->transformer.layers[i].input_layernorm.weight);
+        sd.emplace_back(layer_prefix + "self_attn.qkv_proj.weight",
+                        this->transformer.layers[i].attention.query_key_value.weight);
+        if (this->transformer.layers[i].attention.query_key_value.bias) {
+            sd.emplace_back(layer_prefix + "self_attn.qkv_proj.bias",
+                            this->transformer.layers[i].attention.query_key_value.bias);
         }
-        state_dict_.emplace_back(layer_prefix + "self_attn.o_proj.weight",
-                                 transformer.layers[i].attention.dense.weight);
-        if (transformer.layers[i].attention.dense.bias) {
-            state_dict_.emplace_back(layer_prefix + "self_attn.o_proj.bias",
-                                     transformer.layers[i].attention.dense.bias);
+        sd.emplace_back(layer_prefix + "self_attn.o_proj.weight", this->transformer.layers[i].attention.dense.weight);
+        if (this->transformer.layers[i].attention.dense.bias) {
+            sd.emplace_back(layer_prefix + "self_attn.o_proj.bias", this->transformer.layers[i].attention.dense.bias);
         }
-        state_dict_.emplace_back(layer_prefix + "post_attention_layernorm.weight",
-                                 transformer.layers[i].post_attention_layernorm.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
-        state_dict_.emplace_back(layer_prefix + "mlp.down_proj.weight", transformer.layers[i].mlp.down_proj.weight);
+        sd.emplace_back(layer_prefix + "post_attention_layernorm.weight",
+                        this->transformer.layers[i].post_attention_layernorm.weight);
+        sd.emplace_back(layer_prefix + "mlp.gate_proj.weight", this->transformer.layers[i].mlp.gate_proj.weight);
+        sd.emplace_back(layer_prefix + "mlp.up_proj.weight", this->transformer.layers[i].mlp.up_proj.weight);
+        sd.emplace_back(layer_prefix + "mlp.down_proj.weight", this->transformer.layers[i].mlp.down_proj.weight);
     }
-    state_dict_.emplace_back("model.norm.weight", transformer.final_layernorm.weight);
-    state_dict_.emplace_back("lm_head.weight", lm_head.weight);
-}
-
-void InternLM20BForCausalLM::load(ModelLoader &loader) {
-    for (auto &item : state_dict_) {
-        const std::string &name = item.first;
-        ggml_tensor *tensor = item.second;
-        loader.read_tensor(name, tensor);
-    }
-
-    to_device("model.embed_tokens.weight");
-
-    ctx_.weight_buffer = std::string_view(loader.data, loader.size);
-    ctx_.init_device_context();
+    sd.emplace_back("model.norm.weight", this->transformer.final_layernorm.weight);
+    sd.emplace_back("lm_head.weight", this->lm_head.weight);
+    return sd;
 }
 
 // ===== pipeline =====
