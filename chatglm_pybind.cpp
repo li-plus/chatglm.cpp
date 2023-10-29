@@ -36,6 +36,7 @@ PYBIND11_MODULE(_C, m) {
     m.doc() = "ChatGLM.cpp python binding";
 
     py::class_<ModelConfig>(m, "ModelConfig")
+        .def_readonly("model_type", &ModelConfig::model_type)
         .def_readonly("dtype", &ModelConfig::dtype)
         .def_readonly("vocab_size", &ModelConfig::vocab_size)
         .def_readonly("hidden_size", &ModelConfig::hidden_size)
@@ -48,7 +49,8 @@ PYBIND11_MODULE(_C, m) {
         .def_readonly("bos_token_id", &ModelConfig::bos_token_id)
         .def_readonly("eos_token_id", &ModelConfig::eos_token_id)
         .def_readonly("pad_token_id", &ModelConfig::pad_token_id)
-        .def_readonly("sep_token_id", &ModelConfig::sep_token_id);
+        .def_readonly("sep_token_id", &ModelConfig::sep_token_id)
+        .def_property_readonly("model_type_name", &ModelConfig::model_type_name);
 
     py::class_<BaseTokenizer, PyBaseTokenizer>(m, "BaseTokenizer")
         .def("encode", &BaseTokenizer::encode)
@@ -56,7 +58,6 @@ PYBIND11_MODULE(_C, m) {
         .def("encode_history", &BaseTokenizer::encode_history);
 
     py::class_<BaseModelForCausalLM, PyBaseModelForCausalLM>(m, "BaseModelForCausalLM")
-        .def_property_readonly("type_name", &BaseModelForCausalLM::type_name)
         .def("generate_next_token", &BaseModelForCausalLM::generate_next_token)
         .def_readonly("config", &BaseModelForCausalLM::config);
 
@@ -84,6 +85,10 @@ PYBIND11_MODULE(_C, m) {
     py::class_<ChatGLM2Tokenizer, BaseTokenizer>(m, "ChatGLM2Tokenizer");
 
     py::class_<ChatGLM2ForCausalLM, BaseModelForCausalLM>(m, "ChatGLM2ForCausalLM");
+
+    // ===== ChatGLM3 =====
+
+    py::class_<ChatGLM3Tokenizer, BaseTokenizer>(m, "ChatGLM3Tokenizer");
 
     // ===== Baichuan7B/13B =====
 
