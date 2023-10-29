@@ -751,6 +751,40 @@ TEST_F(ChatGLMTest, GLM2Model) {
 //     }
 // }
 
+TEST_F(ChatGLMTest, GLM3Model) {
+    fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/glm3_model.data";
+
+    ModelConfig config;
+    config.vocab_size = 5;
+    config.hidden_size = 32;
+    config.num_attention_heads = 8;
+    config.num_kv_heads = 2;
+    config.num_hidden_layers = 1;
+    config.intermediate_size = 48;
+    config.norm_eps = 1e-5;
+    config.max_length = 8;
+
+    constexpr int seq_len = 3;
+
+    ChatGLM3Model model(&ctx, config);
+
+    tensor_to_device(model.layers[0].attention.k_cache);
+    tensor_to_device(model.layers[0].attention.v_cache);
+
+    std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
+                                           model.layers[0].input_layernorm.weight,
+                                           model.layers[0].attention.query_key_value.weight,
+                                           model.layers[0].attention.query_key_value.bias,
+                                           model.layers[0].attention.dense.weight,
+                                           model.layers[0].post_attention_layernorm.weight,
+                                           model.layers[0].mlp.gate_proj.weight,
+                                           model.layers[0].mlp.up_proj.weight,
+                                           model.layers[0].mlp.down_proj.weight,
+                                           model.final_layernorm.weight};
+
+    test_model(model, config, data_path, seq_len, all_weights);
+}
+
 TEST_F(ChatGLMTest, Baichuan7BModel) {
     fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/baichuan7b_model.data";
 
@@ -1079,6 +1113,64 @@ TEST(Pipeline, ChatGLM2) {
         std::vector<std::string> history{"你好"};
         std::string output = pipeline.chat(history, gen_config);
         EXPECT_EQ(output, "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。");
+    }
+}
+
+TEST(Pipeline, ChatGLM3) {
+    fs::path model_path = fs::path(__FILE__).parent_path() / "chatglm3-ggml.bin";
+    if (!fs::exists(model_path)) {
+        GTEST_SKIP() << "Skipping ChatGLM3 e2e test (ggml model not found)";
+    }
+    Pipeline pipeline(model_path.string());
+    EXPECT_TRUE(dynamic_cast<ChatGLM3ForCausalLM *>(pipeline.model.get()));
+
+    // tokenizer
+    {
+        std::vector<TokenizerTestCase> cases{{"你好", {64790, 64792, 36474, 54591}}};
+        check_tokenizer(pipeline.tokenizer.get(), cases);
+
+        {
+            std::vector<std::string> history{"你好"};
+            std::vector<int> input_ids = pipeline.tokenizer->encode_history(history, 2048);
+            std::vector<int> target_ids{64790, 64792, 64795, 30910, 13, 36474, 54591, 64796, 30910, 13};
+            EXPECT_EQ(input_ids, target_ids);
+        }
+        {
+            std::vector<std::string> history{"你好",
+                                             "你好👋！我是人工智能助手 ChatGLM3-6B，很高兴见到你，欢迎问我任何问题。",
+                                             "晚上睡不着应该怎么办"};
+            std::vector<int> input_ids = pipeline.tokenizer->encode_history(history, 2048);
+            std::vector<int> target_ids{64790, 64792, 64795, 30910, 13,    36474, 54591, 64796, 30910, 13,
+                                        36474, 54591, 243,   162,   148,   142,   31404, 33030, 34797, 42481,
+                                        22011, 10461, 30944, 30966, 30941, 30978, 30949, 31123, 48895, 35214,
+                                        54622, 31123, 32616, 39905, 31901, 31639, 31155, 64795, 30910, 13,
+                                        30910, 32820, 54266, 31876, 35153, 64796, 30910, 13};
+            EXPECT_EQ(input_ids, target_ids);
+        }
+    }
+
+    // memory test
+    {
+        GenerationConfig gen_config;
+        gen_config.max_length = 2048;
+        gen_config.max_context_length = gen_config.max_length - 1;
+        gen_config.do_sample = false;
+
+        std::ostringstream oss;
+        for (int i = 0; i < gen_config.max_context_length; i++) {
+            oss << "你好";
+        }
+        std::vector<std::string> history{oss.str()};
+        pipeline.chat(history, gen_config);
+    }
+
+    // chat
+    {
+        GenerationConfig gen_config;
+        gen_config.do_sample = false;
+        std::vector<std::string> history{"你好"};
+        std::string output = pipeline.chat(history, gen_config);
+        EXPECT_EQ(output, "你好👋！我是人工智能助手 ChatGLM3-6B，很高兴见到你，欢迎问我任何问题。");
     }
 }
 

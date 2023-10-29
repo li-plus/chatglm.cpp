@@ -384,6 +384,77 @@ def make_data_glm2_model():
         y3.numpy().tofile(f)
 
 
+def make_data_glm3_model():
+    CHATGLM3_MODEL_PATH = Path("./chatglm3-6b").expanduser()
+
+    sys.path.append(str(CHATGLM3_MODEL_PATH))
+    from modeling_chatglm import ChatGLMModel
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained(CHATGLM3_MODEL_PATH, trust_remote_code=True)
+    config.hidden_size = 32
+    config.num_attention_heads = 8
+    config.num_layers = 1
+    config.padded_vocab_size = 5
+    config.multi_query_group_num = 2
+    config.ffn_hidden_size = 48
+    config.kv_channels = config.hidden_size // config.num_attention_heads
+    config.torch_dtype = torch.float32
+
+    m = ChatGLMModel(config).float().eval()
+    for param in m.parameters():
+        param.data.uniform_(-0.5, 0.5)
+
+    seq_len = 3
+
+    # self attention
+    x1 = torch.arange(seq_len, dtype=torch.int64)[None, :]
+    position_ids = torch.arange(seq_len, dtype=torch.int64)[None, :]
+    attn_mask = torch.ones(1, seq_len, dtype=torch.int64)
+    with torch.no_grad():
+        out = m(x1, position_ids=position_ids, attention_mask=attn_mask, use_cache=True)
+        y1 = out.last_hidden_state
+        kv_cache = out.past_key_values
+
+    # cross attention
+    x2 = torch.tensor([[seq_len]], dtype=torch.int64)
+    position_ids = torch.tensor([[seq_len]], dtype=torch.int64)
+    attn_mask = torch.ones(1, seq_len + 1, dtype=torch.int64)
+    with torch.no_grad():
+        out = m(x2, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True)
+        y2 = out.last_hidden_state
+        kv_cache = out.past_key_values
+
+    # cross attention
+    x3 = torch.tensor([[seq_len + 1]], dtype=torch.int64)
+    position_ids = torch.tensor([[seq_len + 1]], dtype=torch.int64)
+    attn_mask = torch.ones(1, seq_len + 2, dtype=torch.int64)
+    with torch.no_grad():
+        out = m(x3, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True)
+        y3 = out.last_hidden_state
+        kv_cache = out.past_key_values
+
+    print(m)
+
+    with open(HERE / "data/glm3_model.data", "wb") as f:
+        m.embedding.word_embeddings.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].input_layernorm.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].self_attention.query_key_value.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].self_attention.query_key_value.bias.data.numpy().tofile(f)
+        m.encoder.layers[0].self_attention.dense.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].post_attention_layernorm.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].mlp.dense_h_to_4h.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].mlp.dense_4h_to_h.weight.data.numpy().tofile(f)
+        m.encoder.final_layernorm.weight.data.numpy().tofile(f)
+
+        x1.int().numpy().tofile(f)
+        y1.numpy().tofile(f)
+        x2.int().numpy().tofile(f)
+        y2.numpy().tofile(f)
+        x3.int().numpy().tofile(f)
+        y3.numpy().tofile(f)
+
+
 def _make_data_baichuan_model(model_path, out_name):
     sys.path.append(str(model_path))
     from modeling_baichuan import BaichuanModel
@@ -549,9 +620,10 @@ def main():
     # make_data_rms_norm()
     # make_data_glm_model()
     # make_data_glm2_model()
+    make_data_glm3_model()
     # make_data_baichuan7b_model()
     # make_data_baichuan13b_model()
-    make_internlm_model()
+    # make_internlm_model()
 
 
 if __name__ == "__main__":

@@ -46,6 +46,17 @@ ggml_tensor *tensor_to_device(ggml_tensor *tensor);
 
 ggml_tensor *tensor_to_cpu(ggml_tensor *tensor);
 
+enum ModelType {
+    MODEL_TYPE_CHATGLM = 1,
+    MODEL_TYPE_CHATGLM2 = 2,
+    MODEL_TYPE_CHATGLM3 = 3,
+    MODEL_TYPE_BAICHUAN7B = 1024,
+    MODEL_TYPE_BAICHUAN13B = 1025,
+    MODEL_TYPE_INTERNLM = 1280,
+};
+
+std::string to_string(ModelType model_type);
+
 // For compatibility
 struct ConfigRecordV1 {
     // common attributes
@@ -74,25 +85,28 @@ class ModelConfig {
   public:
     ModelConfig() = default;
 
-    ModelConfig(ggml_type dtype, int vocab_size, int hidden_size, int num_attention_heads, int num_kv_heads,
-                int num_hidden_layers, int intermediate_size, float norm_eps, int max_length, int bos_token_id,
-                int eos_token_id, int pad_token_id, int sep_token_id)
-        : dtype(dtype), vocab_size(vocab_size), hidden_size(hidden_size), num_attention_heads(num_attention_heads),
-          num_kv_heads(num_kv_heads), num_hidden_layers(num_hidden_layers), intermediate_size(intermediate_size),
-          norm_eps(norm_eps), max_length(max_length), bos_token_id(bos_token_id), eos_token_id(eos_token_id),
-          pad_token_id(pad_token_id), sep_token_id(sep_token_id) {}
+    ModelConfig(ModelType model_type, ggml_type dtype, int vocab_size, int hidden_size, int num_attention_heads,
+                int num_kv_heads, int num_hidden_layers, int intermediate_size, float norm_eps, int max_length,
+                int bos_token_id, int eos_token_id, int pad_token_id, int sep_token_id)
+        : model_type(model_type), dtype(dtype), vocab_size(vocab_size), hidden_size(hidden_size),
+          num_attention_heads(num_attention_heads), num_kv_heads(num_kv_heads), num_hidden_layers(num_hidden_layers),
+          intermediate_size(intermediate_size), norm_eps(norm_eps), max_length(max_length), bos_token_id(bos_token_id),
+          eos_token_id(eos_token_id), pad_token_id(pad_token_id), sep_token_id(sep_token_id) {}
 
-    ModelConfig(const ConfigRecordV1 &rec)
-        : ModelConfig(rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads, rec.num_attention_heads,
+    ModelConfig(ModelType model_type, const ConfigRecordV1 &rec)
+        : ModelConfig(model_type, rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads,
+                      rec.num_attention_heads, rec.num_hidden_layers, rec.intermediate_size, 1e-5, rec.max_length,
+                      rec.bos_token_id, rec.eos_token_id, rec.pad_token_id, rec.sep_token_id) {}
+
+    ModelConfig(ModelType model_type, const ConfigRecordV2 &rec)
+        : ModelConfig(model_type, rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads, rec.num_kv_heads,
                       rec.num_hidden_layers, rec.intermediate_size, 1e-5, rec.max_length, rec.bos_token_id,
                       rec.eos_token_id, rec.pad_token_id, rec.sep_token_id) {}
 
-    ModelConfig(const ConfigRecordV2 &rec)
-        : ModelConfig(rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads, rec.num_kv_heads,
-                      rec.num_hidden_layers, rec.intermediate_size, 1e-5, rec.max_length, rec.bos_token_id,
-                      rec.eos_token_id, rec.pad_token_id, rec.sep_token_id) {}
+    std::string model_type_name() const { return to_string(model_type); }
 
   public:
+    ModelType model_type;
     ggml_type dtype;
     int vocab_size;
     int hidden_size;
@@ -734,18 +748,8 @@ struct GenerationConfig {
           top_p(top_p), temperature(temperature), repetition_penalty(repetition_penalty), num_threads(num_threads) {}
 };
 
-enum ModelType {
-    MODEL_TYPE_CHATGLM = 1,
-    MODEL_TYPE_CHATGLM2 = 2,
-    MODEL_TYPE_BAICHUAN7B = 1024,
-    MODEL_TYPE_BAICHUAN13B = 1025,
-    MODEL_TYPE_INTERNLM = 1280,
-};
-
 int get_num_physical_cores();
 int get_default_num_threads();
-
-std::string to_string(ModelType model_type);
 
 struct TokenIdScore {
     int id;
@@ -764,15 +768,11 @@ struct TokenIdScore {
 
 class BaseModelForCausalLM {
   public:
-    BaseModelForCausalLM(ModelType model_type, ModelConfig config, size_t mem_size, size_t scratch_size,
-                         size_t num_weights);
+    BaseModelForCausalLM(ModelConfig config, size_t mem_size, size_t scratch_size, size_t num_weights);
     virtual ~BaseModelForCausalLM() = default;
 
     virtual void load(ModelLoader &loader) = 0;
     virtual ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const = 0;
-
-    ModelType type() const { return model_type_; }
-    std::string type_name() const { return to_string(model_type_); }
 
     std::vector<int> generate(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
                               BaseStreamer *streamer = nullptr);
@@ -791,7 +791,6 @@ class BaseModelForCausalLM {
     static void sampling_softmax_inplace(TokenIdScore *first, TokenIdScore *last);
 
   protected:
-    ModelType model_type_;
     ModelContext ctx_;
 
   public:
@@ -803,9 +802,8 @@ using StateDict = std::vector<std::pair<std::string, ggml_tensor *>>;
 template <typename Model>
 class BasicModelForCausalLM : public BaseModelForCausalLM {
   protected:
-    BasicModelForCausalLM(ModelType model_type, const ModelConfig &config, size_t mem_size, size_t scratch_size,
-                          size_t num_weights)
-        : BaseModelForCausalLM(model_type, config, mem_size, scratch_size, num_weights), transformer(&ctx_, config),
+    BasicModelForCausalLM(const ModelConfig &config, size_t mem_size, size_t scratch_size, size_t num_weights)
+        : BaseModelForCausalLM(config, mem_size, scratch_size, num_weights), transformer(&ctx_, config),
           lm_head(&ctx_, config.hidden_size, config.vocab_size, false) {
         CHATGLM_CHECK(ggml_used_mem(ctx_.ctx_w.get()) == ggml_get_mem_size(ctx_.ctx_w.get()))
             << "corrupted model weights";
@@ -982,6 +980,40 @@ class ChatGLM2ForCausalLM : public BasicModelForCausalLM<ChatGLM2Model> {
     static constexpr size_t MEM_SIZE = 512 * MB;      // 2k context
     static constexpr size_t SCRATCH_SIZE = 1280 * MB; // 2k context
 };
+
+// ===== ChatGLM3-6B =====
+
+class ChatGLM3Tokenizer : public BaseTokenizer {
+  public:
+    ChatGLM3Tokenizer(std::string_view serialized_model_proto);
+
+    std::vector<int> encode(const std::string &text, int max_length) const override;
+
+    std::string decode(const std::vector<int> &ids) const override;
+
+    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
+
+    bool is_special_id(int id) const;
+
+  protected:
+    static void truncate(std::vector<int> &ids, int max_length);
+
+  public:
+    sentencepiece::SentencePieceProcessor sp;
+    int mask_token_id;
+    int gmask_token_id;
+    int smask_token_id;
+    int sop_token_id;
+    int eop_token_id;
+    int system_token_id;
+    int user_token_id;
+    int assistant_token_id;
+    int observation_token_id;
+};
+
+using ChatGLM3Model = ChatGLM2Model;
+
+using ChatGLM3ForCausalLM = ChatGLM2ForCausalLM;
 
 // ===== Baichuan =====
 
