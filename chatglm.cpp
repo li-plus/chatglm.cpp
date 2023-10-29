@@ -422,6 +422,8 @@ std::string to_string(ModelType model_type) {
         return "ChatGLM";
     case MODEL_TYPE_CHATGLM2:
         return "ChatGLM2";
+    case MODEL_TYPE_CHATGLM3:
+        return "ChatGLM3";
     case MODEL_TYPE_BAICHUAN7B:
         return "Baichuan7B";
     case MODEL_TYPE_BAICHUAN13B:
@@ -433,9 +435,8 @@ std::string to_string(ModelType model_type) {
     }
 }
 
-BaseModelForCausalLM::BaseModelForCausalLM(ModelType model_type, ModelConfig config, size_t mem_size,
-                                           size_t scratch_size, size_t num_weights)
-    : model_type_(model_type), config(config) {
+BaseModelForCausalLM::BaseModelForCausalLM(ModelConfig config, size_t mem_size, size_t scratch_size, size_t num_weights)
+    : config(config) {
     ctx_.dtype = config.dtype;
     const size_t ctx_w_size = num_weights * ggml_tensor_overhead();
     const size_t ctx_kv_size = 2 * config.num_hidden_layers *
@@ -821,7 +822,7 @@ ggml_tensor *GLMBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, gg
 }
 
 ChatGLMForCausalLM::ChatGLMForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM(MODEL_TYPE_CHATGLM, config, MEM_SIZE, SCRATCH_SIZE, num_weights(config.num_hidden_layers)) {
+    : BasicModelForCausalLM(config, MEM_SIZE, SCRATCH_SIZE, num_weights(config.num_hidden_layers)) {
     state_dict_ = state_dict();
 }
 
@@ -933,8 +934,7 @@ bool ChatGLM2Tokenizer::is_special_id(int id) const {
 }
 
 ChatGLM2ForCausalLM::ChatGLM2ForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM(MODEL_TYPE_CHATGLM2, config, MEM_SIZE, SCRATCH_SIZE,
-                            num_weights(config.num_hidden_layers)) {
+    : BasicModelForCausalLM(config, MEM_SIZE, SCRATCH_SIZE, num_weights(config.num_hidden_layers)) {
     state_dict_ = state_dict();
 }
 
@@ -998,6 +998,79 @@ StateDict ChatGLM2ForCausalLM::state_dict() const {
     return sd;
 }
 
+// ===== ChatGLM3-6B =====
+
+ChatGLM3Tokenizer::ChatGLM3Tokenizer(std::string_view serialized_model_proto) {
+    const auto status = sp.LoadFromSerializedProto(serialized_model_proto);
+    CHATGLM_CHECK(status.ok()) << status.ToString();
+
+    int special_id = sp.GetPieceSize();
+    mask_token_id = special_id++;
+    gmask_token_id = special_id++;
+    smask_token_id = special_id++;
+    sop_token_id = special_id++;
+    eop_token_id = special_id++;
+    system_token_id = special_id++;
+    user_token_id = special_id++;
+    assistant_token_id = special_id++;
+    observation_token_id = special_id++;
+}
+
+std::vector<int> ChatGLM3Tokenizer::encode(const std::string &text, int max_length) const {
+    std::vector<int> ids;
+    sp.Encode(text, &ids);
+    ids.insert(ids.begin(), {gmask_token_id, sop_token_id}); // special prefix
+    truncate(ids, max_length);
+    return ids;
+}
+
+std::string ChatGLM3Tokenizer::decode(const std::vector<int> &ids) const {
+    // filter out special tokens
+    std::vector<int> normal_ids(ids);
+    normal_ids.erase(std::remove_if(normal_ids.begin(), normal_ids.end(), [this](int id) { return is_special_id(id); }),
+                     normal_ids.end());
+
+    std::string text;
+    sp.Decode(normal_ids, &text);
+    text = replace_punctuations(text);
+    return text;
+}
+
+std::vector<int> ChatGLM3Tokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
+    // TODO: need a new api for system / tools / metadata prompt
+    std::vector<int> newline_ids;
+    sp.Encode("\n", &newline_ids);
+    std::vector<int> input_ids{gmask_token_id, sop_token_id};
+    for (size_t i = 0; i < history.size(); i++) {
+        // TODO: support all roles
+        input_ids.emplace_back((i % 2 == 0) ? user_token_id : assistant_token_id);
+        // TODO: support metadata
+        input_ids.insert(input_ids.end(), newline_ids.begin(), newline_ids.end());
+        std::vector<int> content_ids;
+        sp.Encode(history[i], &content_ids);
+        input_ids.insert(input_ids.end(), content_ids.begin(), content_ids.end());
+    }
+    input_ids.emplace_back(assistant_token_id);
+    // NOTE: push '\n' into input_ids to avoid model generating it, saving 2 tokens
+    input_ids.insert(input_ids.end(), newline_ids.begin(), newline_ids.end());
+    truncate(input_ids, max_length);
+    return input_ids;
+}
+
+bool ChatGLM3Tokenizer::is_special_id(int id) const {
+    return id == mask_token_id || id == gmask_token_id || id == smask_token_id || id == sop_token_id ||
+           id == eop_token_id || id == system_token_id || id == user_token_id || id == assistant_token_id ||
+           id == observation_token_id;
+}
+
+void ChatGLM3Tokenizer::truncate(std::vector<int> &ids, int max_length) {
+    if ((int)ids.size() > max_length) {
+        // sliding window: drop the least recent history while keeping the two special prefix tokens
+        int num_drop = (int)ids.size() - max_length;
+        ids.erase(ids.begin() + 2, ids.begin() + 2 + num_drop);
+    }
+}
+
 // ===== Baichuan =====
 
 BaichuanTokenizer::BaichuanTokenizer(std::string_view serialized_model_proto) {
@@ -1055,8 +1128,7 @@ void BaichuanTokenizer::truncate(std::vector<int> &ids, int max_length) {
 // ===== Baichuan-7B =====
 
 Baichuan7BForCausalLM::Baichuan7BForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM(MODEL_TYPE_BAICHUAN7B, config, MEM_SIZE, SCRATCH_SIZE,
-                            num_weights(config.num_hidden_layers)) {
+    : BasicModelForCausalLM(config, MEM_SIZE, SCRATCH_SIZE, num_weights(config.num_hidden_layers)) {
     state_dict_ = state_dict();
 }
 
@@ -1097,8 +1169,7 @@ StateDict Baichuan7BForCausalLM::state_dict() const {
 // ===== Baichuan-13B =====
 
 Baichuan13BForCausalLM::Baichuan13BForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM(MODEL_TYPE_BAICHUAN13B, config, MEM_SIZE, SCRATCH_SIZE,
-                            num_weights(config.num_hidden_layers)) {
+    : BasicModelForCausalLM(config, MEM_SIZE, SCRATCH_SIZE, num_weights(config.num_hidden_layers)) {
     state_dict_ = state_dict();
 }
 
@@ -1192,8 +1263,7 @@ std::string InternLMTokenizer::build_prompt(const std::vector<std::string> &hist
 
 template <typename InternLMModel>
 InternLMForCausalLM<InternLMModel>::InternLMForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM<InternLMModel>(MODEL_TYPE_INTERNLM, config, MEM_SIZE, SCRATCH_SIZE,
-                                           num_weights(config.num_hidden_layers)) {
+    : BasicModelForCausalLM<InternLMModel>(config, MEM_SIZE, SCRATCH_SIZE, num_weights(config.num_hidden_layers)) {
     this->state_dict_ = state_dict();
 }
 
@@ -1258,7 +1328,7 @@ Pipeline::Pipeline(const std::string &path) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
-        ModelConfig config(loader.read_basic<ConfigRecordV1>());
+        ModelConfig config(model_type, loader.read_basic<ConfigRecordV1>());
 
         // load tokenizer
         int proto_size = loader.read_basic<int>();
@@ -1269,26 +1339,32 @@ Pipeline::Pipeline(const std::string &path) {
         // load model
         model = std::make_unique<ChatGLMForCausalLM>(config);
         model->load(loader);
-    } else if (model_type == MODEL_TYPE_CHATGLM2) {
+    } else if (model_type == MODEL_TYPE_CHATGLM2 || model_type == MODEL_TYPE_CHATGLM3) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
-        ModelConfig config(loader.read_basic<ConfigRecordV2>());
+        ModelConfig config(model_type, loader.read_basic<ConfigRecordV2>());
 
         // load tokenizer
         int proto_size = loader.read_basic<int>();
         std::string_view serialized_model_proto((char *)mapped_file->data + loader.tell(), proto_size);
         loader.seek(proto_size, SEEK_CUR);
-        tokenizer = std::make_unique<ChatGLM2Tokenizer>(serialized_model_proto);
+
+        if (model_type == MODEL_TYPE_CHATGLM2) {
+            tokenizer = std::make_unique<ChatGLM2Tokenizer>(serialized_model_proto);
+            model = std::make_unique<ChatGLM2ForCausalLM>(config);
+        } else {
+            tokenizer = std::make_unique<ChatGLM3Tokenizer>(serialized_model_proto);
+            model = std::make_unique<ChatGLM3ForCausalLM>(config);
+        }
 
         // load model
-        model = std::make_unique<ChatGLM2ForCausalLM>(config);
         model->load(loader);
     } else if (model_type == MODEL_TYPE_BAICHUAN7B) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
-        ModelConfig config(loader.read_basic<ConfigRecordV1>());
+        ModelConfig config(model_type, loader.read_basic<ConfigRecordV1>());
         config.norm_eps = 1e-6;
 
         // load tokenizer
@@ -1304,7 +1380,7 @@ Pipeline::Pipeline(const std::string &path) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
-        ModelConfig config(loader.read_basic<ConfigRecordV1>());
+        ModelConfig config(model_type, loader.read_basic<ConfigRecordV1>());
         config.norm_eps = 1e-6;
 
         // load tokenizer
@@ -1320,7 +1396,7 @@ Pipeline::Pipeline(const std::string &path) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
-        ModelConfig config(loader.read_basic<ConfigRecordV1>());
+        ModelConfig config(model_type, loader.read_basic<ConfigRecordV1>());
         config.norm_eps = 1e-6;
 
         // load tokenizer

@@ -70,7 +70,7 @@ def main():
     history = []
     while True:
         try:
-            prompt = input(f"{'Prompt':{len(pipeline.model.type_name)}} > ")
+            prompt = input(f"{'Prompt':{len(pipeline.model.config.model_type_name)}} > ")
         except EOFError:
             break
         if not prompt:
@@ -81,7 +81,7 @@ def main():
             history = []
             continue
         history.append(prompt)
-        print(f"{pipeline.model.type_name} > ", sep="", end="")
+        print(f"{pipeline.model.config.model_type_name} > ", sep="", end="")
         output = ""
         for piece in pipeline.chat(history, **generation_kwargs):
             print(piece, sep="", end="", flush=True)

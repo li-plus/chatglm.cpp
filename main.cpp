@@ -139,7 +139,7 @@ static void chat(Args &args) {
     chatglm::Pipeline pipeline(args.model_path);
     int64_t end_load_us = ggml_time_us();
 
-    std::string model_name = pipeline.model->type_name();
+    std::string model_name = pipeline.model->config.model_type_name();
 
     auto text_streamer = std::make_shared<chatglm::TextStreamer>(std::cout, pipeline.tokenizer.get());
     auto perf_streamer = std::make_shared<chatglm::PerfStreamer>();
@@ -174,7 +174,7 @@ static void chat(Args &args) {
                   << "temperature = " << args.temp << " | "
                   << "num_threads = " << args.num_threads << " |\n";
 
-        std::cout << "loaded " << pipeline.model->type_name() << " model from " << args.model_path
+        std::cout << "loaded " << pipeline.model->config.model_type_name() << " model from " << args.model_path
                   << " within: " << (end_load_us - start_load_us) / 1000.f << " ms\n";
 
         std::cout << std::endl;

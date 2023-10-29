@@ -41,6 +41,7 @@ class GGMLType(Enum):
 class ModelType(Enum):
     CHATGLM = 1
     CHATGLM2 = 2
+    CHATGLM3 = 3
     BAICHUAN7B = 1024
     BAICHUAN13B = 1025
     INTERNLM = 1280
@@ -324,6 +325,10 @@ class ChatGLM2Converter(BaseConverter):
         dump_state_dict(f, weight_names, model.state_dict(), model.config.quantization_bit, ggml_type)
 
 
+class ChatGLM3Converter(ChatGLM2Converter):
+    MODEL_TYPE = ModelType.CHATGLM3
+
+
 class BaichuanConverter(BaseConverter):
     @staticmethod
     def dump_config(f, config, ggml_type):
@@ -481,7 +486,10 @@ def convert(f: BinaryIO, model_name_or_path: str, lora_model_name_or_path: Optio
 
     if model.config.model_type == "chatglm":
         if hasattr(model.config, "multi_query_attention"):
-            ChatGLM2Converter.convert(f, model, tokenizer, ggml_type)
+            if model.config.seq_length == 32768:
+                ChatGLM2Converter.convert(f, model, tokenizer, ggml_type)
+            else:
+                ChatGLM3Converter.convert(f, model, tokenizer, ggml_type)
         else:
             ChatGLMConverter.convert(f, model, tokenizer, ggml_type)
     elif model.config.model_type == "baichuan":
