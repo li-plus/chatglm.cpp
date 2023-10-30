@@ -486,7 +486,8 @@ def convert(f: BinaryIO, model_name_or_path: str, lora_model_name_or_path: Optio
 
     if model.config.model_type == "chatglm":
         if hasattr(model.config, "multi_query_attention"):
-            if model.config.seq_length == 32768:
+            # hack: ChatGLM3 shares the same architecture and model config with ChatGLM2, so I have to check transformers_version to discriminate one from the other
+            if model.config.transformers_version == "4.27.1":
                 ChatGLM2Converter.convert(f, model, tokenizer, ggml_type)
             else:
                 ChatGLM3Converter.convert(f, model, tokenizer, ggml_type)
