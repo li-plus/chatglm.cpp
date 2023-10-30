@@ -249,6 +249,8 @@ pip install git+https://github.com/li-plus/chatglm.cpp.git@main
 pip install .
 ```
 
+Pre-built wheels for CPU backend on Linux / MacOS / Windows are published on [release](https://github.com/li-plus/chatglm.cpp/releases). For CUDA / Metal backends, please compile from source code or source distribution.
+
 **Using pre-converted ggml models**
 
 Here is a simple demo that uses `chatglm_cpp.Pipeline` to load the GGML model and chat with it. First enter the examples folder (`cd examples`) and launch a Python interactive shell:
