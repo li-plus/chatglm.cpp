@@ -20,6 +20,11 @@ jobs:
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.16.2
+        env:
+          CIBW_BUILD: cp*
+          CIBW_SKIP: "*-win32 *_i686 *musllinux*"
+          CIBW_TEST_REQUIRES: pytest
+          CIBW_TEST_COMMAND: pytest {package}/tests/test_chatglm_cpp.py
 
       - uses: actions/upload-artifact@v3
         with:
