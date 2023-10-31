@@ -66,7 +66,7 @@ class ChatCompletionResponse(BaseModel):
     object: Literal["chat.completion", "chat.completion.chunk"]
     created: int = Field(default_factory=lambda: int(time.time()))
     choices: Union[List[ChatCompletionResponseChoice], List[ChatCompletionResponseStreamChoice]]
-    usage: List[ChatUsage]
+    usage: ChatUsage
 
     model_config = {
         "json_schema_extra": {
@@ -170,7 +170,7 @@ async def create_chat_completion(body: ChatCompletionRequest) -> ChatCompletionR
     return ChatCompletionResponse(
         object="chat.completion",
         choices=[ChatCompletionResponseChoice(message=ChatMessage(role="assistant", content=output))],
-        usage=[ChatUsage(prompt_tokens=pt, completion_tokens=rt, total_tokens=pt+rt)],
+        usage=ChatUsage(prompt_tokens=pt, completion_tokens=rt, total_tokens=pt+rt),
     )
 
 
