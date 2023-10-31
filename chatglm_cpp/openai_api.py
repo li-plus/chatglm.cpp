@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 from sse_starlette.sse import EventSourceResponse
+import tiktoken
 
 logging.basicConfig(level=logging.INFO, format=r"%(asctime)s - %(module)s - %(levelname)s - %(message)s")
 
@@ -53,12 +54,19 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     finish_reason: Optional[Literal["stop", "length"]] = None
 
 
+class ChatUsage(BaseModel):
+  prompt_tokens: int
+  completion_tokens: int
+  total_tokens: int
+
+
 class ChatCompletionResponse(BaseModel):
     id: str = "chatcmpl"
     model: str = "default-model"
     object: Literal["chat.completion", "chat.completion.chunk"]
     created: int = Field(default_factory=lambda: int(time.time()))
     choices: Union[List[ChatCompletionResponseChoice], List[ChatCompletionResponseStreamChoice]]
+    usage: List[ChatUsage]
 
     model_config = {
         "json_schema_extra": {
@@ -75,6 +83,12 @@ class ChatCompletionResponse(BaseModel):
                             "finish_reason": "stop",
                         }
                     ],
+                    "usage":
+                        {
+                            "prompt_tokens": 12,
+                            "completion_tokens": 69,
+                            "total_tokens": 81
+                        }
                 }
             ]
         }
@@ -149,10 +163,14 @@ async def create_chat_completion(body: ChatCompletionRequest) -> ChatCompletionR
         temperature=body.temperature,
     )
     logging.info(f'prompt: "{history[-1]}", sync response: "{output}"')
+    encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
+    pt = len(encoding.encode(history[-1]))
+    rt = len(encoding.encode(output))
 
     return ChatCompletionResponse(
         object="chat.completion",
         choices=[ChatCompletionResponseChoice(message=ChatMessage(role="assistant", content=output))],
+        usage=[ChatUsage(prompt_tokens=pt, completion_tokens=rt, total_tokens=pt+rt)],
     )
 
 
