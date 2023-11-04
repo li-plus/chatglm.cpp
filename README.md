@@ -50,7 +50,7 @@ Use `convert.py` to transform ChatGLM-6B into quantized GGML format. For example
 python3 chatglm_cpp/convert.py -i THUDM/chatglm-6b -t q4_0 -o chatglm-ggml.bin
 ```
 
-The original model (`-i <model_name_or_path>`) can be a HuggingFace model name or a local path to your pre-downloaded model. Currently supported models are:
+The original model (`-i <model_name_or_path>`) can be a Hugging Face model name or a local path to your pre-downloaded model. Currently supported models are:
 * ChatGLM-6B: `THUDM/chatglm-6b`, `THUDM/chatglm-6b-int8`, `THUDM/chatglm-6b-int4`
 * ChatGLM2-6B: `THUDM/chatglm2-6b`, `THUDM/chatglm2-6b-int4`
 * ChatGLM3-6B: `THUDM/chatglm3-6b`
