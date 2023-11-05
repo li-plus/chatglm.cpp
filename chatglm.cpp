@@ -12,6 +12,7 @@
 #include <random>
 #include <regex>
 #include <string>
+#include <vector>
 #include <sys/stat.h>
 #include <thread>
 #include <unordered_set>
@@ -916,11 +917,13 @@ std::vector<int> ChatGLM2Tokenizer::encode_history(const std::vector<std::string
 }
 
 std::string ChatGLM2Tokenizer::build_prompt(const std::vector<std::string> &history) {
-    // The first three sentences are taken up by system, user and assistant.
-    CHATGLM_CHECK((history.size()-3) % 2 == 1) << "invalid history size " << history.size();
+    // FIXME:The first three sentences are taken up by system, user and assistant. It's confilct with CHATGLM_CHECK
+    // CHATGLM_CHECK((history.size()) % 2 == 0) << "invalid history size " << history.size();
 
     std::ostringstream oss_prompt;
-    for (size_t i = 0; i < history.size(); i += 2) {
+    // check use system prompt or not
+    size_t i = (history.size() % 2 == 0) ? 0 : 1;
+    for (i ; i < history.size(); i += 2) {
         oss_prompt << "[Round " << i / 2 + 1 << "]\n\n问：" << history[i] << "\n\n答：";
         if (i < history.size() - 1) {
             oss_prompt << history[i + 1] << "\n\n";
@@ -1042,13 +1045,16 @@ std::vector<int> ChatGLM3Tokenizer::encode_history(const std::vector<std::string
     std::vector<int> newline_ids;
     sp.Encode("\n", &newline_ids);
     std::vector<int> input_ids{gmask_token_id, sop_token_id};
+    bool USE_SYS_PROMPT = !history.empty();
     for (size_t i = 0; i < history.size(); i++) {
     // TODO: support all roles
-    // TODO: add first three sentences: system, user, assistant
-    if(i == 0) input_ids.emplace_back(system_token_id);
-    else if (i == 1) input_ids.emplace_back(user_token_id);
-    else if (i == 2) input_ids.emplace_back(assistant_token_id);
-    else input_ids.emplace_back((i % 2 == 0) ? user_token_id : assistant_token_id);
+    // add first sentences: system prompt
+    if(USE_SYS_PROMPT) {
+        if(i == 0) input_ids.emplace_back(system_token_id);
+        else input_ids.emplace_back((i % 2 == 1) ? user_token_id : assistant_token_id);
+    } else {
+        input_ids.emplace_back((i % 2 == 0) ? user_token_id : assistant_token_id);
+    }
     // TODO: support metadata
     input_ids.insert(input_ids.end(), newline_ids.begin(), newline_ids.end());
     std::vector<int> content_ids;

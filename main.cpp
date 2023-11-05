@@ -220,7 +220,7 @@ static void chat(Args &args) {
 
         std::vector<std::string> history;
         // read from file: sys_prompt_fpath
-        if (args.sys_prompt_fpath != "") {
+        if (!args.sys_prompt_fpath.empty()) {
             history = set_sys_prompt_to_history(args.sys_prompt_fpath);
         }
         while (1) {
