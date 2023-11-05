@@ -916,7 +916,8 @@ std::vector<int> ChatGLM2Tokenizer::encode_history(const std::vector<std::string
 }
 
 std::string ChatGLM2Tokenizer::build_prompt(const std::vector<std::string> &history) {
-    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
+    // The first three sentences are taken up by system, user and assistant.
+    CHATGLM_CHECK((history.size()-3) % 2 == 1) << "invalid history size " << history.size();
 
     std::ostringstream oss_prompt;
     for (size_t i = 0; i < history.size(); i += 2) {
@@ -1042,11 +1043,15 @@ std::vector<int> ChatGLM3Tokenizer::encode_history(const std::vector<std::string
     sp.Encode("\n", &newline_ids);
     std::vector<int> input_ids{gmask_token_id, sop_token_id};
     for (size_t i = 0; i < history.size(); i++) {
-        // TODO: support all roles
-        input_ids.emplace_back((i % 2 == 0) ? user_token_id : assistant_token_id);
-        // TODO: support metadata
-        input_ids.insert(input_ids.end(), newline_ids.begin(), newline_ids.end());
-        std::vector<int> content_ids;
+    // TODO: support all roles
+    // TODO: add first three sentences: system, user, assistant
+    if(i == 0) input_ids.emplace_back(system_token_id);
+    else if (i == 1) input_ids.emplace_back(user_token_id);
+    else if (i == 2) input_ids.emplace_back(assistant_token_id);
+    else input_ids.emplace_back((i % 2 == 0) ? user_token_id : assistant_token_id);
+    // TODO: support metadata
+    input_ids.insert(input_ids.end(), newline_ids.begin(), newline_ids.end());
+    std::vector<int> content_ids;
         sp.Encode(history[i], &content_ids);
         input_ids.insert(input_ids.end(), content_ids.begin(), content_ids.end());
     }

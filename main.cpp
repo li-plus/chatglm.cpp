@@ -1,6 +1,7 @@
 #include "chatglm.h"
 #include <iomanip>
 #include <iostream>
+#include <fstream>
 
 #ifdef _WIN32
 #include <codecvt>
@@ -33,6 +34,7 @@ struct Args {
     float repeat_penalty = 1.0;
     int num_threads = 0;
     bool verbose = false;
+    std::string sys_prompt_fpath = "";
 };
 
 static void usage(const std::string &prog) {
@@ -52,7 +54,8 @@ static void usage(const std::string &prog) {
               << "  --temp N                temperature (default: 0.95)\n"
               << "  --repeat_penalty N      penalize repeat sequence of tokens (default: 1.0, 1.0 = disabled)\n"
               << "  -t, --threads N         number of threads for inference\n"
-              << "  -v, --verbose           display verbose output including config/system/performance info\n";
+              << "  -v, --verbose           display verbose output including config/system/performance info\n"
+              << "  -s, --sys_prompt_fpath  set system prompt from a file\n";
 }
 
 static Args parse_args(const std::vector<std::string> &argv) {
@@ -88,6 +91,8 @@ static Args parse_args(const std::vector<std::string> &argv) {
             args.num_threads = std::stoi(argv[++i]);
         } else if (arg == "-v" || arg == "--verbose") {
             args.verbose = true;
+        } else if (arg == "-s" || arg == "--sys_prompt_fpath") {
+            args.sys_prompt_fpath = argv[++i];
         } else {
             std::cerr << "Unknown argument: " << arg << std::endl;
             usage(argv[0]);
@@ -131,6 +136,21 @@ static bool get_utf8_line(std::string &line) {
 #else
     return !!std::getline(std::cin, line);
 #endif
+}
+
+static std::vector<std::string> set_sys_prompt_to_history(std::string fpath) {
+    std::vector<std::string> history;
+    try {
+        std::ifstream fin(fpath, std::ios::in);
+        std::string sys_prompt;
+        while(std::getline(fin, sys_prompt)) {
+            history.emplace_back(sys_prompt);
+        }// no mannually close
+    } catch (std::exception &e) {
+        std::cerr << e.what() << std::endl;
+        exit(EXIT_FAILURE);
+    }
+    return history;
 }
 
 static void chat(Args &args) {
@@ -199,6 +219,10 @@ static void chat(Args &args) {
             << "\n";
 
         std::vector<std::string> history;
+        // read from file: sys_prompt_fpath
+        if (args.sys_prompt_fpath != "") {
+            history = set_sys_prompt_to_history(args.sys_prompt_fpath);
+        }
         while (1) {
             std::cout << std::setw(model_name.size()) << std::left << "Prompt"
                       << " > " << std::flush;
