@@ -122,12 +122,26 @@ class ModelConfig {
     int sep_token_id;
 };
 
+struct ChatMessage {
+    std::string role;
+    std::string content;
+
+    static const std::string ROLE_USER;
+    static const std::string ROLE_ASSISTANT;
+    static const std::string ROLE_SYSTEM;
+
+    ChatMessage(std::string role, std::string content) : role(std::move(role)), content(std::move(content)) {}
+};
+
 class BaseTokenizer {
   public:
     virtual ~BaseTokenizer() = default;
     virtual std::vector<int> encode(const std::string &text, int max_length) const = 0;
     virtual std::string decode(const std::vector<int> &ids) const = 0;
-    virtual std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const = 0;
+    virtual std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const = 0;
+
+  protected:
+    static void check_chat_messages(const std::vector<ChatMessage> &messages);
 };
 
 struct ggml_context_deleter_t {
@@ -870,9 +884,9 @@ class ChatGLMTokenizer : public BaseTokenizer {
 
     std::string decode(const std::vector<int> &ids) const override;
 
-    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
+    std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
 
-    static std::string build_prompt(const std::vector<std::string> &history);
+    static std::string build_prompt(const std::vector<ChatMessage> &messages);
 
   private:
     static std::string preprocess(const std::string &text);
@@ -942,10 +956,11 @@ class ChatGLM2Tokenizer : public BaseTokenizer {
 
     std::string decode(const std::vector<int> &ids) const override;
 
-    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
+    std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
 
-    static std::string build_prompt(const std::vector<std::string> &history);
+    static std::string build_prompt(const std::vector<ChatMessage> &messages);
 
+  private:
     bool is_special_id(int id) const;
 
   public:
@@ -991,9 +1006,12 @@ class ChatGLM3Tokenizer : public BaseTokenizer {
 
     std::string decode(const std::vector<int> &ids) const override;
 
-    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
+    std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
 
+  private:
     bool is_special_id(int id) const;
+
+    int get_command(const std::string &token) const;
 
   protected:
     static void truncate(std::vector<int> &ids, int max_length);
@@ -1009,6 +1027,7 @@ class ChatGLM3Tokenizer : public BaseTokenizer {
     int user_token_id;
     int assistant_token_id;
     int observation_token_id;
+    std::unordered_map<std::string, int> special_tokens;
 };
 
 using ChatGLM3Model = ChatGLM2Model;
@@ -1025,8 +1044,9 @@ class BaichuanTokenizer : public BaseTokenizer {
 
     std::string decode(const std::vector<int> &ids) const override;
 
-    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
+    std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
 
+  private:
     bool is_special_id(int id) const;
 
   protected:
@@ -1105,10 +1125,11 @@ class InternLMTokenizer : public BaseTokenizer {
 
     std::string decode(const std::vector<int> &ids) const override;
 
-    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
+    std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
 
-    static std::string build_prompt(const std::vector<std::string> &history);
+    static std::string build_prompt(const std::vector<ChatMessage> &messages);
 
+  private:
     bool is_special_id(int id) const { return id == unk_token_id || id == bos_token_id || id == eos_token_id; }
 
   public:
@@ -1171,7 +1192,7 @@ class Pipeline {
     std::string generate(const std::string &prompt, const GenerationConfig &gen_config,
                          BaseStreamer *streamer = nullptr) const;
 
-    std::string chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
+    ChatMessage chat(const std::vector<ChatMessage> &messages, const GenerationConfig &gen_config,
                      BaseStreamer *streamer = nullptr) const;
 
   public:

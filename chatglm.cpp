@@ -136,6 +136,19 @@ ggml_tensor *tensor_to_cpu(ggml_tensor *tensor) {
     return tensor;
 }
 
+const std::string ChatMessage::ROLE_USER = "user";
+const std::string ChatMessage::ROLE_ASSISTANT = "assistant";
+const std::string ChatMessage::ROLE_SYSTEM = "system";
+
+void BaseTokenizer::check_chat_messages(const std::vector<ChatMessage> &messages) {
+    CHATGLM_CHECK(messages.size() % 2 == 1) << "invalid chat messages size " << messages.size();
+    for (size_t i = 0; i < messages.size(); i++) {
+        const std::string &target_role = (i % 2 == 0) ? ChatMessage::ROLE_USER : ChatMessage::ROLE_ASSISTANT;
+        CHATGLM_CHECK(messages[i].role == target_role)
+            << "expect messages[" << i << "].role to be " << target_role << ", but got " << messages[i].role;
+    }
+}
+
 // Adapted from https://github.com/ggerganov/llama.cpp/blob/master/llama.cpp
 void ggml_graph_compute_helper(std::vector<uninitialized_char> &buf, ggml_cgraph *graph, int n_threads) {
     struct ggml_cplan plan = ggml_graph_plan(graph, n_threads);
@@ -669,23 +682,23 @@ std::vector<int> ChatGLMTokenizer::encode(const std::string &text, int max_lengt
     return ids;
 }
 
-std::vector<int> ChatGLMTokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
-    std::string prompt = build_prompt(history);
+std::vector<int> ChatGLMTokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
+    std::string prompt = build_prompt(messages);
     std::vector<int> input_ids = encode(prompt, max_length);
     return input_ids;
 }
 
-std::string ChatGLMTokenizer::build_prompt(const std::vector<std::string> &history) {
-    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
+std::string ChatGLMTokenizer::build_prompt(const std::vector<ChatMessage> &messages) {
+    check_chat_messages(messages);
 
     std::ostringstream oss_prompt;
-    if (history.size() == 1) {
-        oss_prompt << history.front();
+    if (messages.size() == 1) {
+        oss_prompt << messages.front().content;
     } else {
-        for (size_t i = 0; i < history.size(); i += 2) {
-            oss_prompt << "[Round " << i / 2 << "]\n问：" << history[i] << "\n答：";
-            if (i < history.size() - 1) {
-                oss_prompt << history[i + 1] << "\n";
+        for (size_t i = 0; i < messages.size(); i += 2) {
+            oss_prompt << "[Round " << i / 2 << "]\n问：" << messages[i].content << "\n答：";
+            if (i + 1 < messages.size()) {
+                oss_prompt << messages[i + 1].content << "\n";
             }
         }
     }
@@ -909,20 +922,20 @@ std::string ChatGLM2Tokenizer::decode(const std::vector<int> &ids) const {
     return text;
 }
 
-std::vector<int> ChatGLM2Tokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
-    std::string prompt = build_prompt(history);
+std::vector<int> ChatGLM2Tokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
+    std::string prompt = build_prompt(messages);
     std::vector<int> input_ids = encode(prompt, max_length);
     return input_ids;
 }
 
-std::string ChatGLM2Tokenizer::build_prompt(const std::vector<std::string> &history) {
-    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
+std::string ChatGLM2Tokenizer::build_prompt(const std::vector<ChatMessage> &messages) {
+    check_chat_messages(messages);
 
     std::ostringstream oss_prompt;
-    for (size_t i = 0; i < history.size(); i += 2) {
-        oss_prompt << "[Round " << i / 2 + 1 << "]\n\n问：" << history[i] << "\n\n答：";
-        if (i < history.size() - 1) {
-            oss_prompt << history[i + 1] << "\n\n";
+    for (size_t i = 0; i < messages.size(); i += 2) {
+        oss_prompt << "[Round " << i / 2 + 1 << "]\n\n问：" << messages[i].content << "\n\n答：";
+        if (i < messages.size() - 1) {
+            oss_prompt << messages[i + 1].content << "\n\n";
         }
     }
     return oss_prompt.str();
@@ -1014,6 +1027,18 @@ ChatGLM3Tokenizer::ChatGLM3Tokenizer(std::string_view serialized_model_proto) {
     user_token_id = special_id++;
     assistant_token_id = special_id++;
     observation_token_id = special_id++;
+
+    special_tokens = {
+        {"[MASK]", mask_token_id},
+        {"[gMASK]", gmask_token_id},
+        {"[sMASK]", smask_token_id},
+        {"sop", sop_token_id},
+        {"eop", eop_token_id},
+        {"<|system|>", system_token_id},
+        {"<|user|>", user_token_id},
+        {"<|assistant|>", assistant_token_id},
+        {"<|observation|>", observation_token_id},
+    };
 }
 
 std::vector<int> ChatGLM3Tokenizer::encode(const std::string &text, int max_length) const {
@@ -1036,18 +1061,16 @@ std::string ChatGLM3Tokenizer::decode(const std::vector<int> &ids) const {
     return text;
 }
 
-std::vector<int> ChatGLM3Tokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
-    // TODO: need a new api for system / tools / metadata prompt
+std::vector<int> ChatGLM3Tokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
     std::vector<int> newline_ids;
     sp.Encode("\n", &newline_ids);
     std::vector<int> input_ids{gmask_token_id, sop_token_id};
-    for (size_t i = 0; i < history.size(); i++) {
-        // TODO: support all roles
-        input_ids.emplace_back((i % 2 == 0) ? user_token_id : assistant_token_id);
+    for (const auto &msg : messages) {
+        input_ids.emplace_back(get_command("<|" + msg.role + "|>"));
         // TODO: support metadata
         input_ids.insert(input_ids.end(), newline_ids.begin(), newline_ids.end());
         std::vector<int> content_ids;
-        sp.Encode(history[i], &content_ids);
+        sp.Encode(msg.content, &content_ids);
         input_ids.insert(input_ids.end(), content_ids.begin(), content_ids.end());
     }
     input_ids.emplace_back(assistant_token_id);
@@ -1061,6 +1084,12 @@ bool ChatGLM3Tokenizer::is_special_id(int id) const {
     return id == mask_token_id || id == gmask_token_id || id == smask_token_id || id == sop_token_id ||
            id == eop_token_id || id == system_token_id || id == user_token_id || id == assistant_token_id ||
            id == observation_token_id;
+}
+
+int ChatGLM3Tokenizer::get_command(const std::string &token) const {
+    auto pos = special_tokens.find(token);
+    CHATGLM_CHECK(pos != special_tokens.end()) << token << " is not a special token";
+    return pos->second;
 }
 
 void ChatGLM3Tokenizer::truncate(std::vector<int> &ids, int max_length) {
@@ -1095,18 +1124,14 @@ std::string BaichuanTokenizer::decode(const std::vector<int> &ids) const {
     return text;
 }
 
-std::vector<int> BaichuanTokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
-    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
+std::vector<int> BaichuanTokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
+    check_chat_messages(messages);
 
     std::vector<int> ids;
     ids.reserve(max_length);
-    for (size_t i = 0; i < history.size(); i++) {
-        if (i % 2 == 0) {
-            ids.push_back(USER_TOKEN_ID);
-        } else {
-            ids.push_back(ASSISTANT_TOKEN_ID);
-        }
-        std::vector<int> content_ids = encode(history[i], max_length);
+    for (const auto &msg : messages) {
+        ids.push_back((msg.role == ChatMessage::ROLE_USER) ? USER_TOKEN_ID : ASSISTANT_TOKEN_ID);
+        std::vector<int> content_ids = encode(msg.content, max_length);
         ids.insert(ids.end(), content_ids.begin(), content_ids.end());
     }
     ids.push_back(ASSISTANT_TOKEN_ID);
@@ -1242,20 +1267,21 @@ std::string InternLMTokenizer::decode(const std::vector<int> &ids) const {
     return text;
 }
 
-std::vector<int> InternLMTokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
-    std::string prompt = build_prompt(history);
+std::vector<int> InternLMTokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
+    std::string prompt = build_prompt(messages);
     std::vector<int> input_ids = encode(prompt, max_length);
     return input_ids;
 }
 
-std::string InternLMTokenizer::build_prompt(const std::vector<std::string> &history) {
-    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
+std::string InternLMTokenizer::build_prompt(const std::vector<ChatMessage> &messages) {
+    check_chat_messages(messages);
 
     std::ostringstream oss_prompt;
-    for (size_t i = 0; i < history.size(); i += 2) {
-        oss_prompt << "<|User|>:" << history[i] << "<eoh>\n<|Bot|>:";
-        if (i < history.size() - 1) {
-            oss_prompt << history[i + 1] << "<eoa>\n";
+    for (const auto &msg : messages) {
+        if (msg.role == ChatMessage::ROLE_USER) {
+            oss_prompt << "<|User|>:" << msg.content << "<eoh>\n<|Bot|>:";
+        } else {
+            oss_prompt << msg.content << "<eoa>\n";
         }
     }
     return oss_prompt.str();
@@ -1432,12 +1458,12 @@ std::string Pipeline::generate(const std::string &prompt, const GenerationConfig
     return output;
 }
 
-std::string Pipeline::chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
+ChatMessage Pipeline::chat(const std::vector<ChatMessage> &messages, const GenerationConfig &gen_config,
                            BaseStreamer *streamer) const {
-    std::vector<int> input_ids = tokenizer->encode_history(history, gen_config.max_context_length);
+    std::vector<int> input_ids = tokenizer->encode_messages(messages, gen_config.max_context_length);
     std::vector<int> new_output_ids = generate(input_ids, gen_config, streamer);
     std::string output = tokenizer->decode(new_output_ids);
-    return output;
+    return ChatMessage(ChatMessage::ROLE_ASSISTANT, output);
 }
 
 } // namespace chatglm

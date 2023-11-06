@@ -17,8 +17,8 @@ class PyBaseTokenizer : public BaseTokenizer {
     std::string decode(const std::vector<int> &ids) const override {
         PYBIND11_OVERLOAD_PURE(std::string, BaseTokenizer, decode, ids);
     }
-    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override {
-        PYBIND11_OVERLOAD_PURE(std::vector<int>, BaseTokenizer, encode_history, history, max_length);
+    std::vector<int> encode_messages(const std::vector<ChatMessage> &history, int max_length) const override {
+        PYBIND11_OVERLOAD_PURE(std::vector<int>, BaseTokenizer, encode_messages, history, max_length);
     }
 };
 
@@ -52,10 +52,15 @@ PYBIND11_MODULE(_C, m) {
         .def_readonly("sep_token_id", &ModelConfig::sep_token_id)
         .def_property_readonly("model_type_name", &ModelConfig::model_type_name);
 
+    py::class_<ChatMessage>(m, "ChatMessage")
+        .def(py::init<std::string, std::string>(), "role"_a, "content"_a)
+        .def_readwrite("role", &ChatMessage::role)
+        .def_readwrite("content", &ChatMessage::content);
+
     py::class_<BaseTokenizer, PyBaseTokenizer>(m, "BaseTokenizer")
         .def("encode", &BaseTokenizer::encode)
         .def("decode", &BaseTokenizer::decode)
-        .def("encode_history", &BaseTokenizer::encode_history);
+        .def("encode_messages", &BaseTokenizer::encode_messages);
 
     py::class_<BaseModelForCausalLM, PyBaseModelForCausalLM>(m, "BaseModelForCausalLM")
         .def("generate_next_token", &BaseModelForCausalLM::generate_next_token)

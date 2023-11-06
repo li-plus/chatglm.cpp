@@ -198,7 +198,7 @@ static void chat(Args &args) {
             << "Welcome to ChatGLM.cpp! Ask whatever you want. Type 'clear' to clear context. Type 'stop' to exit.\n"
             << "\n";
 
-        std::vector<std::string> history;
+        std::vector<chatglm::ChatMessage> messages;
         while (1) {
             std::cout << std::setw(model_name.size()) << std::left << "Prompt"
                       << " > " << std::flush;
@@ -210,13 +210,13 @@ static void chat(Args &args) {
                 continue;
             }
             if (prompt == "clear") {
-                history.clear();
+                messages.clear();
                 continue;
             }
-            history.emplace_back(std::move(prompt));
+            messages.emplace_back(chatglm::ChatMessage::ROLE_USER, std::move(prompt));
             std::cout << model_name << " > ";
-            std::string output = pipeline.chat(history, gen_config, streamer.get());
-            history.emplace_back(std::move(output));
+            chatglm::ChatMessage output = pipeline.chat(messages, gen_config, streamer.get());
+            messages.emplace_back(std::move(output));
             if (args.verbose) {
                 std::cout << "\n" << perf_streamer->to_string() << "\n\n";
             }
@@ -225,7 +225,8 @@ static void chat(Args &args) {
         std::cout << "Bye\n";
     } else {
         if (args.mode == INFERENCE_MODE_CHAT) {
-            pipeline.chat({args.prompt}, gen_config, streamer.get());
+            std::vector<chatglm::ChatMessage> messages{{chatglm::ChatMessage::ROLE_USER, args.prompt}};
+            pipeline.chat(messages, gen_config, streamer.get());
         } else {
             pipeline.generate(args.prompt, gen_config, streamer.get());
         }
