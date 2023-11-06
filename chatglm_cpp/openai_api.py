@@ -4,9 +4,9 @@ import time
 from typing import List, Literal, Optional, Union
 
 import chatglm_cpp
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from pydantic_settings import BaseSettings
 from sse_starlette.sse import EventSourceResponse
 
@@ -53,12 +53,23 @@ class ChatCompletionResponseStreamChoice(BaseModel):
     finish_reason: Optional[Literal["stop", "length"]] = None
 
 
+class ChatCompletionUsage(BaseModel):
+    prompt_tokens: int
+    completion_tokens: int
+
+    @computed_field
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+
 class ChatCompletionResponse(BaseModel):
     id: str = "chatcmpl"
     model: str = "default-model"
     object: Literal["chat.completion", "chat.completion.chunk"]
     created: int = Field(default_factory=lambda: int(time.time()))
     choices: Union[List[ChatCompletionResponseChoice], List[ChatCompletionResponseStreamChoice]]
+    usage: Optional[ChatCompletionUsage] = None
 
     model_config = {
         "json_schema_extra": {
@@ -141,18 +152,23 @@ async def create_chat_completion(body: ChatCompletionRequest) -> ChatCompletionR
         generator = stream_chat_event_publisher(history, body)
         return EventSourceResponse(generator)
 
+    max_context_length = 512
     output = pipeline.chat(
         history=history,
         max_length=body.max_tokens,
+        max_context_length=max_context_length,
         do_sample=body.temperature > 0,
         top_p=body.top_p,
         temperature=body.temperature,
     )
     logging.info(f'prompt: "{history[-1]}", sync response: "{output}"')
+    prompt_tokens = len(pipeline.tokenizer.encode_history(history, max_context_length))
+    completion_tokens = len(pipeline.tokenizer.encode(output, body.max_tokens))
 
     return ChatCompletionResponse(
         object="chat.completion",
         choices=[ChatCompletionResponseChoice(message=ChatMessage(role="assistant", content=output))],
+        usage=ChatCompletionUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
     )
 
 
