@@ -86,6 +86,7 @@ class ChatCompletionResponse(BaseModel):
                             "finish_reason": "stop",
                         }
                     ],
+                    "usage": {"prompt_tokens": 17, "completion_tokens": 29, "total_tokens": 46},
                 }
             ]
         }
