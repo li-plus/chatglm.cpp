@@ -5,7 +5,6 @@
 #include <sentencepiece_processor.h>
 #include <sstream>
 #include <unordered_map>
-#include <vector>
 
 #ifdef GGML_USE_METAL
 #include <ggml-metal.h>
@@ -87,21 +86,23 @@ class ModelConfig {
 
     ModelConfig(ModelType model_type, ggml_type dtype, int vocab_size, int hidden_size, int num_attention_heads,
                 int num_kv_heads, int num_hidden_layers, int intermediate_size, float norm_eps, int max_length,
-                int bos_token_id, int eos_token_id, int pad_token_id, int sep_token_id)
+                int bos_token_id, int eos_token_id, int pad_token_id, int sep_token_id,
+                std::vector<int> extra_eos_token_ids)
         : model_type(model_type), dtype(dtype), vocab_size(vocab_size), hidden_size(hidden_size),
           num_attention_heads(num_attention_heads), num_kv_heads(num_kv_heads), num_hidden_layers(num_hidden_layers),
           intermediate_size(intermediate_size), norm_eps(norm_eps), max_length(max_length), bos_token_id(bos_token_id),
-          eos_token_id(eos_token_id), pad_token_id(pad_token_id), sep_token_id(sep_token_id) {}
+          eos_token_id(eos_token_id), pad_token_id(pad_token_id), sep_token_id(sep_token_id),
+          extra_eos_token_ids(std::move(extra_eos_token_ids)) {}
 
     ModelConfig(ModelType model_type, const ConfigRecordV1 &rec)
         : ModelConfig(model_type, rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads,
                       rec.num_attention_heads, rec.num_hidden_layers, rec.intermediate_size, 1e-5, rec.max_length,
-                      rec.bos_token_id, rec.eos_token_id, rec.pad_token_id, rec.sep_token_id) {}
+                      rec.bos_token_id, rec.eos_token_id, rec.pad_token_id, rec.sep_token_id, {}) {}
 
     ModelConfig(ModelType model_type, const ConfigRecordV2 &rec)
         : ModelConfig(model_type, rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads, rec.num_kv_heads,
                       rec.num_hidden_layers, rec.intermediate_size, 1e-5, rec.max_length, rec.bos_token_id,
-                      rec.eos_token_id, rec.pad_token_id, rec.sep_token_id) {}
+                      rec.eos_token_id, rec.pad_token_id, rec.sep_token_id, {}) {}
 
     std::string model_type_name() const { return to_string(model_type); }
 
@@ -120,25 +121,68 @@ class ModelConfig {
     int eos_token_id;
     int pad_token_id;
     int sep_token_id;
+    std::vector<int> extra_eos_token_ids;
+};
+
+struct FunctionMessage {
+    std::string name;
+    std::string argument;
+
+    FunctionMessage() = default;
+    FunctionMessage(std::string name, std::string argument) : name(std::move(name)), argument(std::move(argument)) {}
+};
+
+struct CodeMessage {
+    std::string input;
+
+    CodeMessage() = default;
+    CodeMessage(std::string input) : input(std::move(input)) {}
+};
+
+struct ToolCallMessage {
+    std::string type;
+    FunctionMessage function;
+    CodeMessage code;
+
+    static const std::string TYPE_FUNCTION;
+    static const std::string TYPE_CODE;
+
+    ToolCallMessage(FunctionMessage function) : type(TYPE_FUNCTION), function(std::move(function)) {}
+
+    ToolCallMessage(CodeMessage code) : type(TYPE_CODE), code(std::move(code)) {}
 };
 
 struct ChatMessage {
     std::string role;
     std::string content;
+    std::vector<ToolCallMessage> tool_calls;
 
     static const std::string ROLE_USER;
     static const std::string ROLE_ASSISTANT;
     static const std::string ROLE_SYSTEM;
+    static const std::string ROLE_OBSERVATION;
 
-    ChatMessage(std::string role, std::string content) : role(std::move(role)), content(std::move(content)) {}
+    ChatMessage(std::string role, std::string content, std::vector<ToolCallMessage> tool_calls = {})
+        : role(std::move(role)), content(std::move(content)), tool_calls(std::move(tool_calls)) {}
+
+    friend std::ostream &operator<<(std::ostream &os, const ChatMessage &self) {
+        return os << "ChatMessage(role=" << self.role << ", content=" << self.content << ")";
+    }
 };
 
 class BaseTokenizer {
   public:
     virtual ~BaseTokenizer() = default;
+
     virtual std::vector<int> encode(const std::string &text, int max_length) const = 0;
+
     virtual std::string decode(const std::vector<int> &ids) const = 0;
+
     virtual std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const = 0;
+
+    virtual std::vector<ChatMessage> decode_messages(const std::vector<int> &ids) const {
+        return {{ChatMessage::ROLE_ASSISTANT, decode(ids)}};
+    }
 
   protected:
     static void check_chat_messages(const std::vector<ChatMessage> &messages);
@@ -664,7 +708,7 @@ class StreamerGroup : public BaseStreamer {
 class TextStreamer : public BaseStreamer {
   public:
     TextStreamer(std::ostream &os, BaseTokenizer *tokenizer)
-        : os_(os), tokenizer_(tokenizer), is_prompt_(true), print_len_(0) {}
+        : os_(os), tokenizer_(tokenizer), is_prompt_(true), is_first_line_(true), print_len_(0) {}
     void put(const std::vector<int> &output_ids) override;
     void end() override;
 
@@ -672,6 +716,7 @@ class TextStreamer : public BaseStreamer {
     std::ostream &os_;
     BaseTokenizer *tokenizer_;
     bool is_prompt_;
+    bool is_first_line_;
     std::vector<int> token_cache_;
     int print_len_;
 };
@@ -1008,12 +1053,17 @@ class ChatGLM3Tokenizer : public BaseTokenizer {
 
     std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
 
+    std::vector<ChatMessage> decode_messages(const std::vector<int> &ids) const override;
+
   private:
-    bool is_special_id(int id) const;
+    std::string decode_with_special_tokens(const std::vector<int> &ids) const;
+
+    static std::string remove_special_tokens(const std::string &text);
 
     int get_command(const std::string &token) const;
 
-  protected:
+    bool is_special_id(int id) const;
+
     static void truncate(std::vector<int> &ids, int max_length);
 
   public:
@@ -1028,6 +1078,7 @@ class ChatGLM3Tokenizer : public BaseTokenizer {
     int assistant_token_id;
     int observation_token_id;
     std::unordered_map<std::string, int> special_tokens;
+    std::unordered_map<int, std::string> index_special_tokens;
 };
 
 using ChatGLM3Model = ChatGLM2Model;
@@ -1049,7 +1100,6 @@ class BaichuanTokenizer : public BaseTokenizer {
   private:
     bool is_special_id(int id) const;
 
-  protected:
     static void truncate(std::vector<int> &ids, int max_length);
 
   public:
@@ -1192,8 +1242,8 @@ class Pipeline {
     std::string generate(const std::string &prompt, const GenerationConfig &gen_config,
                          BaseStreamer *streamer = nullptr) const;
 
-    ChatMessage chat(const std::vector<ChatMessage> &messages, const GenerationConfig &gen_config,
-                     BaseStreamer *streamer = nullptr) const;
+    std::vector<ChatMessage> chat(const std::vector<ChatMessage> &messages, const GenerationConfig &gen_config,
+                                  BaseStreamer *streamer = nullptr) const;
 
   public:
     std::unique_ptr<BaseTokenizer> tokenizer;
