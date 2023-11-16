@@ -263,9 +263,8 @@ static void chat(Args &args) {
             }
             messages.emplace_back(std::move(role), std::move(prompt));
             std::cout << model_name << " > ";
-            std::vector<chatglm::ChatMessage> output = pipeline.chat(messages, gen_config, streamer.get());
-            messages.insert(messages.end(), std::make_move_iterator(output.begin()),
-                            std::make_move_iterator(output.end()));
+            chatglm::ChatMessage output = pipeline.chat(messages, gen_config, streamer.get());
+            messages.emplace_back(std::move(output));
             if (args.verbose) {
                 std::cout << "\n" << perf_streamer->to_string() << "\n\n";
             }

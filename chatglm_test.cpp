@@ -1053,7 +1053,7 @@ TEST(Pipeline, ChatGLM) {
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
-        ChatMessage output = pipeline.chat(messages, gen_config).front();
+        ChatMessage output = pipeline.chat(messages, gen_config);
         EXPECT_EQ(output.content, "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。");
     }
 }
@@ -1117,7 +1117,7 @@ TEST(Pipeline, ChatGLM2) {
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
-        ChatMessage output = pipeline.chat(messages, gen_config).front();
+        ChatMessage output = pipeline.chat(messages, gen_config);
         EXPECT_EQ(output.content, "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。");
     }
 }
@@ -1212,7 +1212,7 @@ TEST(Pipeline, ChatGLM3) {
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
-        ChatMessage output = pipeline.chat(messages, gen_config).front();
+        ChatMessage output = pipeline.chat(messages, gen_config);
         EXPECT_EQ(output.content, "你好👋！我是人工智能助手 ChatGLM3-6B，很高兴见到你，欢迎问我任何问题。");
     }
 
@@ -1225,7 +1225,7 @@ TEST(Pipeline, ChatGLM3) {
             {ChatMessage::ROLE_USER, "生成一个随机数"},
         };
         {
-            ChatMessage output = pipeline.chat(messages, gen_config).front();
+            ChatMessage output = pipeline.chat(messages, gen_config);
             EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
             EXPECT_EQ(output.content, "```python\n"
                                       "tool_call(seed=42, range=(0, 100))\n"
@@ -1234,7 +1234,7 @@ TEST(Pipeline, ChatGLM3) {
         }
         messages.emplace_back(ChatMessage::ROLE_OBSERVATION, "22");
         {
-            ChatMessage output = pipeline.chat(messages, gen_config).front();
+            ChatMessage output = pipeline.chat(messages, gen_config);
             EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
             EXPECT_EQ(output.content, "根据您的要求，我使用随机数生成器API生成了一个在0和100之间的随机数，结果为22。");
         }
@@ -1249,15 +1249,11 @@ TEST(Pipeline, ChatGLM3) {
             {ChatMessage::ROLE_USER, "列出100以内的所有质数"},
         };
         {
-            auto outputs = pipeline.chat(messages, gen_config);
-            EXPECT_EQ(outputs.size(), 2);
-            ChatMessage chat_output = outputs.at(0);
-            ChatMessage code_output = outputs.at(1);
-            EXPECT_EQ(chat_output.role, ChatMessage::ROLE_ASSISTANT);
-            EXPECT_EQ(chat_output.content, "好的，我会为您列出100以内的所有质数。\n\n质数是指只能被1和它本身整除的大于1"
-                                           "的整数。例如，2、3、5、7等都是质数。\n\n让我们开始吧！");
-            EXPECT_EQ(code_output.role, ChatMessage::ROLE_ASSISTANT);
-            EXPECT_EQ(code_output.content, R"(```python
+            ChatMessage output = pipeline.chat(messages, gen_config);
+            EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
+            EXPECT_EQ(output.content, "好的，我会为您列出100以内的所有质数。\n\n质数是指只能被1和它本身整除的大于1"
+                                      "的整数。例如，2、3、5、7等都是质数。\n\n让我们开始吧！");
+            EXPECT_EQ(output.tool_calls.front().code.input, R"(```python
 def is_prime(n):
     """Check if a number is prime."""
     if n <= 1:
@@ -1277,14 +1273,13 @@ def is_prime(n):
 primes_upto_100 = [i for i in range(2, 101) if is_prime(i)]
 primes_upto_100
 ```)");
-            messages.insert(messages.end(), std::make_move_iterator(outputs.begin()),
-                            std::make_move_iterator(outputs.end()));
+            messages.emplace_back(std::move(output));
         }
         messages.emplace_back(
             ChatMessage::ROLE_OBSERVATION,
             "[2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97]");
         {
-            ChatMessage output = pipeline.chat(messages, gen_config).front();
+            ChatMessage output = pipeline.chat(messages, gen_config);
             EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
             EXPECT_EQ(output.content, R"(100以内的所有质数为：
 
@@ -1384,7 +1379,7 @@ TEST(Pipeline, Baichuan13B) {
         gen_config.do_sample = false;
         gen_config.repetition_penalty = 1.1;
         std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好呀"}};
-        ChatMessage output = pipeline.chat(messages, gen_config).front();
+        ChatMessage output = pipeline.chat(messages, gen_config);
         EXPECT_EQ(output.content, "你好！很高兴见到你。请问有什么我可以帮助你的吗？");
     }
 }
@@ -1438,7 +1433,7 @@ TEST(Pipeline, Baichuan2_7B) {
         gen_config.do_sample = false;
         gen_config.repetition_penalty = 1.05;
         std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好呀"}};
-        ChatMessage output = pipeline.chat(messages, gen_config).front();
+        ChatMessage output = pipeline.chat(messages, gen_config);
         EXPECT_EQ(output.content, "你好！很高兴为你服务。请问有什么问题我可以帮助你解决？");
     }
 }
@@ -1480,7 +1475,7 @@ TEST(Pipeline, Baichuan2_13B) {
         gen_config.do_sample = false;
         gen_config.repetition_penalty = 1.05;
         std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好呀"}};
-        ChatMessage output = pipeline.chat(messages, gen_config).front();
+        ChatMessage output = pipeline.chat(messages, gen_config);
         EXPECT_EQ(output.content, "你好！很高兴见到你。请问有什么我可以帮助你的吗？");
     }
 }
@@ -1534,7 +1529,7 @@ TEST(Pipeline, InternLM) {
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
-        ChatMessage output = pipeline.chat(messages, gen_config).front();
+        ChatMessage output = pipeline.chat(messages, gen_config);
         EXPECT_EQ(output.content, "你好，有什么我可以帮助你的吗？");
     }
 }

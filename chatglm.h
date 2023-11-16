@@ -162,6 +162,7 @@ struct ChatMessage {
     static const std::string ROLE_SYSTEM;
     static const std::string ROLE_OBSERVATION;
 
+    ChatMessage() = default;
     ChatMessage(std::string role, std::string content, std::vector<ToolCallMessage> tool_calls = {})
         : role(std::move(role)), content(std::move(content)), tool_calls(std::move(tool_calls)) {}
 
@@ -180,8 +181,8 @@ class BaseTokenizer {
 
     virtual std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const = 0;
 
-    virtual std::vector<ChatMessage> decode_messages(const std::vector<int> &ids) const {
-        return {{ChatMessage::ROLE_ASSISTANT, decode(ids)}};
+    virtual ChatMessage decode_message(const std::vector<int> &ids) const {
+        return {ChatMessage::ROLE_ASSISTANT, decode(ids)};
     }
 
   protected:
@@ -1053,9 +1054,11 @@ class ChatGLM3Tokenizer : public BaseTokenizer {
 
     std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
 
-    std::vector<ChatMessage> decode_messages(const std::vector<int> &ids) const override;
+    ChatMessage decode_message(const std::vector<int> &ids) const override;
 
   private:
+    std::vector<int> encode_single_message(const std::string &role, const std::string &content) const;
+
     std::string decode_with_special_tokens(const std::vector<int> &ids) const;
 
     static std::string remove_special_tokens(const std::string &text);
@@ -1242,8 +1245,8 @@ class Pipeline {
     std::string generate(const std::string &prompt, const GenerationConfig &gen_config,
                          BaseStreamer *streamer = nullptr) const;
 
-    std::vector<ChatMessage> chat(const std::vector<ChatMessage> &messages, const GenerationConfig &gen_config,
-                                  BaseStreamer *streamer = nullptr) const;
+    ChatMessage chat(const std::vector<ChatMessage> &messages, const GenerationConfig &gen_config,
+                     BaseStreamer *streamer = nullptr) const;
 
   public:
     std::unique_ptr<BaseTokenizer> tokenizer;

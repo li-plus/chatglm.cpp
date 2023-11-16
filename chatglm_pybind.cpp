@@ -60,7 +60,8 @@ PYBIND11_MODULE(_C, m) {
     py::class_<BaseTokenizer, PyBaseTokenizer>(m, "BaseTokenizer")
         .def("encode", &BaseTokenizer::encode)
         .def("decode", &BaseTokenizer::decode)
-        .def("encode_messages", &BaseTokenizer::encode_messages);
+        .def("encode_messages", &BaseTokenizer::encode_messages)
+        .def("decode_message", &BaseTokenizer::decode_message);
 
     py::class_<BaseModelForCausalLM, PyBaseModelForCausalLM>(m, "BaseModelForCausalLM")
         .def("generate_next_token", &BaseModelForCausalLM::generate_next_token)

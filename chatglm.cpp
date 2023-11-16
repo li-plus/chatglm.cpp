@@ -1123,25 +1123,38 @@ std::string ChatGLM3Tokenizer::remove_special_tokens(const std::string &text) {
     return output;
 }
 
-std::vector<int> ChatGLM3Tokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
+std::vector<int> ChatGLM3Tokenizer::encode_single_message(const std::string &role, const std::string &content) const {
+    std::vector<int> input_ids;
+    input_ids.emplace_back(get_command("<|" + role + "|>"));
+    // TODO: support metadata
     std::vector<int> newline_ids;
     sp.Encode("\n", &newline_ids);
+    input_ids.insert(input_ids.end(), newline_ids.begin(), newline_ids.end());
+    std::vector<int> content_ids;
+    sp.Encode(content, &content_ids);
+    input_ids.insert(input_ids.end(), content_ids.begin(), content_ids.end());
+    return input_ids;
+}
+
+std::vector<int> ChatGLM3Tokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
     std::vector<int> input_ids{gmask_token_id, sop_token_id};
     for (const auto &msg : messages) {
-        input_ids.emplace_back(get_command("<|" + msg.role + "|>"));
-        // TODO: support metadata
-        input_ids.insert(input_ids.end(), newline_ids.begin(), newline_ids.end());
-        std::vector<int> content_ids;
-        sp.Encode(msg.content, &content_ids);
-        input_ids.insert(input_ids.end(), content_ids.begin(), content_ids.end());
+        auto msg_ids = encode_single_message(msg.role, msg.content);
+        input_ids.insert(input_ids.end(), msg_ids.begin(), msg_ids.end());
+
+        // encode code block into a separate message
+        if (!msg.tool_calls.empty() && msg.tool_calls.front().type == ToolCallMessage::TYPE_CODE) {
+            auto code_ids = encode_single_message(msg.role, msg.tool_calls.front().code.input);
+            input_ids.insert(input_ids.end(), code_ids.begin(), code_ids.end());
+        }
     }
     input_ids.emplace_back(assistant_token_id);
     truncate(input_ids, max_length);
     return input_ids;
 }
 
-std::vector<ChatMessage> ChatGLM3Tokenizer::decode_messages(const std::vector<int> &ids) const {
-    std::vector<ChatMessage> msgs;
+ChatMessage ChatGLM3Tokenizer::decode_message(const std::vector<int> &ids) const {
+    ChatMessage message;
     if (!ids.empty() && ids.back() == observation_token_id) {
         std::string output = decode_with_special_tokens(ids);
         const std::string ci_delim = "<|assistant|> interpreter";
@@ -1153,11 +1166,8 @@ std::vector<ChatMessage> ChatGLM3Tokenizer::decode_messages(const std::vector<in
             std::string code_output = output.substr(ci_pos + ci_delim.size());
             code_output = remove_special_tokens(code_output);
             trim(code_output);
-            msgs = {
-                ChatMessage(ChatMessage::ROLE_ASSISTANT, std::move(chat_output)),
-                ChatMessage(ChatMessage::ROLE_ASSISTANT, std::move(code_output),
-                            {ToolCallMessage(CodeMessage(code_output))}),
-            };
+            message = ChatMessage(ChatMessage::ROLE_ASSISTANT, std::move(chat_output),
+                                  {ToolCallMessage(CodeMessage(std::move(code_output)))});
         } else {
             // tool call
             output = remove_special_tokens(output);
@@ -1183,17 +1193,15 @@ std::vector<ChatMessage> ChatGLM3Tokenizer::decode_messages(const std::vector<in
                 tool_args = sm[1];
             }
 
-            std::vector<ToolCallMessage> tool_calls{FunctionMessage(std::move(tool_name), std::move(tool_args))};
-            msgs.emplace_back(ChatMessage::ROLE_ASSISTANT, std::move(output), std::move(tool_calls));
+            message = ChatMessage(ChatMessage::ROLE_ASSISTANT, std::move(output),
+                                  {ToolCallMessage(FunctionMessage(std::move(tool_name), std::move(tool_args)))});
         }
     } else {
         // conversation
-        msgs = BaseTokenizer::decode_messages(ids);
-        for (auto &msg : msgs) {
-            trim(msg.content); // strip leading linebreak in conversation mode
-        }
+        message = BaseTokenizer::decode_message(ids);
+        trim(message.content); // strip leading linebreak in conversation mode
     }
-    return msgs;
+    return message;
 }
 
 int ChatGLM3Tokenizer::get_command(const std::string &token) const {
@@ -1572,11 +1580,11 @@ std::string Pipeline::generate(const std::string &prompt, const GenerationConfig
     return output;
 }
 
-std::vector<ChatMessage> Pipeline::chat(const std::vector<ChatMessage> &messages, const GenerationConfig &gen_config,
-                                        BaseStreamer *streamer) const {
+ChatMessage Pipeline::chat(const std::vector<ChatMessage> &messages, const GenerationConfig &gen_config,
+                           BaseStreamer *streamer) const {
     std::vector<int> input_ids = tokenizer->encode_messages(messages, gen_config.max_context_length);
     std::vector<int> new_output_ids = generate(input_ids, gen_config, streamer);
-    std::vector<ChatMessage> output = tokenizer->decode_messages(new_output_ids);
+    ChatMessage output = tokenizer->decode_message(new_output_ids);
     return output;
 }
 
