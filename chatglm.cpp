@@ -1156,7 +1156,11 @@ std::vector<int> ChatGLM3Tokenizer::encode_messages(const std::vector<ChatMessag
 ChatMessage ChatGLM3Tokenizer::decode_message(const std::vector<int> &ids) const {
     ChatMessage message;
     if (!ids.empty() && ids.back() == observation_token_id) {
-        std::string output = decode_with_special_tokens(ids);
+        // insert an <|assistant|> token before content to match possible interpreter delimiter
+        std::vector<int> full_ids{assistant_token_id};
+        full_ids.insert(full_ids.end(), ids.begin(), ids.end());
+
+        std::string output = decode_with_special_tokens(full_ids);
         const std::string ci_delim = "<|assistant|> interpreter";
         size_t ci_pos = output.find(ci_delim);
         if (ci_pos != std::string::npos) {

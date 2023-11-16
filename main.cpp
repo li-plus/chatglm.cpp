@@ -24,6 +24,7 @@ static inline InferenceMode to_inference_mode(const std::string &s) {
 struct Args {
     std::string model_path = "chatglm-ggml.bin";
     InferenceMode mode = INFERENCE_MODE_CHAT;
+    bool sync = false;
     std::string prompt = "你好";
     std::string system = "";
     int max_length = 2048;
@@ -44,6 +45,7 @@ static void usage(const std::string &prog) {
               << "  -h, --help              show this help message and exit\n"
               << "  -m, --model PATH        model path (default: chatglm-ggml.bin)\n"
               << "  --mode                  inference mode chose from {chat, generate} (default: chat)\n"
+              << "  --sync                  synchronized generation without streaming\n"
               << "  -p, --prompt PROMPT     prompt to start generation with (default: 你好)\n"
               << "  --pp, --prompt_path     path to the plain text file that stores the prompt\n"
               << "  -s, --system SYSTEM     system message to set the behavior of the assistant\n"
@@ -81,6 +83,8 @@ static Args parse_args(const std::vector<std::string> &argv) {
             args.model_path = argv.at(++i);
         } else if (arg == "--mode") {
             args.mode = to_inference_mode(argv.at(++i));
+        } else if (arg == "--sync") {
+            args.sync = true;
         } else if (arg == "-p" || arg == "--prompt") {
             args.prompt = argv.at(++i);
         } else if (arg == "--pp" || arg == "--prompt_path") {
@@ -162,8 +166,11 @@ static void chat(Args &args) {
 
     auto text_streamer = std::make_shared<chatglm::TextStreamer>(std::cout, pipeline.tokenizer.get());
     auto perf_streamer = std::make_shared<chatglm::PerfStreamer>();
-    auto streamer = std::make_shared<chatglm::StreamerGroup>(
-        std::vector<std::shared_ptr<chatglm::BaseStreamer>>{text_streamer, perf_streamer});
+    std::vector<std::shared_ptr<chatglm::BaseStreamer>> streamers{perf_streamer};
+    if (!args.sync) {
+        streamers.emplace_back(text_streamer);
+    }
+    auto streamer = std::make_unique<chatglm::StreamerGroup>(std::move(streamers));
 
     chatglm::GenerationConfig gen_config(args.max_length, args.max_context_length, args.temp > 0, args.top_k,
                                          args.top_p, args.temp, args.repeat_penalty, args.num_threads);
@@ -234,9 +241,9 @@ static void chat(Args &args) {
                 const auto &tool_call = messages.back().tool_calls.front();
                 if (tool_call.type == chatglm::ToolCallMessage::TYPE_FUNCTION) {
                     // function call
-                    std::cout << "Tool Call   > Please manually call function `" << tool_call.function.name
+                    std::cout << "Function Call > Please manually call function `" << tool_call.function.name
                               << "` with args `" << tool_call.function.argument << "` and provide the results below.\n"
-                              << "Observation > " << std::flush;
+                              << "Observation   > " << std::flush;
                 } else if (tool_call.type == chatglm::ToolCallMessage::TYPE_CODE) {
                     // code interpreter
                     std::cout << "Code Interpreter > Please manually run the code and provide the results below.\n"
@@ -264,6 +271,9 @@ static void chat(Args &args) {
             messages.emplace_back(std::move(role), std::move(prompt));
             std::cout << model_name << " > ";
             chatglm::ChatMessage output = pipeline.chat(messages, gen_config, streamer.get());
+            if (args.sync) {
+                std::cout << output.content << "\n";
+            }
             messages.emplace_back(std::move(output));
             if (args.verbose) {
                 std::cout << "\n" << perf_streamer->to_string() << "\n\n";
@@ -275,9 +285,15 @@ static void chat(Args &args) {
         if (args.mode == INFERENCE_MODE_CHAT) {
             std::vector<chatglm::ChatMessage> messages = system_messages;
             messages.emplace_back(chatglm::ChatMessage::ROLE_USER, args.prompt);
-            pipeline.chat(messages, gen_config, streamer.get());
+            chatglm::ChatMessage output = pipeline.chat(messages, gen_config, streamer.get());
+            if (args.sync) {
+                std::cout << output.content << "\n";
+            }
         } else {
-            pipeline.generate(args.prompt, gen_config, streamer.get());
+            std::string output = pipeline.generate(args.prompt, gen_config, streamer.get());
+            if (args.sync) {
+                std::cout << output << "\n";
+            }
         }
         if (args.verbose) {
             std::cout << "\n" << perf_streamer->to_string() << "\n\n";
