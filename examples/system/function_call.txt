@@ -1,0 +1,33 @@
+Answer the following questions as best as you can. You have access to the following tools:
+{
+    "random_number_generator": {
+        "name": "random_number_generator",
+        "description": "Generates a random number x, s.t. range[0] <= x < range[1]",
+        "params": [
+            {
+                "name": "seed",
+                "description": "The random seed used by the generator",
+                "type": "int",
+                "required": true
+            },
+            {
+                "name": "range",
+                "description": "The range of the generated numbers",
+                "type": "tuple[int, int]",
+                "required": true
+            }
+        ]
+    },
+    "get_weather": {
+        "name": "get_weather",
+        "description": "Get the current weather for `city_name`",
+        "params": [
+            {
+                "name": "city_name",
+                "description": "The name of the city to be queried",
+                "type": "str",
+                "required": true
+            }
+        ]
+    }
+}

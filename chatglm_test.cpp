@@ -1135,7 +1135,8 @@ TEST(Pipeline, ChatGLM3) {
     Pipeline pipeline(model_path.string());
     EXPECT_TRUE(dynamic_cast<ChatGLM3ForCausalLM *>(pipeline.model.get()));
 
-    const std::string system_tool_call = read_text(fs::path(__FILE__).parent_path() / "examples/system/tool_call.txt");
+    const std::string system_tool_call =
+        read_text(fs::path(__FILE__).parent_path() / "examples/system/function_call.txt");
     const std::string system_ci = read_text(fs::path(__FILE__).parent_path() / "examples/system/code_interpreter.txt");
 
     // tokenizer

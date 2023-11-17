@@ -29,10 +29,6 @@ def test_chatglm_pipeline():
     output = pipeline.chat(history, do_sample=False)
     assert output == target
 
-    stream_output = pipeline.stream_chat(history, do_sample=False)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
-
     stream_output = pipeline.chat(history, do_sample=False, stream=True)
     stream_output = "".join(stream_output)
     assert stream_output == target
@@ -47,10 +43,6 @@ def test_chatglm2_pipeline():
     output = pipeline.chat(history, do_sample=False)
     assert output == target
 
-    stream_output = pipeline.stream_chat(history, do_sample=False)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
-
     stream_output = pipeline.chat(history, do_sample=False, stream=True)
     stream_output = "".join(stream_output)
     assert stream_output == target
@@ -64,10 +56,6 @@ def test_chatglm3_pipeline():
     pipeline = chatglm_cpp.Pipeline(CHATGLM3_MODEL_PATH)
     output = pipeline.chat(history, do_sample=False)
     assert output == target
-
-    stream_output = pipeline.stream_chat(history, do_sample=False)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
 
     stream_output = pipeline.chat(history, do_sample=False, stream=True)
     stream_output = "".join(stream_output)
@@ -109,10 +97,6 @@ def test_baichuan13b_pipeline():
     output = pipeline.chat(history, **gen_kwargs)
     assert output == target
 
-    stream_output = pipeline.stream_chat(history, **gen_kwargs)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
-
     stream_output = pipeline.chat(history, **gen_kwargs, stream=True)
     stream_output = "".join(stream_output)
     assert stream_output == target
@@ -128,10 +112,6 @@ def test_baichuan2_7b_pipeline():
     pipeline = chatglm_cpp.Pipeline(BAICHUAN2_7B_MODEL_PATH)
     output = pipeline.chat(history, **gen_kwargs)
     assert output == target
-
-    stream_output = pipeline.stream_chat(history, **gen_kwargs)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
 
     stream_output = pipeline.chat(history, **gen_kwargs, stream=True)
     stream_output = "".join(stream_output)
@@ -149,10 +129,6 @@ def test_baichuan2_13b_pipeline():
     output = pipeline.chat(history, **gen_kwargs)
     assert output == target
 
-    stream_output = pipeline.stream_chat(history, **gen_kwargs)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
-
     stream_output = pipeline.chat(history, **gen_kwargs, stream=True)
     stream_output = "".join(stream_output)
     assert stream_output == target
@@ -169,10 +145,6 @@ def test_internlm7b_pipeline():
     output = pipeline.chat(history, **gen_kwargs)
     assert output == target
 
-    stream_output = pipeline.stream_chat(history, **gen_kwargs)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
-
     stream_output = pipeline.chat(history, **gen_kwargs, stream=True)
     stream_output = "".join(stream_output)
     assert stream_output == target
@@ -188,10 +160,6 @@ def test_internlm20b_pipeline():
     pipeline = chatglm_cpp.Pipeline(INTERNLM20B_MODEL_PATH)
     output = pipeline.chat(history, **gen_kwargs)
     assert output == target
-
-    stream_output = pipeline.stream_chat(history, **gen_kwargs)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
 
     stream_output = pipeline.chat(history, **gen_kwargs, stream=True)
     stream_output = "".join(stream_output)

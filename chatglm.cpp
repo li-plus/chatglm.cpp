@@ -1111,8 +1111,8 @@ std::string ChatGLM3Tokenizer::decode_with_special_tokens(const std::vector<int>
 std::string ChatGLM3Tokenizer::remove_special_tokens(const std::string &text) {
     std::string output = text;
     static const std::vector<std::regex> special_token_regex{
-        std::regex(R"(<\|assistant\|> interpreter)"),
-        std::regex(R"(<\|assistant\|> interpre)"),
+        // std::regex(R"(<\|assistant\|> interpreter)"),
+        // std::regex(R"(<\|assistant\|> interpre)"),
         std::regex(R"(<\|assistant\|>)"),
         std::regex(R"(<\|user\|>)"),
         std::regex(R"(<\|observation\|>)"),
@@ -1182,6 +1182,7 @@ ChatMessage ChatGLM3Tokenizer::decode_message(const std::vector<int> &ids) const
             if (pos != std::string::npos) {
                 // split tool name and args by 1st linebreak
                 tool_name = output.substr(0, pos);
+                trim(tool_name);
                 output.erase(0, pos + 1);
             }
 

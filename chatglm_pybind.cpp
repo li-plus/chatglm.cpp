@@ -32,6 +32,13 @@ class PyBaseModelForCausalLM : public BaseModelForCausalLM {
     }
 };
 
+template <typename T>
+static inline std::string to_string(const T &obj) {
+    std::ostringstream oss;
+    oss << obj;
+    return oss.str();
+}
+
 PYBIND11_MODULE(_C, m) {
     m.doc() = "ChatGLM.cpp python binding";
 
@@ -50,22 +57,8 @@ PYBIND11_MODULE(_C, m) {
         .def_readonly("eos_token_id", &ModelConfig::eos_token_id)
         .def_readonly("pad_token_id", &ModelConfig::pad_token_id)
         .def_readonly("sep_token_id", &ModelConfig::sep_token_id)
+        .def_readonly("extra_eos_token_ids", &ModelConfig::extra_eos_token_ids)
         .def_property_readonly("model_type_name", &ModelConfig::model_type_name);
-
-    py::class_<ChatMessage>(m, "ChatMessage")
-        .def(py::init<std::string, std::string>(), "role"_a, "content"_a)
-        .def_readwrite("role", &ChatMessage::role)
-        .def_readwrite("content", &ChatMessage::content);
-
-    py::class_<BaseTokenizer, PyBaseTokenizer>(m, "BaseTokenizer")
-        .def("encode", &BaseTokenizer::encode)
-        .def("decode", &BaseTokenizer::decode)
-        .def("encode_messages", &BaseTokenizer::encode_messages)
-        .def("decode_message", &BaseTokenizer::decode_message);
-
-    py::class_<BaseModelForCausalLM, PyBaseModelForCausalLM>(m, "BaseModelForCausalLM")
-        .def("generate_next_token", &BaseModelForCausalLM::generate_next_token)
-        .def_readonly("config", &BaseModelForCausalLM::config);
 
     py::class_<GenerationConfig>(m, "GenerationConfig")
         .def(py::init<int, int, bool, int, float, float, float, int>(), "max_length"_a = 2048,
@@ -79,6 +72,47 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("temperature", &GenerationConfig::temperature)
         .def_readwrite("repetition_penalty", &GenerationConfig::repetition_penalty)
         .def_readwrite("num_threads", &GenerationConfig::num_threads);
+
+    py::class_<FunctionMessage>(m, "FunctionMessage")
+        .def("__repr__", &to_string<FunctionMessage>)
+        .def("__str__", &to_string<FunctionMessage>)
+        .def_readwrite("name", &FunctionMessage::name)
+        .def_readwrite("arguments", &FunctionMessage::arguments);
+
+    py::class_<CodeMessage>(m, "CodeMessage")
+        .def("__repr__", &to_string<CodeMessage>)
+        .def("__str__", &to_string<CodeMessage>)
+        .def_readwrite("input", &CodeMessage::input);
+
+    py::class_<ToolCallMessage>(m, "ToolCallMessage")
+        .def("__repr__", &to_string<ToolCallMessage>)
+        .def("__str__", &to_string<ToolCallMessage>)
+        .def_readwrite("type", &ToolCallMessage::type)
+        .def_readwrite("function", &ToolCallMessage::function)
+        .def_readwrite("code", &ToolCallMessage::code);
+
+    py::class_<ChatMessage>(m, "ChatMessage")
+        .def(py::init<std::string, std::string, std::vector<ToolCallMessage>>(), "role"_a, "content"_a,
+             "tool_calls"_a = std::vector<ToolCallMessage>{})
+        .def("__repr__", &to_string<ChatMessage>)
+        .def("__str__", &to_string<ChatMessage>)
+        .def_readonly_static("ROLE_SYSTEM", &ChatMessage::ROLE_SYSTEM)
+        .def_readonly_static("ROLE_USER", &ChatMessage::ROLE_USER)
+        .def_readonly_static("ROLE_ASSISTANT", &ChatMessage::ROLE_ASSISTANT)
+        .def_readonly_static("ROLE_OBSERVATION", &ChatMessage::ROLE_OBSERVATION)
+        .def_readwrite("role", &ChatMessage::role)
+        .def_readwrite("content", &ChatMessage::content)
+        .def_readwrite("tool_calls", &ChatMessage::tool_calls);
+
+    py::class_<BaseTokenizer, PyBaseTokenizer>(m, "BaseTokenizer")
+        .def("encode", &BaseTokenizer::encode)
+        .def("decode", &BaseTokenizer::decode)
+        .def("encode_messages", &BaseTokenizer::encode_messages)
+        .def("decode_message", &BaseTokenizer::decode_message);
+
+    py::class_<BaseModelForCausalLM, PyBaseModelForCausalLM>(m, "BaseModelForCausalLM")
+        .def("generate_next_token", &BaseModelForCausalLM::generate_next_token)
+        .def_readonly("config", &BaseModelForCausalLM::config);
 
     // ===== ChatGLM =====
 

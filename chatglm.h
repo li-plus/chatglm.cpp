@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <ggml.h>
+#include <iomanip>
 #include <sentencepiece_processor.h>
 #include <sstream>
 #include <unordered_map>
@@ -126,10 +127,15 @@ class ModelConfig {
 
 struct FunctionMessage {
     std::string name;
-    std::string argument;
+    std::string arguments;
 
     FunctionMessage() = default;
-    FunctionMessage(std::string name, std::string argument) : name(std::move(name)), argument(std::move(argument)) {}
+    FunctionMessage(std::string name, std::string arguments) : name(std::move(name)), arguments(std::move(arguments)) {}
+
+    friend std::ostream &operator<<(std::ostream &os, const FunctionMessage &self) {
+        return os << "FunctionMessage(name=" << std::quoted(self.name) << ", arguments=" << std::quoted(self.arguments)
+                  << ")";
+    }
 };
 
 struct CodeMessage {
@@ -137,6 +143,10 @@ struct CodeMessage {
 
     CodeMessage() = default;
     CodeMessage(std::string input) : input(std::move(input)) {}
+
+    friend std::ostream &operator<<(std::ostream &os, const CodeMessage &self) {
+        return os << "CodeMessage(input=" << std::quoted(self.input) << ")";
+    }
 };
 
 struct ToolCallMessage {
@@ -150,6 +160,11 @@ struct ToolCallMessage {
     ToolCallMessage(FunctionMessage function) : type(TYPE_FUNCTION), function(std::move(function)) {}
 
     ToolCallMessage(CodeMessage code) : type(TYPE_CODE), code(std::move(code)) {}
+
+    friend std::ostream &operator<<(std::ostream &os, const ToolCallMessage &self) {
+        return os << "ToolCallMessage(type=" << std::quoted(self.type) << ", function=" << self.function
+                  << ", code=" << self.code << ")";
+    }
 };
 
 struct ChatMessage {
@@ -167,7 +182,12 @@ struct ChatMessage {
         : role(std::move(role)), content(std::move(content)), tool_calls(std::move(tool_calls)) {}
 
     friend std::ostream &operator<<(std::ostream &os, const ChatMessage &self) {
-        return os << "ChatMessage(role=" << self.role << ", content=" << self.content << ")";
+        os << "ChatMessage(role=" << std::quoted(self.role) << ", content=" << std::quoted(self.content)
+           << ", tool_calls=[";
+        for (size_t i = 0; i < self.tool_calls.size(); i++) {
+            os << (i > 0 ? ", " : "") << self.tool_calls[i];
+        }
+        return os << "])";
     }
 };
 

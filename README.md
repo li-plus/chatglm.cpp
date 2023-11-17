@@ -116,13 +116,13 @@ python3 chatglm_cpp/convert.py -i THUDM/chatglm3-6b -t q4_0 -o chatglm3-ggml.bin
 
 Setting system prompt:
 ```sh
-./build/bin/main -m chatglm3-ggml.bin -s "You are ChatGLM3, a large language model trained by Zhipu.AI. Follow the user's instructions carefully. Respond using markdown."
+./build/bin/main -m chatglm3-ggml.bin -p 你好 -s "You are ChatGLM3, a large language model trained by Zhipu.AI. Follow the user's instructions carefully. Respond using markdown."
 # 你好👋！我是 ChatGLM3，有什么问题可以帮您解答吗？
 ```
 
 Function call:
 ~~~
-$ ./build/bin/main -m chatglm3-ggml.bin --sp examples/system/tool_call.txt -i
+$ ./build/bin/main -m chatglm3-ggml.bin --top_p 0.8 --temp 0.8 --sp examples/system/function_call.txt -i
 System   > Answer the following questions as best as you can. You have access to the following tools: ...
 Prompt   > 生成一个随机数
 ChatGLM3 > random_number_generator
@@ -136,7 +136,7 @@ ChatGLM3 > 根据您的要求，我使用随机数生成器API生成了一个随
 
 Code interpreter:
 ~~~
-$ ./build/bin/main -m chatglm3-ggml.bin --sp examples/system/code_interpreter.txt -i
+$ ./build/bin/main -m chatglm3-ggml.bin --top_p 0.8 --temp 0.8 --sp examples/system/code_interpreter.txt -i
 System   > 你是一位智能AI助手，你叫ChatGLM，你连接着一台电脑，但请注意不能联网。在使用Python解决任务时，你可以运行代码并得到结果，如果运行结果有错误，你需要尽可能对代码进行改进。你可以处理用户上传到电脑上的文件，文件默认存储路径是/mnt/data/。
 Prompt   > 列出100以内的所有质数
 ChatGLM3 > 好的，我会为您列出100以内的所有质数。
@@ -347,10 +347,29 @@ python3 web_demo.py -m ../chatglm2-ggml.bin --temp 0.8 --top_p 0.8  # web demo
 <details open>
 <summary>ChatGLM3-6B</summary>
 
+CLI Demo:
+
+Chat mode:
 ```sh
 python3 cli_chat.py -m ../chatglm3-ggml.bin -p 你好 --temp 0.8 --top_p 0.8  # CLI demo
-python3 web_demo.py -m ../chatglm3-ggml.bin --temp 0.8 --top_p 0.8  # web demo
+# python3 web_demo.py -m ../chatglm3-ggml.bin --temp 0.8 --top_p 0.8  # web demo
 ```
+
+Function call:
+```sh
+python3 cli_chat.py -m ../chatglm3-ggml.bin --temp 0.8 --top_p 0.8 --sp system/function_call.txt -i
+```
+
+Code interpreter:
+```sh
+python3 cli_chat.py -m ../chatglm3-ggml.bin --temp 0.8 --top_p 0.8 --sp system/code_interpreter.txt -i
+```
+
+Composite web demo:
+```sh
+WIP
+```
+
 </details>
 
 <details>

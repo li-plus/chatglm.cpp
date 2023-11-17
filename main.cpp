@@ -156,6 +156,13 @@ static bool get_utf8_line(std::string &line) {
 #endif
 }
 
+static inline void print_message(const chatglm::ChatMessage &message) {
+    std::cout << message.content << "\n";
+    if (!message.tool_calls.empty() && message.tool_calls.front().type == chatglm::ToolCallMessage::TYPE_CODE) {
+        std::cout << message.tool_calls.front().code.input << "\n";
+    }
+}
+
 static void chat(Args &args) {
     ggml_time_init();
     int64_t start_load_us = ggml_time_us();
@@ -242,7 +249,7 @@ static void chat(Args &args) {
                 if (tool_call.type == chatglm::ToolCallMessage::TYPE_FUNCTION) {
                     // function call
                     std::cout << "Function Call > Please manually call function `" << tool_call.function.name
-                              << "` with args `" << tool_call.function.argument << "` and provide the results below.\n"
+                              << "` with args `" << tool_call.function.arguments << "` and provide the results below.\n"
                               << "Observation   > " << std::flush;
                 } else if (tool_call.type == chatglm::ToolCallMessage::TYPE_CODE) {
                     // code interpreter
@@ -272,7 +279,7 @@ static void chat(Args &args) {
             std::cout << model_name << " > ";
             chatglm::ChatMessage output = pipeline.chat(messages, gen_config, streamer.get());
             if (args.sync) {
-                std::cout << output.content << "\n";
+                print_message(output);
             }
             messages.emplace_back(std::move(output));
             if (args.verbose) {
@@ -287,7 +294,7 @@ static void chat(Args &args) {
             messages.emplace_back(chatglm::ChatMessage::ROLE_USER, args.prompt);
             chatglm::ChatMessage output = pipeline.chat(messages, gen_config, streamer.get());
             if (args.sync) {
-                std::cout << output.content << "\n";
+                print_message(output);
             }
         } else {
             std::string output = pipeline.generate(args.prompt, gen_config, streamer.get());
