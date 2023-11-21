@@ -102,14 +102,14 @@ pipeline = chatglm_cpp.Pipeline(settings.model)
 lock = asyncio.Lock()
 
 
-def stream_chat(history, body):
+def stream_chat(messages, body):
     yield ChatCompletionResponse(
         object="chat.completion.chunk",
         choices=[ChatCompletionResponseStreamChoice(delta=DeltaMessage(role="assistant"))],
     )
 
-    for piece in pipeline.chat(
-        history,
+    for chunk in pipeline.chat(
+        messages=messages,
         max_length=body.max_tokens,
         do_sample=body.temperature > 0,
         top_p=body.top_p,
@@ -119,7 +119,7 @@ def stream_chat(history, body):
     ):
         yield ChatCompletionResponse(
             object="chat.completion.chunk",
-            choices=[ChatCompletionResponseStreamChoice(delta=DeltaMessage(content=piece))],
+            choices=[ChatCompletionResponseStreamChoice(delta=DeltaMessage(content=chunk.content))],
         )
 
     yield ChatCompletionResponse(
@@ -144,31 +144,31 @@ async def stream_chat_event_publisher(history, body):
 
 @app.post("/v1/chat/completions")
 async def create_chat_completion(body: ChatCompletionRequest) -> ChatCompletionResponse:
-    # ignore system messages
-    history = [msg.content for msg in body.messages if msg.role != "system"]
-    if len(history) % 2 != 1:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid history size")
+    if not body.messages:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty messages")
+
+    messages = [chatglm_cpp.ChatMessage(role=msg.role, content=msg.content) for msg in body.messages]
 
     if body.stream:
-        generator = stream_chat_event_publisher(history, body)
+        generator = stream_chat_event_publisher(messages, body)
         return EventSourceResponse(generator)
 
     max_context_length = 512
     output = pipeline.chat(
-        history=history,
+        messages=messages,
         max_length=body.max_tokens,
         max_context_length=max_context_length,
         do_sample=body.temperature > 0,
         top_p=body.top_p,
         temperature=body.temperature,
     )
-    logging.info(f'prompt: "{history[-1]}", sync response: "{output}"')
-    prompt_tokens = len(pipeline.tokenizer.encode_history(history, max_context_length))
-    completion_tokens = len(pipeline.tokenizer.encode(output, body.max_tokens))
+    logging.info(f'prompt: "{messages[-1].content}", sync response: "{output.content}"')
+    prompt_tokens = len(pipeline.tokenizer.encode_messages(messages, max_context_length))
+    completion_tokens = len(pipeline.tokenizer.encode(output.content, body.max_tokens))
 
     return ChatCompletionResponse(
         object="chat.completion",
-        choices=[ChatCompletionResponseChoice(message=ChatMessage(role="assistant", content=output))],
+        choices=[ChatCompletionResponseChoice(message=ChatMessage(role="assistant", content=output.content))],
         usage=ChatCompletionUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
     )
 
