@@ -323,7 +323,7 @@ Here is a simple demo that uses `chatglm_cpp.Pipeline` to load the GGML model an
 
 To chat in stream, run the below Python example:
 ```sh
-python3 cli_chat.py -m ../chatglm-ggml.bin -i
+python3 cli_demo.py -m ../chatglm-ggml.bin -i
 ```
 
 Launch a web demo to chat in your browser:
@@ -339,7 +339,7 @@ For other models:
 <summary>ChatGLM2-6B</summary>
 
 ```sh
-python3 cli_chat.py -m ../chatglm2-ggml.bin -p 你好 --temp 0.8 --top_p 0.8  # CLI demo
+python3 cli_demo.py -m ../chatglm2-ggml.bin -p 你好 --temp 0.8 --top_p 0.8  # CLI demo
 python3 web_demo.py -m ../chatglm2-ggml.bin --temp 0.8 --top_p 0.8  # web demo
 ```
 </details>
@@ -351,17 +351,17 @@ python3 web_demo.py -m ../chatglm2-ggml.bin --temp 0.8 --top_p 0.8  # web demo
 
 Chat mode:
 ```sh
-python3 cli_chat.py -m ../chatglm3-ggml.bin -p 你好 --temp 0.8 --top_p 0.8
+python3 cli_demo.py -m ../chatglm3-ggml.bin -p 你好 --temp 0.8 --top_p 0.8
 ```
 
 Function call:
 ```sh
-python3 cli_chat.py -m ../chatglm3-ggml.bin --temp 0.8 --top_p 0.8 --sp system/function_call.txt -i
+python3 cli_demo.py -m ../chatglm3-ggml.bin --temp 0.8 --top_p 0.8 --sp system/function_call.txt -i
 ```
 
 Code interpreter:
 ```sh
-python3 cli_chat.py -m ../chatglm3-ggml.bin --temp 0.8 --top_p 0.8 --sp system/code_interpreter.txt -i
+python3 cli_demo.py -m ../chatglm3-ggml.bin --temp 0.8 --top_p 0.8 --sp system/code_interpreter.txt -i
 ```
 
 **Web Demo**
@@ -388,7 +388,7 @@ streamlit run chatglm3_demo.py
 
 ```sh
 # CLI demo
-python3 cli_chat.py -m ../codegeex2-ggml.bin --temp 0 --mode generate -p "\
+python3 cli_demo.py -m ../codegeex2-ggml.bin --temp 0 --mode generate -p "\
 # language: Python
 # write a bubble sort function
 "
@@ -401,7 +401,7 @@ python3 web_demo.py -m ../codegeex2-ggml.bin --temp 0 --max_length 512 --mode ge
 <summary>Baichuan-13B-Chat</summary>
 
 ```sh
-python3 cli_chat.py -m ../baichuan-13b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1 # CLI demo
+python3 cli_demo.py -m ../baichuan-13b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1 # CLI demo
 python3 web_demo.py -m ../baichuan-13b-chat-ggml.bin --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1   # web demo
 ```
 </details>
@@ -410,7 +410,7 @@ python3 web_demo.py -m ../baichuan-13b-chat-ggml.bin --top_k 5 --top_p 0.85 --te
 <summary>Baichuan2-7B-Chat</summary>
 
 ```sh
-python3 cli_chat.py -m ../baichuan2-7b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05 # CLI demo
+python3 cli_demo.py -m ../baichuan2-7b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05 # CLI demo
 python3 web_demo.py -m ../baichuan2-7b-chat-ggml.bin --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05   # web demo
 ```
 </details>
@@ -419,7 +419,7 @@ python3 web_demo.py -m ../baichuan2-7b-chat-ggml.bin --top_k 5 --top_p 0.85 --te
 <summary>Baichuan2-13B-Chat</summary>
 
 ```sh
-python3 cli_chat.py -m ../baichuan2-13b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05 # CLI demo
+python3 cli_demo.py -m ../baichuan2-13b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05 # CLI demo
 python3 web_demo.py -m ../baichuan2-13b-chat-ggml.bin --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05   # web demo
 ```
 </details>
@@ -428,7 +428,7 @@ python3 web_demo.py -m ../baichuan2-13b-chat-ggml.bin --top_k 5 --top_p 0.85 --t
 <summary>InternLM-Chat-7B</summary>
 
 ```sh
-python3 cli_chat.py -m ../internlm-chat-7b-ggml.bin -p 你好 --top_p 0.8 --temp 0.8  # CLI demo
+python3 cli_demo.py -m ../internlm-chat-7b-ggml.bin -p 你好 --top_p 0.8 --temp 0.8  # CLI demo
 python3 web_demo.py -m ../internlm-chat-7b-ggml.bin --top_p 0.8 --temp 0.8  # web demo
 ```
 </details>
@@ -437,7 +437,7 @@ python3 web_demo.py -m ../internlm-chat-7b-ggml.bin --top_p 0.8 --temp 0.8  # we
 <summary>InternLM-Chat-20B</summary>
 
 ```sh
-python3 cli_chat.py -m ../internlm-chat-20b-ggml.bin -p 你好 --top_p 0.8 --temp 0.8 # CLI demo
+python3 cli_demo.py -m ../internlm-chat-20b-ggml.bin -p 你好 --top_p 0.8 --temp 0.8 # CLI demo
 python3 web_demo.py -m ../internlm-chat-20b-ggml.bin --top_p 0.8 --temp 0.8 # web demo
 ```
 </details>
@@ -458,7 +458,7 @@ Processing model states: 100%|████████████████�
 
 Likewise, replace the GGML model path with Hugging Face model in any example script, and it just works. For example:
 ```sh
-python3 cli_chat.py -m THUDM/chatglm-6b -p 你好 -i
+python3 cli_demo.py -m THUDM/chatglm-6b -p 你好 -i
 ```
 
 ## API Server
@@ -532,7 +532,7 @@ docker build . --network=host -t chatglm.cpp
 # cpp demo
 docker run -it --rm -v $PWD:/opt chatglm.cpp ./build/bin/main -m /opt/chatglm-ggml.bin -p "你好"
 # python demo
-docker run -it --rm -v $PWD:/opt chatglm.cpp python3 examples/cli_chat.py -m /opt/chatglm-ggml.bin -p "你好"
+docker run -it --rm -v $PWD:/opt chatglm.cpp python3 examples/cli_demo.py -m /opt/chatglm-ggml.bin -p "你好"
 # langchain api server
 docker run -it --rm -v $PWD:/opt -p 8000:8000 -e MODEL=/opt/chatglm-ggml.bin chatglm.cpp \
     uvicorn chatglm_cpp.langchain_api:app --host 0.0.0.0 --port 8000
