@@ -3,7 +3,7 @@ ChatGLM.cpp python binding
 """
 from __future__ import annotations
 import typing
-__all__ = ['Baichuan13BForCausalLM', 'Baichuan7BForCausalLM', 'BaichuanTokenizer', 'BaseModelForCausalLM', 'BaseTokenizer', 'ChatGLM2ForCausalLM', 'ChatGLM2Tokenizer', 'ChatGLM3Tokenizer', 'ChatGLMForCausalLM', 'ChatGLMTokenizer', 'ChatMessage', 'CodeMessage', 'FunctionMessage', 'GenerationConfig', 'InternLM20BForCausalLM', 'InternLM7BForCausalLM', 'InternLMTokenizer', 'ModelConfig', 'Pipeline', 'ToolCallMessage']
+__all__ = ['Baichuan13BForCausalLM', 'Baichuan7BForCausalLM', 'BaichuanTokenizer', 'BaseModelForCausalLM', 'BaseTokenizer', 'ChatGLM2ForCausalLM', 'ChatGLM2Tokenizer', 'ChatGLM3Tokenizer', 'ChatGLMForCausalLM', 'ChatGLMTokenizer', 'ChatMessage', 'CodeMessage', 'FunctionMessage', 'GenerationConfig', 'InternLM20BForCausalLM', 'InternLM7BForCausalLM', 'InternLMTokenizer', 'ModelConfig', 'ModelType', 'Pipeline', 'ToolCallMessage']
 class Baichuan13BForCausalLM(BaseModelForCausalLM):
     pass
 class Baichuan7BForCausalLM(BaseModelForCausalLM):
@@ -11,19 +11,19 @@ class Baichuan7BForCausalLM(BaseModelForCausalLM):
 class BaichuanTokenizer(BaseTokenizer):
     pass
 class BaseModelForCausalLM:
-    def generate_next_token(self, arg0: list[int], arg1: GenerationConfig, arg2: int, arg3: int) -> int:
+    def generate_next_token(self, input_ids: list[int], gen_config: GenerationConfig, n_past: int, n_ctx: int) -> int:
         ...
     @property
     def config(self) -> ModelConfig:
         ...
 class BaseTokenizer:
-    def decode(self, arg0: list[int]) -> str:
+    def decode(self, ids: list[int]) -> str:
         ...
-    def decode_message(self, arg0: list[int]) -> ChatMessage:
+    def decode_message(self, ids: list[int]) -> ChatMessage:
         ...
-    def encode(self, arg0: str, arg1: int) -> list[int]:
+    def encode(self, text: str, max_length: int) -> list[int]:
         ...
-    def encode_messages(self, arg0: list[ChatMessage], arg1: int) -> list[int]:
+    def encode_messages(self, messages: list[ChatMessage], max_length: int) -> list[int]:
         ...
 class ChatGLM2ForCausalLM(BaseModelForCausalLM):
     pass
@@ -84,9 +84,6 @@ class ModelConfig:
     def bos_token_id(self) -> int:
         ...
     @property
-    def dtype(self) -> ggml_type:
-        ...
-    @property
     def eos_token_id(self) -> int:
         ...
     @property
@@ -102,7 +99,7 @@ class ModelConfig:
     def max_length(self) -> int:
         ...
     @property
-    def model_type(self) -> ...:
+    def model_type(self) -> ModelType:
         ...
     @property
     def model_type_name(self) -> str:
@@ -128,8 +125,57 @@ class ModelConfig:
     @property
     def vocab_size(self) -> int:
         ...
+class ModelType:
+    """
+    Members:
+    
+      CHATGLM
+    
+      CHATGLM2
+    
+      CHATGLM3
+    
+      BAICHUAN7B
+    
+      BAICHUAN13B
+    
+      INTERNLM
+    """
+    BAICHUAN13B: typing.ClassVar[ModelType]  # value = <ModelType.BAICHUAN13B: 1025>
+    BAICHUAN7B: typing.ClassVar[ModelType]  # value = <ModelType.BAICHUAN7B: 1024>
+    CHATGLM: typing.ClassVar[ModelType]  # value = <ModelType.CHATGLM: 1>
+    CHATGLM2: typing.ClassVar[ModelType]  # value = <ModelType.CHATGLM2: 2>
+    CHATGLM3: typing.ClassVar[ModelType]  # value = <ModelType.CHATGLM3: 3>
+    INTERNLM: typing.ClassVar[ModelType]  # value = <ModelType.INTERNLM: 1280>
+    __members__: typing.ClassVar[dict[str, ModelType]]  # value = {'CHATGLM': <ModelType.CHATGLM: 1>, 'CHATGLM2': <ModelType.CHATGLM2: 2>, 'CHATGLM3': <ModelType.CHATGLM3: 3>, 'BAICHUAN7B': <ModelType.BAICHUAN7B: 1024>, 'BAICHUAN13B': <ModelType.BAICHUAN13B: 1025>, 'INTERNLM': <ModelType.INTERNLM: 1280>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: int) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: int) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
 class Pipeline:
-    def __init__(self, arg0: str) -> None:
+    def __init__(self, path: str) -> None:
         ...
     @property
     def model(self) -> BaseModelForCausalLM:

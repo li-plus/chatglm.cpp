@@ -461,20 +461,20 @@ int get_default_num_threads() {
 
 std::string to_string(ModelType model_type) {
     switch (model_type) {
-    case MODEL_TYPE_CHATGLM:
+    case ModelType::CHATGLM:
         return "ChatGLM";
-    case MODEL_TYPE_CHATGLM2:
+    case ModelType::CHATGLM2:
         return "ChatGLM2";
-    case MODEL_TYPE_CHATGLM3:
+    case ModelType::CHATGLM3:
         return "ChatGLM3";
-    case MODEL_TYPE_BAICHUAN7B:
+    case ModelType::BAICHUAN7B:
         return "Baichuan7B";
-    case MODEL_TYPE_BAICHUAN13B:
+    case ModelType::BAICHUAN13B:
         return "Baichuan13B";
-    case MODEL_TYPE_INTERNLM:
+    case ModelType::INTERNLM:
         return "InternLM";
     default:
-        CHATGLM_THROW << "unknown model type " << model_type;
+        CHATGLM_THROW << "unknown model type " << (int)model_type;
     }
 }
 
@@ -1476,7 +1476,7 @@ Pipeline::Pipeline(const std::string &path) {
     ModelType model_type = (ModelType)loader.read_basic<int>();
     // load version
     int version = loader.read_basic<int>();
-    if (model_type == MODEL_TYPE_CHATGLM) {
+    if (model_type == ModelType::CHATGLM) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
@@ -1491,7 +1491,7 @@ Pipeline::Pipeline(const std::string &path) {
         // load model
         model = std::make_unique<ChatGLMForCausalLM>(config);
         model->load(loader);
-    } else if (model_type == MODEL_TYPE_CHATGLM2 || model_type == MODEL_TYPE_CHATGLM3) {
+    } else if (model_type == ModelType::CHATGLM2 || model_type == ModelType::CHATGLM3) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
@@ -1502,7 +1502,7 @@ Pipeline::Pipeline(const std::string &path) {
         std::string_view serialized_model_proto((char *)mapped_file->data + loader.tell(), proto_size);
         loader.seek(proto_size, SEEK_CUR);
 
-        if (model_type == MODEL_TYPE_CHATGLM2) {
+        if (model_type == ModelType::CHATGLM2) {
             tokenizer = std::make_unique<ChatGLM2Tokenizer>(serialized_model_proto);
             model = std::make_unique<ChatGLM2ForCausalLM>(config);
         } else {
@@ -1514,7 +1514,7 @@ Pipeline::Pipeline(const std::string &path) {
 
         // load model
         model->load(loader);
-    } else if (model_type == MODEL_TYPE_BAICHUAN7B) {
+    } else if (model_type == ModelType::BAICHUAN7B) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
@@ -1530,7 +1530,7 @@ Pipeline::Pipeline(const std::string &path) {
         // load model
         model = std::make_unique<Baichuan7BForCausalLM>(config);
         model->load(loader);
-    } else if (model_type == MODEL_TYPE_BAICHUAN13B) {
+    } else if (model_type == ModelType::BAICHUAN13B) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
@@ -1546,7 +1546,7 @@ Pipeline::Pipeline(const std::string &path) {
         // load model
         model = std::make_unique<Baichuan13BForCausalLM>(config);
         model->load(loader);
-    } else if (model_type == MODEL_TYPE_INTERNLM) {
+    } else if (model_type == ModelType::INTERNLM) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
@@ -1567,7 +1567,7 @@ Pipeline::Pipeline(const std::string &path) {
         }
         model->load(loader);
     } else {
-        CHATGLM_THROW << "invalid model type " << model_type;
+        CHATGLM_THROW << "invalid model type " << (int)model_type;
     }
 }
 

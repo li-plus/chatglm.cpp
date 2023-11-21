@@ -46,13 +46,13 @@ ggml_tensor *tensor_to_device(ggml_tensor *tensor);
 
 ggml_tensor *tensor_to_cpu(ggml_tensor *tensor);
 
-enum ModelType {
-    MODEL_TYPE_CHATGLM = 1,
-    MODEL_TYPE_CHATGLM2 = 2,
-    MODEL_TYPE_CHATGLM3 = 3,
-    MODEL_TYPE_BAICHUAN7B = 1024,
-    MODEL_TYPE_BAICHUAN13B = 1025,
-    MODEL_TYPE_INTERNLM = 1280,
+enum class ModelType {
+    CHATGLM = 1,
+    CHATGLM2 = 2,
+    CHATGLM3 = 3,
+    BAICHUAN7B = 1024,
+    BAICHUAN13B = 1025,
+    INTERNLM = 1280,
 };
 
 std::string to_string(ModelType model_type);
@@ -316,20 +316,20 @@ class RMSNorm {
     float eps;
 };
 
-enum ActivationType {
-    ACT_TYPE_GELU,
-    ACT_TYPE_SILU,
+enum class ActivationType {
+    GELU,
+    SILU,
 };
 
 template <ActivationType ACT_TYPE>
 static inline ggml_tensor *apply_activation_inplace(ggml_context *ctx, ggml_tensor *hidden_states) {
-    static_assert(ACT_TYPE == ACT_TYPE_GELU || ACT_TYPE == ACT_TYPE_SILU);
-    if constexpr (ACT_TYPE == ACT_TYPE_GELU) {
+    static_assert(ACT_TYPE == ActivationType::GELU || ACT_TYPE == ActivationType::SILU);
+    if constexpr (ACT_TYPE == ActivationType::GELU) {
         hidden_states = tensor_assign_buffers(ggml_gelu_inplace(ctx, hidden_states));
-    } else if constexpr (ACT_TYPE == ACT_TYPE_SILU) {
+    } else if constexpr (ACT_TYPE == ActivationType::SILU) {
         hidden_states = tensor_assign_buffers(ggml_silu_inplace(ctx, hidden_states));
     } else {
-        CHATGLM_THROW << "Unknown activation type " << ACT_TYPE;
+        CHATGLM_THROW << "Unknown activation type " << (int)ACT_TYPE;
     }
     return hidden_states;
 }
@@ -974,7 +974,7 @@ struct GLMContextMasker {
 
 using GLMAttention = BasicAttention<true, true, true, GLMRoper, false, GLMContextMasker>;
 
-using GLMMLP = BasicMLP<ACT_TYPE_GELU>;
+using GLMMLP = BasicMLP<ActivationType::GELU>;
 
 // NOTE: disable inplace norm since it causes nonsense on cuda when sequence length >= 144
 class GLMBlock : public BasicBlock<LayerNorm, GLMAttention, GLMMLP> {
@@ -1040,7 +1040,7 @@ class ChatGLM2Tokenizer : public BaseTokenizer {
 
 using GLM2Attention = BasicAttention<true, false, false, BasicRoper<ROPE_TYPE_DEFAULT, 2>, false, CausalContextMasker>;
 
-using GLM2MLP = BasicGLU<ACT_TYPE_SILU, false>;
+using GLM2MLP = BasicGLU<ActivationType::SILU, false>;
 
 using GLM2Block = BasicBlock<RMSNorm, GLM2Attention, GLM2MLP>;
 
@@ -1140,7 +1140,7 @@ class BaichuanTokenizer : public BaseTokenizer {
 using Baichuan7BAttention =
     BasicAttention<false, false, false, BasicRoper<ROPE_TYPE_NEOX, 1>, false, CausalContextMasker>;
 
-using Baichuan7BMLP = BasicGLU<ACT_TYPE_SILU, false>;
+using Baichuan7BMLP = BasicGLU<ActivationType::SILU, false>;
 
 using Baichuan7BBlock = BasicBlock<RMSNorm, Baichuan7BAttention, Baichuan7BMLP>;
 
@@ -1166,7 +1166,7 @@ class Baichuan7BForCausalLM : public BasicModelForCausalLM<Baichuan7BModel> {
 
 using Baichuan13BAttention = BasicAttention<false, false, false, NoopRoper, true, CausalContextMasker>;
 
-using Baichuan13BMLP = BasicGLU<ACT_TYPE_SILU, false>;
+using Baichuan13BMLP = BasicGLU<ActivationType::SILU, false>;
 
 using Baichuan13BBlock = BasicBlock<RMSNorm, Baichuan13BAttention, Baichuan13BMLP>;
 
@@ -1215,7 +1215,7 @@ class InternLMTokenizer : public BaseTokenizer {
 using InternLM7BAttention =
     BasicAttention<true, true, false, BasicRoper<ROPE_TYPE_NEOX, 1>, false, CausalContextMasker>;
 
-using InternLM7BMLP = BasicGLU<ACT_TYPE_SILU, false>;
+using InternLM7BMLP = BasicGLU<ActivationType::SILU, false>;
 
 using InternLM7BBlock = BasicBlock<RMSNorm, InternLM7BAttention, InternLM7BMLP>;
 
@@ -1224,7 +1224,7 @@ using InternLM7BModel = BasicModel<InternLM7BBlock, RMSNorm, BasicPositionIdsGen
 using InternLM20BAttention =
     BasicAttention<false, false, false, BasicRoper<ROPE_TYPE_NEOX, 1>, false, CausalContextMasker>;
 
-using InternLM20BMLP = BasicGLU<ACT_TYPE_SILU, false>;
+using InternLM20BMLP = BasicGLU<ActivationType::SILU, false>;
 
 using InternLM20BBlock = BasicBlock<RMSNorm, InternLM20BAttention, InternLM20BMLP>;
 

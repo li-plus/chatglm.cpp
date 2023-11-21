@@ -10,6 +10,7 @@ __pycache__/
 *.egg-info/
 dist/
 *.so
+*.whl
 .hypothesis/
 
 # cpp

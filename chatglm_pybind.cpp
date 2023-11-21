@@ -42,9 +42,17 @@ static inline std::string to_string(const T &obj) {
 PYBIND11_MODULE(_C, m) {
     m.doc() = "ChatGLM.cpp python binding";
 
+    py::enum_<ModelType>(m, "ModelType")
+        .value("CHATGLM", ModelType::CHATGLM)
+        .value("CHATGLM2", ModelType::CHATGLM2)
+        .value("CHATGLM3", ModelType::CHATGLM3)
+        .value("BAICHUAN7B", ModelType::BAICHUAN7B)
+        .value("BAICHUAN13B", ModelType::BAICHUAN13B)
+        .value("INTERNLM", ModelType::INTERNLM);
+
     py::class_<ModelConfig>(m, "ModelConfig")
         .def_readonly("model_type", &ModelConfig::model_type)
-        .def_readonly("dtype", &ModelConfig::dtype)
+        // .def_readonly("dtype", &ModelConfig::dtype)
         .def_readonly("vocab_size", &ModelConfig::vocab_size)
         .def_readonly("hidden_size", &ModelConfig::hidden_size)
         .def_readonly("num_attention_heads", &ModelConfig::num_attention_heads)
@@ -105,13 +113,14 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("tool_calls", &ChatMessage::tool_calls);
 
     py::class_<BaseTokenizer, PyBaseTokenizer>(m, "BaseTokenizer")
-        .def("encode", &BaseTokenizer::encode)
-        .def("decode", &BaseTokenizer::decode)
-        .def("encode_messages", &BaseTokenizer::encode_messages)
-        .def("decode_message", &BaseTokenizer::decode_message);
+        .def("encode", &BaseTokenizer::encode, "text"_a, "max_length"_a)
+        .def("decode", &BaseTokenizer::decode, "ids"_a)
+        .def("encode_messages", &BaseTokenizer::encode_messages, "messages"_a, "max_length"_a)
+        .def("decode_message", &BaseTokenizer::decode_message, "ids"_a);
 
     py::class_<BaseModelForCausalLM, PyBaseModelForCausalLM>(m, "BaseModelForCausalLM")
-        .def("generate_next_token", &BaseModelForCausalLM::generate_next_token)
+        .def("generate_next_token", &BaseModelForCausalLM::generate_next_token, "input_ids"_a, "gen_config"_a,
+             "n_past"_a, "n_ctx"_a)
         .def_readonly("config", &BaseModelForCausalLM::config);
 
     // ===== ChatGLM =====
@@ -149,7 +158,7 @@ PYBIND11_MODULE(_C, m) {
     // ===== Pipeline ====
 
     py::class_<Pipeline>(m, "Pipeline")
-        .def(py::init<const std::string &>())
+        .def(py::init<const std::string &>(), "path"_a)
         .def_property_readonly("model", [](const Pipeline &self) { return self.model.get(); })
         .def_property_readonly("tokenizer", [](const Pipeline &self) { return self.tokenizer.get(); });
 }
