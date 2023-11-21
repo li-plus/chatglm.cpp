@@ -347,12 +347,11 @@ python3 web_demo.py -m ../chatglm2-ggml.bin --temp 0.8 --top_p 0.8  # web demo
 <details open>
 <summary>ChatGLM3-6B</summary>
 
-CLI Demo:
+**CLI Demo**
 
 Chat mode:
 ```sh
-python3 cli_chat.py -m ../chatglm3-ggml.bin -p 你好 --temp 0.8 --top_p 0.8  # CLI demo
-# python3 web_demo.py -m ../chatglm3-ggml.bin --temp 0.8 --top_p 0.8  # web demo
+python3 cli_chat.py -m ../chatglm3-ggml.bin -p 你好 --temp 0.8 --top_p 0.8
 ```
 
 Function call:
@@ -365,10 +364,22 @@ Code interpreter:
 python3 cli_chat.py -m ../chatglm3-ggml.bin --temp 0.8 --top_p 0.8 --sp system/code_interpreter.txt -i
 ```
 
-Composite web demo:
+**Web Demo**
+
+Install Python dependencies and the IPython kernel for code interpreter.
 ```sh
-WIP
+pip install streamlit jupyter_client ipython ipykernel
+ipython kernel install --name chatglm3-demo --user
 ```
+
+Launch the web demo:
+```sh
+streamlit run chatglm3_demo.py
+```
+
+| Function Call               | Code Interpreter               |
+|-----------------------------|--------------------------------|
+| ![](docs/function_call.png) | ![](docs/code_interpreter.png) |
 
 </details>
 

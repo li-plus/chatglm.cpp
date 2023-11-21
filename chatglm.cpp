@@ -1166,6 +1166,7 @@ ChatMessage ChatGLM3Tokenizer::decode_message(const std::vector<int> &ids) const
         if (ci_pos != std::string::npos) {
             // code interpreter
             std::string chat_output = output.substr(0, ci_pos);
+            chat_output = remove_special_tokens(chat_output);
             trim(chat_output);
             std::string code_output = output.substr(ci_pos + ci_delim.size());
             code_output = remove_special_tokens(code_output);
