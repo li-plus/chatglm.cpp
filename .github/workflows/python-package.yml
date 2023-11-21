@@ -37,7 +37,7 @@ jobs:
       uses: psf/black@stable
       with:
         options: "--check --verbose --line-length 120"
-        src: "chatglm_cpp examples tests setup.py"
+        src: "chatglm_cpp examples tests setup.py --exclude \.pyi"
     - name: Test with pytest
       run: |
         cd tests
