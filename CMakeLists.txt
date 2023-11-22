@@ -92,7 +92,7 @@ file(GLOB PY_SOURCES
 add_custom_target(lint
     COMMAND clang-format -i ${CPP_SOURCES}
     COMMAND isort ${PY_SOURCES}
-    COMMAND black ${PY_SOURCES} --line-length 120)
+    COMMAND black ${PY_SOURCES} --verbose)
 
 # mypy
 add_custom_target(mypy
