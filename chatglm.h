@@ -2,10 +2,10 @@
 
 #include <cmath>
 #include <ggml.h>
+#include <iomanip>
 #include <sentencepiece_processor.h>
 #include <sstream>
 #include <unordered_map>
-#include <vector>
 
 #ifdef GGML_USE_METAL
 #include <ggml-metal.h>
@@ -46,13 +46,13 @@ ggml_tensor *tensor_to_device(ggml_tensor *tensor);
 
 ggml_tensor *tensor_to_cpu(ggml_tensor *tensor);
 
-enum ModelType {
-    MODEL_TYPE_CHATGLM = 1,
-    MODEL_TYPE_CHATGLM2 = 2,
-    MODEL_TYPE_CHATGLM3 = 3,
-    MODEL_TYPE_BAICHUAN7B = 1024,
-    MODEL_TYPE_BAICHUAN13B = 1025,
-    MODEL_TYPE_INTERNLM = 1280,
+enum class ModelType {
+    CHATGLM = 1,
+    CHATGLM2 = 2,
+    CHATGLM3 = 3,
+    BAICHUAN7B = 1024,
+    BAICHUAN13B = 1025,
+    INTERNLM = 1280,
 };
 
 std::string to_string(ModelType model_type);
@@ -87,21 +87,23 @@ class ModelConfig {
 
     ModelConfig(ModelType model_type, ggml_type dtype, int vocab_size, int hidden_size, int num_attention_heads,
                 int num_kv_heads, int num_hidden_layers, int intermediate_size, float norm_eps, int max_length,
-                int bos_token_id, int eos_token_id, int pad_token_id, int sep_token_id)
+                int bos_token_id, int eos_token_id, int pad_token_id, int sep_token_id,
+                std::vector<int> extra_eos_token_ids)
         : model_type(model_type), dtype(dtype), vocab_size(vocab_size), hidden_size(hidden_size),
           num_attention_heads(num_attention_heads), num_kv_heads(num_kv_heads), num_hidden_layers(num_hidden_layers),
           intermediate_size(intermediate_size), norm_eps(norm_eps), max_length(max_length), bos_token_id(bos_token_id),
-          eos_token_id(eos_token_id), pad_token_id(pad_token_id), sep_token_id(sep_token_id) {}
+          eos_token_id(eos_token_id), pad_token_id(pad_token_id), sep_token_id(sep_token_id),
+          extra_eos_token_ids(std::move(extra_eos_token_ids)) {}
 
     ModelConfig(ModelType model_type, const ConfigRecordV1 &rec)
         : ModelConfig(model_type, rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads,
                       rec.num_attention_heads, rec.num_hidden_layers, rec.intermediate_size, 1e-5, rec.max_length,
-                      rec.bos_token_id, rec.eos_token_id, rec.pad_token_id, rec.sep_token_id) {}
+                      rec.bos_token_id, rec.eos_token_id, rec.pad_token_id, rec.sep_token_id, {}) {}
 
     ModelConfig(ModelType model_type, const ConfigRecordV2 &rec)
         : ModelConfig(model_type, rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads, rec.num_kv_heads,
                       rec.num_hidden_layers, rec.intermediate_size, 1e-5, rec.max_length, rec.bos_token_id,
-                      rec.eos_token_id, rec.pad_token_id, rec.sep_token_id) {}
+                      rec.eos_token_id, rec.pad_token_id, rec.sep_token_id, {}) {}
 
     std::string model_type_name() const { return to_string(model_type); }
 
@@ -120,14 +122,91 @@ class ModelConfig {
     int eos_token_id;
     int pad_token_id;
     int sep_token_id;
+    std::vector<int> extra_eos_token_ids;
+};
+
+struct FunctionMessage {
+    std::string name;
+    std::string arguments;
+
+    FunctionMessage() = default;
+    FunctionMessage(std::string name, std::string arguments) : name(std::move(name)), arguments(std::move(arguments)) {}
+
+    friend std::ostream &operator<<(std::ostream &os, const FunctionMessage &self) {
+        return os << "FunctionMessage(name=" << std::quoted(self.name) << ", arguments=" << std::quoted(self.arguments)
+                  << ")";
+    }
+};
+
+struct CodeMessage {
+    std::string input;
+
+    CodeMessage() = default;
+    CodeMessage(std::string input) : input(std::move(input)) {}
+
+    friend std::ostream &operator<<(std::ostream &os, const CodeMessage &self) {
+        return os << "CodeMessage(input=" << std::quoted(self.input) << ")";
+    }
+};
+
+struct ToolCallMessage {
+    std::string type;
+    FunctionMessage function;
+    CodeMessage code;
+
+    static const std::string TYPE_FUNCTION;
+    static const std::string TYPE_CODE;
+
+    ToolCallMessage(FunctionMessage function) : type(TYPE_FUNCTION), function(std::move(function)) {}
+
+    ToolCallMessage(CodeMessage code) : type(TYPE_CODE), code(std::move(code)) {}
+
+    friend std::ostream &operator<<(std::ostream &os, const ToolCallMessage &self) {
+        return os << "ToolCallMessage(type=" << std::quoted(self.type) << ", function=" << self.function
+                  << ", code=" << self.code << ")";
+    }
+};
+
+struct ChatMessage {
+    std::string role;
+    std::string content;
+    std::vector<ToolCallMessage> tool_calls;
+
+    static const std::string ROLE_USER;
+    static const std::string ROLE_ASSISTANT;
+    static const std::string ROLE_SYSTEM;
+    static const std::string ROLE_OBSERVATION;
+
+    ChatMessage() = default;
+    ChatMessage(std::string role, std::string content, std::vector<ToolCallMessage> tool_calls = {})
+        : role(std::move(role)), content(std::move(content)), tool_calls(std::move(tool_calls)) {}
+
+    friend std::ostream &operator<<(std::ostream &os, const ChatMessage &self) {
+        os << "ChatMessage(role=" << std::quoted(self.role) << ", content=" << std::quoted(self.content)
+           << ", tool_calls=[";
+        for (size_t i = 0; i < self.tool_calls.size(); i++) {
+            os << (i > 0 ? ", " : "") << self.tool_calls[i];
+        }
+        return os << "])";
+    }
 };
 
 class BaseTokenizer {
   public:
     virtual ~BaseTokenizer() = default;
+
     virtual std::vector<int> encode(const std::string &text, int max_length) const = 0;
+
     virtual std::string decode(const std::vector<int> &ids) const = 0;
-    virtual std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const = 0;
+
+    virtual std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const = 0;
+
+    virtual ChatMessage decode_message(const std::vector<int> &ids) const {
+        return {ChatMessage::ROLE_ASSISTANT, decode(ids)};
+    }
+
+  protected:
+    static void check_chat_messages(const std::vector<ChatMessage> &messages);
 };
 
 struct ggml_context_deleter_t {
@@ -237,20 +316,20 @@ class RMSNorm {
     float eps;
 };
 
-enum ActivationType {
-    ACT_TYPE_GELU,
-    ACT_TYPE_SILU,
+enum class ActivationType {
+    GELU,
+    SILU,
 };
 
 template <ActivationType ACT_TYPE>
 static inline ggml_tensor *apply_activation_inplace(ggml_context *ctx, ggml_tensor *hidden_states) {
-    static_assert(ACT_TYPE == ACT_TYPE_GELU || ACT_TYPE == ACT_TYPE_SILU);
-    if constexpr (ACT_TYPE == ACT_TYPE_GELU) {
+    static_assert(ACT_TYPE == ActivationType::GELU || ACT_TYPE == ActivationType::SILU);
+    if constexpr (ACT_TYPE == ActivationType::GELU) {
         hidden_states = tensor_assign_buffers(ggml_gelu_inplace(ctx, hidden_states));
-    } else if constexpr (ACT_TYPE == ACT_TYPE_SILU) {
+    } else if constexpr (ACT_TYPE == ActivationType::SILU) {
         hidden_states = tensor_assign_buffers(ggml_silu_inplace(ctx, hidden_states));
     } else {
-        CHATGLM_THROW << "Unknown activation type " << ACT_TYPE;
+        CHATGLM_THROW << "Unknown activation type " << (int)ACT_TYPE;
     }
     return hidden_states;
 }
@@ -650,7 +729,7 @@ class StreamerGroup : public BaseStreamer {
 class TextStreamer : public BaseStreamer {
   public:
     TextStreamer(std::ostream &os, BaseTokenizer *tokenizer)
-        : os_(os), tokenizer_(tokenizer), is_prompt_(true), print_len_(0) {}
+        : os_(os), tokenizer_(tokenizer), is_prompt_(true), is_first_line_(true), print_len_(0) {}
     void put(const std::vector<int> &output_ids) override;
     void end() override;
 
@@ -658,6 +737,7 @@ class TextStreamer : public BaseStreamer {
     std::ostream &os_;
     BaseTokenizer *tokenizer_;
     bool is_prompt_;
+    bool is_first_line_;
     std::vector<int> token_cache_;
     int print_len_;
 };
@@ -870,9 +950,9 @@ class ChatGLMTokenizer : public BaseTokenizer {
 
     std::string decode(const std::vector<int> &ids) const override;
 
-    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
+    std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
 
-    static std::string build_prompt(const std::vector<std::string> &history);
+    static std::string build_prompt(const std::vector<ChatMessage> &messages);
 
   private:
     static std::string preprocess(const std::string &text);
@@ -894,7 +974,7 @@ struct GLMContextMasker {
 
 using GLMAttention = BasicAttention<true, true, true, GLMRoper, false, GLMContextMasker>;
 
-using GLMMLP = BasicMLP<ACT_TYPE_GELU>;
+using GLMMLP = BasicMLP<ActivationType::GELU>;
 
 // NOTE: disable inplace norm since it causes nonsense on cuda when sequence length >= 144
 class GLMBlock : public BasicBlock<LayerNorm, GLMAttention, GLMMLP> {
@@ -942,10 +1022,11 @@ class ChatGLM2Tokenizer : public BaseTokenizer {
 
     std::string decode(const std::vector<int> &ids) const override;
 
-    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
+    std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
 
-    static std::string build_prompt(const std::vector<std::string> &history);
+    static std::string build_prompt(const std::vector<ChatMessage> &messages);
 
+  private:
     bool is_special_id(int id) const;
 
   public:
@@ -959,7 +1040,7 @@ class ChatGLM2Tokenizer : public BaseTokenizer {
 
 using GLM2Attention = BasicAttention<true, false, false, BasicRoper<ROPE_TYPE_DEFAULT, 2>, false, CausalContextMasker>;
 
-using GLM2MLP = BasicGLU<ACT_TYPE_SILU, false>;
+using GLM2MLP = BasicGLU<ActivationType::SILU, false>;
 
 using GLM2Block = BasicBlock<RMSNorm, GLM2Attention, GLM2MLP>;
 
@@ -991,11 +1072,21 @@ class ChatGLM3Tokenizer : public BaseTokenizer {
 
     std::string decode(const std::vector<int> &ids) const override;
 
-    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
+    std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
+
+    ChatMessage decode_message(const std::vector<int> &ids) const override;
+
+  private:
+    std::vector<int> encode_single_message(const std::string &role, const std::string &content) const;
+
+    std::string decode_with_special_tokens(const std::vector<int> &ids) const;
+
+    static std::string remove_special_tokens(const std::string &text);
+
+    int get_command(const std::string &token) const;
 
     bool is_special_id(int id) const;
 
-  protected:
     static void truncate(std::vector<int> &ids, int max_length);
 
   public:
@@ -1009,6 +1100,8 @@ class ChatGLM3Tokenizer : public BaseTokenizer {
     int user_token_id;
     int assistant_token_id;
     int observation_token_id;
+    std::unordered_map<std::string, int> special_tokens;
+    std::unordered_map<int, std::string> index_special_tokens;
 };
 
 using ChatGLM3Model = ChatGLM2Model;
@@ -1025,11 +1118,11 @@ class BaichuanTokenizer : public BaseTokenizer {
 
     std::string decode(const std::vector<int> &ids) const override;
 
-    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
+    std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
 
+  private:
     bool is_special_id(int id) const;
 
-  protected:
     static void truncate(std::vector<int> &ids, int max_length);
 
   public:
@@ -1047,7 +1140,7 @@ class BaichuanTokenizer : public BaseTokenizer {
 using Baichuan7BAttention =
     BasicAttention<false, false, false, BasicRoper<ROPE_TYPE_NEOX, 1>, false, CausalContextMasker>;
 
-using Baichuan7BMLP = BasicGLU<ACT_TYPE_SILU, false>;
+using Baichuan7BMLP = BasicGLU<ActivationType::SILU, false>;
 
 using Baichuan7BBlock = BasicBlock<RMSNorm, Baichuan7BAttention, Baichuan7BMLP>;
 
@@ -1073,7 +1166,7 @@ class Baichuan7BForCausalLM : public BasicModelForCausalLM<Baichuan7BModel> {
 
 using Baichuan13BAttention = BasicAttention<false, false, false, NoopRoper, true, CausalContextMasker>;
 
-using Baichuan13BMLP = BasicGLU<ACT_TYPE_SILU, false>;
+using Baichuan13BMLP = BasicGLU<ActivationType::SILU, false>;
 
 using Baichuan13BBlock = BasicBlock<RMSNorm, Baichuan13BAttention, Baichuan13BMLP>;
 
@@ -1105,10 +1198,11 @@ class InternLMTokenizer : public BaseTokenizer {
 
     std::string decode(const std::vector<int> &ids) const override;
 
-    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override;
+    std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
 
-    static std::string build_prompt(const std::vector<std::string> &history);
+    static std::string build_prompt(const std::vector<ChatMessage> &messages);
 
+  private:
     bool is_special_id(int id) const { return id == unk_token_id || id == bos_token_id || id == eos_token_id; }
 
   public:
@@ -1121,7 +1215,7 @@ class InternLMTokenizer : public BaseTokenizer {
 using InternLM7BAttention =
     BasicAttention<true, true, false, BasicRoper<ROPE_TYPE_NEOX, 1>, false, CausalContextMasker>;
 
-using InternLM7BMLP = BasicGLU<ACT_TYPE_SILU, false>;
+using InternLM7BMLP = BasicGLU<ActivationType::SILU, false>;
 
 using InternLM7BBlock = BasicBlock<RMSNorm, InternLM7BAttention, InternLM7BMLP>;
 
@@ -1130,7 +1224,7 @@ using InternLM7BModel = BasicModel<InternLM7BBlock, RMSNorm, BasicPositionIdsGen
 using InternLM20BAttention =
     BasicAttention<false, false, false, BasicRoper<ROPE_TYPE_NEOX, 1>, false, CausalContextMasker>;
 
-using InternLM20BMLP = BasicGLU<ACT_TYPE_SILU, false>;
+using InternLM20BMLP = BasicGLU<ActivationType::SILU, false>;
 
 using InternLM20BBlock = BasicBlock<RMSNorm, InternLM20BAttention, InternLM20BMLP>;
 
@@ -1171,7 +1265,7 @@ class Pipeline {
     std::string generate(const std::string &prompt, const GenerationConfig &gen_config,
                          BaseStreamer *streamer = nullptr) const;
 
-    std::string chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
+    ChatMessage chat(const std::vector<ChatMessage> &messages, const GenerationConfig &gen_config,
                      BaseStreamer *streamer = nullptr) const;
 
   public:

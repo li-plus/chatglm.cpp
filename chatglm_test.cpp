@@ -1022,12 +1022,15 @@ TEST(Pipeline, ChatGLM) {
 
     // prompter
     {
-        EXPECT_EQ(ChatGLMTokenizer::build_prompt({"你好"}), "你好");
-        EXPECT_EQ(ChatGLMTokenizer::build_prompt(
-                      {"你好", "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。",
-                       "晚上睡不着应该怎么办"}),
-                  "[Round 0]\n问：你好\n答：你好👋！我是人工智能助手 "
-                  "ChatGLM-6B，很高兴见到你，欢迎问我任何问题。\n[Round 1]\n问：晚上睡不着应该怎么办\n答：");
+        EXPECT_EQ(ChatGLMTokenizer::build_prompt({{ChatMessage::ROLE_USER, "你好"}}), "你好");
+        EXPECT_EQ(
+            ChatGLMTokenizer::build_prompt({
+                {ChatMessage::ROLE_USER, "你好"},
+                {ChatMessage::ROLE_ASSISTANT, "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。"},
+                {ChatMessage::ROLE_USER, "晚上睡不着应该怎么办"},
+            }),
+            "[Round 0]\n问：你好\n答：你好👋！我是人工智能助手 "
+            "ChatGLM-6B，很高兴见到你，欢迎问我任何问题。\n[Round 1]\n问：晚上睡不着应该怎么办\n答：");
     }
 
     // memory test
@@ -1041,17 +1044,17 @@ TEST(Pipeline, ChatGLM) {
         for (int i = 0; i < gen_config.max_context_length; i++) {
             oss << "你好";
         }
-        std::vector<std::string> history{oss.str()};
-        pipeline.chat(history, gen_config);
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, oss.str()}};
+        pipeline.chat(messages, gen_config);
     }
 
     // chat
     {
         GenerationConfig gen_config;
         gen_config.do_sample = false;
-        std::vector<std::string> history{"你好"};
-        std::string output = pipeline.chat(history, gen_config);
-        EXPECT_EQ(output, "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。");
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
+        ChatMessage output = pipeline.chat(messages, gen_config);
+        EXPECT_EQ(output.content, "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。");
     }
 }
 
@@ -1083,12 +1086,15 @@ TEST(Pipeline, ChatGLM2) {
 
     // prompter
     {
-        EXPECT_EQ(ChatGLM2Tokenizer::build_prompt({"你好"}), "[Round 1]\n\n问：你好\n\n答：");
-        EXPECT_EQ(ChatGLM2Tokenizer::build_prompt(
-                      {"你好", "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。",
-                       "晚上睡不着应该怎么办"}),
-                  "[Round 1]\n\n问：你好\n\n答：你好👋！我是人工智能助手 "
-                  "ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。\n\n[Round 2]\n\n问：晚上睡不着应该怎么办\n\n答：");
+        EXPECT_EQ(ChatGLM2Tokenizer::build_prompt({{ChatMessage::ROLE_USER, "你好"}}), "[Round 1]\n\n问：你好\n\n答：");
+        EXPECT_EQ(
+            ChatGLM2Tokenizer::build_prompt({
+                {ChatMessage::ROLE_USER, "你好"},
+                {ChatMessage::ROLE_ASSISTANT, "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。"},
+                {ChatMessage::ROLE_USER, "晚上睡不着应该怎么办"},
+            }),
+            "[Round 1]\n\n问：你好\n\n答：你好👋！我是人工智能助手 "
+            "ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。\n\n[Round 2]\n\n问：晚上睡不着应该怎么办\n\n答：");
     }
 
     // memory test
@@ -1102,18 +1108,23 @@ TEST(Pipeline, ChatGLM2) {
         for (int i = 0; i < gen_config.max_context_length; i++) {
             oss << "你好";
         }
-        std::vector<std::string> history{oss.str()};
-        pipeline.chat(history, gen_config);
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, oss.str()}};
+        pipeline.chat(messages, gen_config);
     }
 
     // chat
     {
         GenerationConfig gen_config;
         gen_config.do_sample = false;
-        std::vector<std::string> history{"你好"};
-        std::string output = pipeline.chat(history, gen_config);
-        EXPECT_EQ(output, "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。");
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
+        ChatMessage output = pipeline.chat(messages, gen_config);
+        EXPECT_EQ(output.content, "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。");
     }
+}
+
+static inline std::string read_text(const fs::path &path) {
+    MappedFile mapped_file(path.string());
+    return std::string(mapped_file.data, mapped_file.size);
 }
 
 TEST(Pipeline, ChatGLM3) {
@@ -1124,29 +1135,62 @@ TEST(Pipeline, ChatGLM3) {
     Pipeline pipeline(model_path.string());
     EXPECT_TRUE(dynamic_cast<ChatGLM3ForCausalLM *>(pipeline.model.get()));
 
+    const std::string system_tool_call =
+        read_text(fs::path(__FILE__).parent_path() / "examples/system/function_call.txt");
+    const std::string system_ci = read_text(fs::path(__FILE__).parent_path() / "examples/system/code_interpreter.txt");
+
     // tokenizer
     {
-        std::vector<TokenizerTestCase> cases{{"你好", {64790, 64792, 36474, 54591}}};
-        check_tokenizer(pipeline.tokenizer.get(), cases);
-
-        {
-            std::vector<std::string> history{"你好"};
-            std::vector<int> input_ids = pipeline.tokenizer->encode_history(history, 2048);
-            std::vector<int> target_ids{64790, 64792, 64795, 30910, 13, 36474, 54591, 64796, 30910, 13};
-            EXPECT_EQ(input_ids, target_ids);
-        }
-        {
-            std::vector<std::string> history{"你好",
-                                             "你好👋！我是人工智能助手 ChatGLM3-6B，很高兴见到你，欢迎问我任何问题。",
-                                             "晚上睡不着应该怎么办"};
-            std::vector<int> input_ids = pipeline.tokenizer->encode_history(history, 2048);
-            std::vector<int> target_ids{64790, 64792, 64795, 30910, 13,    36474, 54591, 64796, 30910, 13,
-                                        36474, 54591, 243,   162,   148,   142,   31404, 33030, 34797, 42481,
-                                        22011, 10461, 30944, 30966, 30941, 30978, 30949, 31123, 48895, 35214,
-                                        54622, 31123, 32616, 39905, 31901, 31639, 31155, 64795, 30910, 13,
-                                        30910, 32820, 54266, 31876, 35153, 64796, 30910, 13};
-            EXPECT_EQ(input_ids, target_ids);
-        }
+        std::vector<int> target_ids{64790, 64792, 36474, 54591};
+        std::vector<int> input_ids = pipeline.tokenizer->encode("你好", 2048);
+        EXPECT_EQ(input_ids, target_ids);
+    }
+    {
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
+        std::vector<int> input_ids = pipeline.tokenizer->encode_messages(messages, 2048);
+        std::vector<int> target_ids{64790, 64792, 64795, 30910, 13, 36474, 54591, 64796};
+        EXPECT_EQ(input_ids, target_ids);
+    }
+    {
+        std::vector<ChatMessage> messages{
+            {ChatMessage::ROLE_USER, "你好"},
+            {ChatMessage::ROLE_ASSISTANT, "你好👋！我是人工智能助手 ChatGLM3-6B，很高兴见到你，欢迎问我任何问题。"},
+            {ChatMessage::ROLE_USER, "晚上睡不着应该怎么办"},
+        };
+        std::vector<int> input_ids = pipeline.tokenizer->encode_messages(messages, 2048);
+        std::vector<int> target_ids{64790, 64792, 64795, 30910, 13,    36474, 54591, 64796, 30910, 13,    36474, 54591,
+                                    243,   162,   148,   142,   31404, 33030, 34797, 42481, 22011, 10461, 30944, 30966,
+                                    30941, 30978, 30949, 31123, 48895, 35214, 54622, 31123, 32616, 39905, 31901, 31639,
+                                    31155, 64795, 30910, 13,    30910, 32820, 54266, 31876, 35153, 64796};
+        EXPECT_EQ(input_ids, target_ids);
+    }
+    {
+        std::vector<ChatMessage> messages{
+            {ChatMessage::ROLE_SYSTEM, system_tool_call},
+            {ChatMessage::ROLE_USER, "生成一个随机数"},
+        };
+        std::vector<int> input_ids = pipeline.tokenizer->encode_messages(messages, 2048);
+        std::vector<int> target_ids{
+            64790, 64792, 64794, 30910, 13,    20115, 267,   1762,  2554,  362,   1077,  362,   344,   457,   30930,
+            809,   431,   1675,  289,   267,   1762,  4159,  30954, 13,    30982, 13,    296,   30955, 16599, 30962,
+            11228, 30962, 7311,  1306,  2932,  729,   13,    352,   30955, 2323,  2932,  449,   16599, 30962, 11228,
+            30962, 7311,  1306,  1252,  13,    352,   30955, 16302, 2932,  449,   9398,  711,   260,   5402,  1276,
+            1994,  30932, 268,   30930, 30912, 30930, 2288,  30995, 30940, 30996, 14819, 1994,  906,   2288,  30995,
+            30939, 30996, 1252,  13,    352,   30955, 12209, 2932,  790,   13,    753,   30982, 13,    647,   30955,
+            2323,  2932,  449,   24794, 1252,  13,    647,   30955, 16302, 2932,  449,   1036,  5402,  9352,  1050,
+            422,   267,   17009, 1252,  13,    647,   30955, 3543,  2932,  449,   592,   1252,  13,    647,   30955,
+            20379, 2932,  2033,  13,    753,   4143,  13,    753,   30982, 13,    647,   30955, 2323,  2932,  449,
+            7855,  1252,  13,    647,   30955, 16302, 2932,  449,   1036,  2288,  290,   267,   7383,  3859,  1252,
+            13,    647,   30955, 3543,  2932,  449,   30912, 16471, 30995, 592,   30932, 558,   30996, 1252,  13,
+            647,   30955, 20379, 2932,  2033,  13,    753,   30983, 13,    352,   30996, 13,    296,   4143,  13,
+            296,   30955, 752,   30962, 27564, 2932,  729,   13,    352,   30955, 2323,  2932,  449,   752,   30962,
+            27564, 1252,  13,    352,   30955, 16302, 2932,  449,   4867,  267,   1465,  5100,  332,   4256,  17654,
+            30962, 2323,  31040, 1252,  13,    352,   30955, 12209, 2932,  790,   13,    753,   30982, 13,    647,
+            30955, 2323,  2932,  449,   17654, 30962, 2323,  1252,  13,    647,   30955, 16302, 2932,  449,   1036,
+            1462,  290,   267,   1911,  289,   330,   580,   266,   819,   1252,  13,    647,   30955, 3543,  2932,
+            449,   2069,  1252,  13,    647,   30955, 20379, 2932,  2033,  13,    753,   30983, 13,    352,   30996,
+            13,    296,   30983, 13,    30983, 64795, 30910, 13,    30910, 36454, 31623, 37853, 54744, 64796};
+        EXPECT_EQ(input_ids, target_ids);
     }
 
     // memory test
@@ -1160,17 +1204,90 @@ TEST(Pipeline, ChatGLM3) {
         for (int i = 0; i < gen_config.max_context_length; i++) {
             oss << "你好";
         }
-        std::vector<std::string> history{oss.str()};
-        pipeline.chat(history, gen_config);
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, oss.str()}};
+        pipeline.chat(messages, gen_config);
     }
 
     // chat
     {
         GenerationConfig gen_config;
         gen_config.do_sample = false;
-        std::vector<std::string> history{"你好"};
-        std::string output = pipeline.chat(history, gen_config);
-        EXPECT_EQ(output, "你好👋！我是人工智能助手 ChatGLM3-6B，很高兴见到你，欢迎问我任何问题。");
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
+        ChatMessage output = pipeline.chat(messages, gen_config);
+        EXPECT_EQ(output.content, "你好👋！我是人工智能助手 ChatGLM3-6B，很高兴见到你，欢迎问我任何问题。");
+    }
+
+    // tool call
+    {
+        GenerationConfig gen_config;
+        gen_config.do_sample = false;
+        std::vector<ChatMessage> messages{
+            {ChatMessage::ROLE_SYSTEM, system_tool_call},
+            {ChatMessage::ROLE_USER, "生成一个随机数"},
+        };
+        {
+            ChatMessage output = pipeline.chat(messages, gen_config);
+            EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
+            EXPECT_EQ(output.content, "```python\n"
+                                      "tool_call(seed=42, range=(0, 100))\n"
+                                      "```");
+            messages.emplace_back(std::move(output));
+        }
+        messages.emplace_back(ChatMessage::ROLE_OBSERVATION, "22");
+        {
+            ChatMessage output = pipeline.chat(messages, gen_config);
+            EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
+            EXPECT_EQ(output.content, "根据您的要求，我使用随机数生成器API生成了一个在0和100之间的随机数，结果为22。");
+        }
+    }
+
+    // code interpreter
+    {
+        GenerationConfig gen_config;
+        gen_config.do_sample = false;
+        std::vector<ChatMessage> messages{
+            {ChatMessage::ROLE_SYSTEM, system_ci},
+            {ChatMessage::ROLE_USER, "列出100以内的所有质数"},
+        };
+        {
+            ChatMessage output = pipeline.chat(messages, gen_config);
+            EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
+            EXPECT_EQ(output.content, "好的，我会为您列出100以内的所有质数。\n\n质数是指只能被1和它本身整除的大于1"
+                                      "的整数。例如，2、3、5、7等都是质数。\n\n让我们开始吧！");
+            EXPECT_EQ(output.tool_calls.front().code.input, R"(```python
+def is_prime(n):
+    """Check if a number is prime."""
+    if n <= 1:
+        return False
+    if n <= 3:
+        return True
+    if n % 2 == 0 or n % 3 == 0:
+        return False
+    i = 5
+    while i * i <= n:
+        if n % i == 0 or n % (i + 2) == 0:
+            return False
+        i += 6
+    return True
+
+# Get all prime numbers up to 100
+primes_upto_100 = [i for i in range(2, 101) if is_prime(i)]
+primes_upto_100
+```)");
+            messages.emplace_back(std::move(output));
+        }
+        messages.emplace_back(
+            ChatMessage::ROLE_OBSERVATION,
+            "[2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97]");
+        {
+            ChatMessage output = pipeline.chat(messages, gen_config);
+            EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
+            EXPECT_EQ(output.content, R"(100以内的所有质数为：
+
+$$
+2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97 
+$$)");
+        }
     }
 }
 
@@ -1234,9 +1351,12 @@ TEST(Pipeline, Baichuan13B) {
               1910,  73,    6011,  31169, 4315,  1766,  72,    1231,  11533, 31490, 31182, 21934}}};
         check_tokenizer(pipeline.tokenizer.get(), cases);
 
-        std::vector<std::string> history{"你好呀", "你好！很高兴和你交流。请问有什么我可以帮助你的吗？",
-                                         "你叫什么名字？"};
-        std::vector<int> input_ids = pipeline.tokenizer->encode_history(history, 2048);
+        std::vector<ChatMessage> messages{
+            {ChatMessage::ROLE_USER, "你好呀"},
+            {ChatMessage::ROLE_ASSISTANT, "你好！很高兴和你交流。请问有什么我可以帮助你的吗？"},
+            {ChatMessage::ROLE_USER, "你叫什么名字？"},
+        };
+        std::vector<int> input_ids = pipeline.tokenizer->encode_messages(messages, 2048);
         std::vector<int> target_input_ids{195,   9875, 31213, 32889, 196,  9875,  31213, 74,   17318, 31906,
                                           14822, 5536, 73,    20389, 7713, 31182, 1231,  4090, 2689,  31763,
                                           75,    195,  9875,  32177, 1534, 10240, 75,    196};
@@ -1259,9 +1379,9 @@ TEST(Pipeline, Baichuan13B) {
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         gen_config.repetition_penalty = 1.1;
-        std::vector<std::string> history{"你好呀"};
-        std::string output = pipeline.chat(history, gen_config);
-        EXPECT_EQ(output, "你好！很高兴见到你。请问有什么我可以帮助你的吗？");
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好呀"}};
+        ChatMessage output = pipeline.chat(messages, gen_config);
+        EXPECT_EQ(output.content, "你好！很高兴见到你。请问有什么我可以帮助你的吗？");
     }
 }
 
@@ -1285,9 +1405,12 @@ TEST(Pipeline, Baichuan2_7B) {
               2089, 23672, 1940,  1760, 66,    4173,  23181, 1754, 65,    65351, 39975, 14590}}};
         check_tokenizer(pipeline.tokenizer.get(), cases);
 
-        std::vector<std::string> history{"你好呀", "你好！很高兴和你交流。请问有什么问题我可以帮助你解决吗？",
-                                         "你叫什么名字？"};
-        std::vector<int> input_ids = pipeline.tokenizer->encode_history(history, 2048);
+        std::vector<ChatMessage> messages{
+            {ChatMessage::ROLE_USER, "你好呀"},
+            {ChatMessage::ROLE_ASSISTANT, "你好！很高兴和你交流。请问有什么问题我可以帮助你解决吗？"},
+            {ChatMessage::ROLE_USER, "你叫什么名字？"},
+        };
+        std::vector<int> input_ids = pipeline.tokenizer->encode_messages(messages, 2048);
         std::vector<int> target_input_ids{195, 16829, 94278, 196,   16829, 67,    52160, 10329, 3341,
                                           66,  23216, 5817,  1754,  92392, 21777, 92430, 2740,  93122,
                                           68,  195,   92430, 93410, 1747,  6642,  68,    196};
@@ -1310,9 +1433,9 @@ TEST(Pipeline, Baichuan2_7B) {
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         gen_config.repetition_penalty = 1.05;
-        std::vector<std::string> history{"你好呀"};
-        std::string output = pipeline.chat(history, gen_config);
-        EXPECT_EQ(output, "你好！很高兴为你服务。请问有什么问题我可以帮助你解决？");
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好呀"}};
+        ChatMessage output = pipeline.chat(messages, gen_config);
+        EXPECT_EQ(output.content, "你好！很高兴为你服务。请问有什么问题我可以帮助你解决？");
     }
 }
 
@@ -1336,9 +1459,12 @@ TEST(Pipeline, Baichuan2_13B) {
               2089, 23672, 1940,  1760, 66,    4173,  23181, 1754, 65,    65351, 39975, 14590}}};
         check_tokenizer(pipeline.tokenizer.get(), cases);
 
-        std::vector<std::string> history{"你好呀", "你好！很高兴和你交流。请问有什么我可以帮助你的吗？",
-                                         "你叫什么名字？"};
-        std::vector<int> input_ids = pipeline.tokenizer->encode_history(history, 2048);
+        std::vector<ChatMessage> messages{
+            {ChatMessage::ROLE_USER, "你好呀"},
+            {ChatMessage::ROLE_ASSISTANT, "你好！很高兴和你交流。请问有什么我可以帮助你的吗？"},
+            {ChatMessage::ROLE_USER, "你叫什么名字？"},
+        };
+        std::vector<int> input_ids = pipeline.tokenizer->encode_messages(messages, 2048);
         std::vector<int> target_input_ids{195,   16829, 94278, 196,   16829, 67,  52160, 10329, 3341, 66,   23216, 5817,
                                           92392, 21777, 2193,  93122, 68,    195, 92430, 93410, 1747, 6642, 68,    196};
         EXPECT_TRUE(equal(input_ids, target_input_ids));
@@ -1349,9 +1475,9 @@ TEST(Pipeline, Baichuan2_13B) {
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         gen_config.repetition_penalty = 1.05;
-        std::vector<std::string> history{"你好呀"};
-        std::string output = pipeline.chat(history, gen_config);
-        EXPECT_EQ(output, "你好！很高兴见到你。请问有什么我可以帮助你的吗？");
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好呀"}};
+        ChatMessage output = pipeline.chat(messages, gen_config);
+        EXPECT_EQ(output.content, "你好！很高兴见到你。请问有什么我可以帮助你的吗？");
     }
 }
 
@@ -1378,8 +1504,12 @@ TEST(Pipeline, InternLM) {
 
     // prompter
     {
-        EXPECT_EQ(InternLMTokenizer::build_prompt({"你好"}), "<|User|>:你好<eoh>\n<|Bot|>:");
-        EXPECT_EQ(InternLMTokenizer::build_prompt({"你好", "你好，有什么我可以帮助你的吗？", "晚上睡不着应该怎么办"}),
+        EXPECT_EQ(InternLMTokenizer::build_prompt({{ChatMessage::ROLE_USER, "你好"}}), "<|User|>:你好<eoh>\n<|Bot|>:");
+        EXPECT_EQ(InternLMTokenizer::build_prompt({
+                      {ChatMessage::ROLE_USER, "你好"},
+                      {ChatMessage::ROLE_ASSISTANT, "你好，有什么我可以帮助你的吗？"},
+                      {ChatMessage::ROLE_USER, "晚上睡不着应该怎么办"},
+                  }),
                   "<|User|>:你好<eoh>\n<|Bot|>:你好，有什么我可以帮助你的吗？<eoa>\n<|User|>:晚上睡不着应该怎么办<eoh>"
                   "\n<|Bot|>:");
     }
@@ -1399,9 +1529,9 @@ TEST(Pipeline, InternLM) {
     {
         GenerationConfig gen_config;
         gen_config.do_sample = false;
-        std::vector<std::string> history{"你好"};
-        std::string output = pipeline.chat(history, gen_config);
-        EXPECT_EQ(output, "你好，有什么我可以帮助你的吗？");
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
+        ChatMessage output = pipeline.chat(messages, gen_config);
+        EXPECT_EQ(output.content, "你好，有什么我可以帮助你的吗？");
     }
 }
 
@@ -1416,8 +1546,11 @@ static void run_benchmark(const fs::path &model_path) {
     int64_t load_model_ms = ggml_time_ms() - start_ms;
 
     start_ms = ggml_time_ms();
-    std::vector<std::string> history{"你好", "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。",
-                                     "晚上睡不着应该怎么办"};
+    std::vector<ChatMessage> messages{
+        {ChatMessage::ROLE_USER, "你好"},
+        {ChatMessage::ROLE_ASSISTANT, "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。"},
+        {ChatMessage::ROLE_USER, "晚上睡不着应该怎么办"},
+    };
 
     GenerationConfig gen_config;
     gen_config.do_sample = false;
@@ -1425,7 +1558,7 @@ static void run_benchmark(const fs::path &model_path) {
 
     PerfStreamer streamer;
     start_ms = ggml_time_ms();
-    pipeline.chat(history, gen_config, &streamer);
+    pipeline.chat(messages, gen_config, &streamer);
     int64_t gen_s = (ggml_time_ms() - start_ms) / 1000.f;
 
     std::cout << "======== benchmark results for " << model_path.filename() << " ========\n"

@@ -20,58 +20,34 @@ def test_chatglm_version():
     print(chatglm_cpp.__version__)
 
 
-@pytest.mark.skipif(not CHATGLM_MODEL_PATH.exists(), reason="model file not found")
-def test_chatglm_pipeline():
-    history = ["你好"]
-    target = "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。"
+def check_pipeline(model_path, prompt, target, gen_kwargs={}):
+    messages = [chatglm_cpp.ChatMessage(role="user", content=prompt)]
 
-    pipeline = chatglm_cpp.Pipeline(CHATGLM_MODEL_PATH)
-    output = pipeline.chat(history, do_sample=False)
+    pipeline = chatglm_cpp.Pipeline(model_path)
+    output = pipeline.chat(messages, do_sample=False, **gen_kwargs).content
     assert output == target
 
-    stream_output = pipeline.stream_chat(history, do_sample=False)
-    stream_output = "".join(stream_output)
+    stream_output = pipeline.chat(messages, do_sample=False, stream=True, **gen_kwargs)
+    stream_output = "".join([msg.content for msg in stream_output])
+    if model_path == CHATGLM3_MODEL_PATH:
+        # hack for ChatGLM3
+        stream_output = stream_output.strip()
     assert stream_output == target
 
-    stream_output = pipeline.chat(history, do_sample=False, stream=True)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
+
+@pytest.mark.skipif(not CHATGLM_MODEL_PATH.exists(), reason="model file not found")
+def test_chatglm_pipeline():
+    check_pipeline(model_path=CHATGLM_MODEL_PATH, prompt="你好", target="你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。")
 
 
 @pytest.mark.skipif(not CHATGLM2_MODEL_PATH.exists(), reason="model file not found")
 def test_chatglm2_pipeline():
-    history = ["你好"]
-    target = "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。"
-
-    pipeline = chatglm_cpp.Pipeline(CHATGLM2_MODEL_PATH)
-    output = pipeline.chat(history, do_sample=False)
-    assert output == target
-
-    stream_output = pipeline.stream_chat(history, do_sample=False)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
-
-    stream_output = pipeline.chat(history, do_sample=False, stream=True)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
+    check_pipeline(model_path=CHATGLM2_MODEL_PATH, prompt="你好", target="你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。")
 
 
 @pytest.mark.skipif(not CHATGLM3_MODEL_PATH.exists(), reason="model file not found")
 def test_chatglm3_pipeline():
-    history = ["你好"]
-    target = "你好👋！我是人工智能助手 ChatGLM3-6B，很高兴见到你，欢迎问我任何问题。"
-
-    pipeline = chatglm_cpp.Pipeline(CHATGLM3_MODEL_PATH)
-    output = pipeline.chat(history, do_sample=False)
-    assert output == target
-
-    stream_output = pipeline.stream_chat(history, do_sample=False)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
-
-    stream_output = pipeline.chat(history, do_sample=False, stream=True)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
+    check_pipeline(model_path=CHATGLM3_MODEL_PATH, prompt="你好", target="你好👋！我是人工智能助手 ChatGLM3-6B，很高兴见到你，欢迎问我任何问题。")
 
 
 @pytest.mark.skipif(not CODEGEEX2_MODEL_PATH.exists(), reason="model file not found")
@@ -100,99 +76,39 @@ print(bubble_sort([5, 4, 3, 2, 1]))"""
 
 @pytest.mark.skipif(not BAICHUAN13B_MODEL_PATH.exists(), reason="model file not found")
 def test_baichuan13b_pipeline():
-    history = ["你好呀"]
-    target = "你好！很高兴见到你。请问有什么我可以帮助你的吗？"
-
-    gen_kwargs = dict(do_sample=False, repetition_penalty=1.1)
-
-    pipeline = chatglm_cpp.Pipeline(BAICHUAN13B_MODEL_PATH)
-    output = pipeline.chat(history, **gen_kwargs)
-    assert output == target
-
-    stream_output = pipeline.stream_chat(history, **gen_kwargs)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
-
-    stream_output = pipeline.chat(history, **gen_kwargs, stream=True)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
+    check_pipeline(
+        model_path=BAICHUAN13B_MODEL_PATH,
+        prompt="你好呀",
+        target="你好！很高兴见到你。请问有什么我可以帮助你的吗？",
+        gen_kwargs=dict(repetition_penalty=1.1),
+    )
 
 
 @pytest.mark.skipif(not BAICHUAN2_7B_MODEL_PATH.exists(), reason="model file not found")
 def test_baichuan2_7b_pipeline():
-    history = ["你好呀"]
-    target = "你好！很高兴为你服务。请问有什么问题我可以帮助你解决？"
-
-    gen_kwargs = dict(do_sample=False, repetition_penalty=1.05)
-
-    pipeline = chatglm_cpp.Pipeline(BAICHUAN2_7B_MODEL_PATH)
-    output = pipeline.chat(history, **gen_kwargs)
-    assert output == target
-
-    stream_output = pipeline.stream_chat(history, **gen_kwargs)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
-
-    stream_output = pipeline.chat(history, **gen_kwargs, stream=True)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
+    check_pipeline(
+        model_path=BAICHUAN2_7B_MODEL_PATH,
+        prompt="你好呀",
+        target="你好！很高兴为你服务。请问有什么问题我可以帮助你解决？",
+        gen_kwargs=dict(repetition_penalty=1.05),
+    )
 
 
 @pytest.mark.skipif(not BAICHUAN2_13B_MODEL_PATH.exists(), reason="model file not found")
 def test_baichuan2_13b_pipeline():
-    history = ["你好呀"]
-    target = "你好！很高兴见到你。请问有什么我可以帮助你的吗？"
-
-    gen_kwargs = dict(do_sample=False, repetition_penalty=1.05)
-
-    pipeline = chatglm_cpp.Pipeline(BAICHUAN2_13B_MODEL_PATH)
-    output = pipeline.chat(history, **gen_kwargs)
-    assert output == target
-
-    stream_output = pipeline.stream_chat(history, **gen_kwargs)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
-
-    stream_output = pipeline.chat(history, **gen_kwargs, stream=True)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
+    check_pipeline(
+        model_path=BAICHUAN2_13B_MODEL_PATH,
+        prompt="你好呀",
+        target="你好！很高兴见到你。请问有什么我可以帮助你的吗？",
+        gen_kwargs=dict(repetition_penalty=1.05),
+    )
 
 
 @pytest.mark.skipif(not INTERNLM7B_MODEL_PATH.exists(), reason="model file not found")
 def test_internlm7b_pipeline():
-    history = ["你好"]
-    target = "你好，有什么我可以帮助你的吗？"
-
-    gen_kwargs = dict(do_sample=False)
-
-    pipeline = chatglm_cpp.Pipeline(INTERNLM7B_MODEL_PATH)
-    output = pipeline.chat(history, **gen_kwargs)
-    assert output == target
-
-    stream_output = pipeline.stream_chat(history, **gen_kwargs)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
-
-    stream_output = pipeline.chat(history, **gen_kwargs, stream=True)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
+    check_pipeline(model_path=INTERNLM7B_MODEL_PATH, prompt="你好", target="你好，有什么我可以帮助你的吗？")
 
 
 @pytest.mark.skipif(not INTERNLM20B_MODEL_PATH.exists(), reason="model file not found")
 def test_internlm20b_pipeline():
-    history = ["你好"]
-    target = "你好！有什么我可以帮助你的吗？"
-
-    gen_kwargs = dict(do_sample=False)
-
-    pipeline = chatglm_cpp.Pipeline(INTERNLM20B_MODEL_PATH)
-    output = pipeline.chat(history, **gen_kwargs)
-    assert output == target
-
-    stream_output = pipeline.stream_chat(history, **gen_kwargs)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
-
-    stream_output = pipeline.chat(history, **gen_kwargs, stream=True)
-    stream_output = "".join(stream_output)
-    assert stream_output == target
+    check_pipeline(model_path=INTERNLM20B_MODEL_PATH, prompt="你好", target="你好！有什么我可以帮助你的吗？")

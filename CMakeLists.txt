@@ -92,7 +92,19 @@ file(GLOB PY_SOURCES
 add_custom_target(lint
     COMMAND clang-format -i ${CPP_SOURCES}
     COMMAND isort ${PY_SOURCES}
-    COMMAND black ${PY_SOURCES} --line-length 120)
+    COMMAND black ${PY_SOURCES} --verbose)
+
+# mypy
+add_custom_target(mypy
+    mypy chatglm_cpp examples --exclude __init__.pyi
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+)
+
+# stub
+add_custom_target(stub
+    pybind11-stubgen chatglm_cpp -o .
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+)
 
 if (MSVC)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")

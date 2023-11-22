@@ -25,7 +25,7 @@ GGML_MEM_ALIGN = 16
 
 if platform.system() == "Darwin":
     # cpm_kernels doesn't support macOS but transformers will check missing packages, so mock it
-    sys.modules["cpm_kernels"] = object()
+    sys.modules["cpm_kernels"] = object()  # type: ignore
 
 
 class GGMLType(Enum):
@@ -47,7 +47,7 @@ class ModelType(Enum):
     INTERNLM = 1280
 
 
-def quantize_q8_0(tensor: torch.Tensor) -> torch.CharTensor:
+def quantize_q8_0(tensor: torch.Tensor) -> torch.Tensor:
     # equivalent to ggml_quantize_q8_0 in ggml.c
     assert tensor.shape[1] % GGML_QK8_0 == 0
     tensor = tensor.view(-1, GGML_QK8_0)
@@ -58,7 +58,7 @@ def quantize_q8_0(tensor: torch.Tensor) -> torch.CharTensor:
     return tensor
 
 
-def quantize_q4_0(tensor: torch.Tensor) -> torch.CharTensor:
+def quantize_q4_0(tensor: torch.Tensor) -> torch.Tensor:
     # equivalent to ggml_quantize_q4_0 in ggml.c
     assert tensor.shape[1] % GGML_QK4_0 == 0
     tensor = tensor.view(-1, GGML_QK4_0)
@@ -73,7 +73,7 @@ def quantize_q4_0(tensor: torch.Tensor) -> torch.CharTensor:
     return tensor
 
 
-def quantize_q4_1(tensor: torch.Tensor) -> torch.CharTensor:
+def quantize_q4_1(tensor: torch.Tensor) -> torch.Tensor:
     # equivalent to ggml_quantize_q4_1 in ggml.c
     assert tensor.shape[1] % GGML_QK4_1 == 0
     tensor = tensor.view(-1, GGML_QK4_1)
@@ -88,7 +88,7 @@ def quantize_q4_1(tensor: torch.Tensor) -> torch.CharTensor:
     return tensor
 
 
-def quantize_q5_0(tensor: torch.Tensor) -> torch.CharTensor:
+def quantize_q5_0(tensor: torch.Tensor) -> torch.Tensor:
     # equivalent to ggml_quantize_q5_0 in ggml.c
     assert tensor.shape[1] % GGML_QK5_0 == 0
     tensor = tensor.view(-1, GGML_QK5_0)
@@ -106,7 +106,7 @@ def quantize_q5_0(tensor: torch.Tensor) -> torch.CharTensor:
     return tensor
 
 
-def quantize_q5_1(tensor: torch.Tensor) -> torch.CharTensor:
+def quantize_q5_1(tensor: torch.Tensor) -> torch.Tensor:
     # equivalent to ggml_quantize_q5_1 in ggml.c
     assert tensor.shape[1] % GGML_QK5_1 == 0
     tensor = tensor.view(-1, GGML_QK5_1)

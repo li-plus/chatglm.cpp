@@ -39,3 +39,8 @@ api = [
 [project.urls]
 Homepage = "https://github.com/li-plus/chatglm.cpp"
 Repository = "https://github.com/li-plus/chatglm.cpp.git"
+
+# reference: https://black.readthedocs.io/en/stable/usage_and_configuration/the_basics.html#configuration-format
+[tool.black]
+line-length = 120
+include = '\.py$'

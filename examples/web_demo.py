@@ -30,10 +30,9 @@ def postprocess(text):
     return text
 
 
-def predict(input, chatbot, max_length, top_p, temperature, history):
+def predict(input, chatbot, max_length, top_p, temperature, messages):
     chatbot.append((postprocess(input), ""))
-    response = ""
-    history.append(input)
+    messages.append(chatglm_cpp.ChatMessage(role="user", content=input))
 
     generation_kwargs = dict(
         max_length=max_length,
@@ -46,19 +45,23 @@ def predict(input, chatbot, max_length, top_p, temperature, history):
         num_threads=args.threads,
         stream=True,
     )
-    generator = (
-        pipeline.chat(history, **generation_kwargs)
-        if args.mode == "chat"
-        else pipeline.generate(input, **generation_kwargs)
-    )
-    for response_piece in generator:
-        response += response_piece
-        chatbot[-1] = (chatbot[-1][0], postprocess(response))
 
-        yield chatbot, history
+    response = ""
+    if args.mode == "chat":
+        chunks = []
+        for chunk in pipeline.chat(messages, **generation_kwargs):
+            response += chunk.content
+            chunks.append(chunk)
+            chatbot[-1] = (chatbot[-1][0], postprocess(response))
+            yield chatbot, messages
+        messages.append(pipeline.merge_streaming_messages(chunks))
+    else:
+        for chunk in pipeline.generate(input, **generation_kwargs):
+            response += chunk
+            chatbot[-1] = (chatbot[-1][0], postprocess(response))
+            yield chatbot, messages
 
-    history.append(response)
-    yield chatbot, history
+    yield chatbot, messages
 
 
 def reset_user_input():
@@ -83,13 +86,16 @@ with gr.Blocks() as demo:
             temperature = gr.Slider(0, 1, value=args.temp, step=0.01, label="Temperature", interactive=True)
             emptyBtn = gr.Button("Clear History")
 
-    history = gr.State([])
+    messages = gr.State([])
 
     submitBtn.click(
-        predict, [user_input, chatbot, max_length, top_p, temperature, history], [chatbot, history], show_progress=True
+        predict,
+        [user_input, chatbot, max_length, top_p, temperature, messages],
+        [chatbot, messages],
+        show_progress=True,
     )
     submitBtn.click(reset_user_input, [], [user_input])
 
-    emptyBtn.click(reset_state, outputs=[chatbot, history], show_progress=True)
+    emptyBtn.click(reset_state, outputs=[chatbot, messages], show_progress=True)
 
 demo.queue().launch(share=False, inbrowser=True)

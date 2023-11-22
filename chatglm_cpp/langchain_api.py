@@ -53,17 +53,27 @@ pipeline = chatglm_cpp.Pipeline(settings.model)
 
 @app.post("/")
 async def chat(body: ChatRequest) -> ChatResponse:
-    chat_history = [msg for pair in body.history for msg in pair] + [body.prompt]
-    response = pipeline.chat(
-        chat_history,
+    messages = []
+    for prompt, response in body.history:
+        messages += [
+            chatglm_cpp.ChatMessage(role="user", content=prompt),
+            chatglm_cpp.ChatMessage(role="assistant", content=response),
+        ]
+    messages.append(chatglm_cpp.ChatMessage(role="user", content=body.prompt))
+
+    output = pipeline.chat(
+        messages,
         max_length=body.max_length,
         do_sample=body.temperature > 0,
         top_p=body.top_p,
         temperature=body.temperature,
     )
-    history = body.history + [(body.prompt, response)]
+    history = body.history + [(body.prompt, output.content)]
     answer = ChatResponse(
-        response=response, history=history, status=status.HTTP_200_OK, time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        response=output.content,
+        history=history,
+        status=status.HTTP_200_OK,
+        time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
-    logging.info(f'prompt: "{body.prompt}", response: "{response}"')
+    logging.info(f'prompt: "{body.prompt}", response: "{output.content}"')
     return answer

@@ -17,8 +17,8 @@ class PyBaseTokenizer : public BaseTokenizer {
     std::string decode(const std::vector<int> &ids) const override {
         PYBIND11_OVERLOAD_PURE(std::string, BaseTokenizer, decode, ids);
     }
-    std::vector<int> encode_history(const std::vector<std::string> &history, int max_length) const override {
-        PYBIND11_OVERLOAD_PURE(std::vector<int>, BaseTokenizer, encode_history, history, max_length);
+    std::vector<int> encode_messages(const std::vector<ChatMessage> &history, int max_length) const override {
+        PYBIND11_OVERLOAD_PURE(std::vector<int>, BaseTokenizer, encode_messages, history, max_length);
     }
 };
 
@@ -32,12 +32,27 @@ class PyBaseModelForCausalLM : public BaseModelForCausalLM {
     }
 };
 
+template <typename T>
+static inline std::string to_string(const T &obj) {
+    std::ostringstream oss;
+    oss << obj;
+    return oss.str();
+}
+
 PYBIND11_MODULE(_C, m) {
     m.doc() = "ChatGLM.cpp python binding";
 
+    py::enum_<ModelType>(m, "ModelType")
+        .value("CHATGLM", ModelType::CHATGLM)
+        .value("CHATGLM2", ModelType::CHATGLM2)
+        .value("CHATGLM3", ModelType::CHATGLM3)
+        .value("BAICHUAN7B", ModelType::BAICHUAN7B)
+        .value("BAICHUAN13B", ModelType::BAICHUAN13B)
+        .value("INTERNLM", ModelType::INTERNLM);
+
     py::class_<ModelConfig>(m, "ModelConfig")
         .def_readonly("model_type", &ModelConfig::model_type)
-        .def_readonly("dtype", &ModelConfig::dtype)
+        // .def_readonly("dtype", &ModelConfig::dtype)
         .def_readonly("vocab_size", &ModelConfig::vocab_size)
         .def_readonly("hidden_size", &ModelConfig::hidden_size)
         .def_readonly("num_attention_heads", &ModelConfig::num_attention_heads)
@@ -50,16 +65,8 @@ PYBIND11_MODULE(_C, m) {
         .def_readonly("eos_token_id", &ModelConfig::eos_token_id)
         .def_readonly("pad_token_id", &ModelConfig::pad_token_id)
         .def_readonly("sep_token_id", &ModelConfig::sep_token_id)
+        .def_readonly("extra_eos_token_ids", &ModelConfig::extra_eos_token_ids)
         .def_property_readonly("model_type_name", &ModelConfig::model_type_name);
-
-    py::class_<BaseTokenizer, PyBaseTokenizer>(m, "BaseTokenizer")
-        .def("encode", &BaseTokenizer::encode)
-        .def("decode", &BaseTokenizer::decode)
-        .def("encode_history", &BaseTokenizer::encode_history);
-
-    py::class_<BaseModelForCausalLM, PyBaseModelForCausalLM>(m, "BaseModelForCausalLM")
-        .def("generate_next_token", &BaseModelForCausalLM::generate_next_token)
-        .def_readonly("config", &BaseModelForCausalLM::config);
 
     py::class_<GenerationConfig>(m, "GenerationConfig")
         .def(py::init<int, int, bool, int, float, float, float, int>(), "max_length"_a = 2048,
@@ -73,6 +80,48 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("temperature", &GenerationConfig::temperature)
         .def_readwrite("repetition_penalty", &GenerationConfig::repetition_penalty)
         .def_readwrite("num_threads", &GenerationConfig::num_threads);
+
+    py::class_<FunctionMessage>(m, "FunctionMessage")
+        .def("__repr__", &to_string<FunctionMessage>)
+        .def("__str__", &to_string<FunctionMessage>)
+        .def_readwrite("name", &FunctionMessage::name)
+        .def_readwrite("arguments", &FunctionMessage::arguments);
+
+    py::class_<CodeMessage>(m, "CodeMessage")
+        .def("__repr__", &to_string<CodeMessage>)
+        .def("__str__", &to_string<CodeMessage>)
+        .def_readwrite("input", &CodeMessage::input);
+
+    py::class_<ToolCallMessage>(m, "ToolCallMessage")
+        .def("__repr__", &to_string<ToolCallMessage>)
+        .def("__str__", &to_string<ToolCallMessage>)
+        .def_readwrite("type", &ToolCallMessage::type)
+        .def_readwrite("function", &ToolCallMessage::function)
+        .def_readwrite("code", &ToolCallMessage::code);
+
+    py::class_<ChatMessage>(m, "ChatMessage")
+        .def(py::init<std::string, std::string, std::vector<ToolCallMessage>>(), "role"_a, "content"_a,
+             "tool_calls"_a = std::vector<ToolCallMessage>{})
+        .def("__repr__", &to_string<ChatMessage>)
+        .def("__str__", &to_string<ChatMessage>)
+        .def_readonly_static("ROLE_SYSTEM", &ChatMessage::ROLE_SYSTEM)
+        .def_readonly_static("ROLE_USER", &ChatMessage::ROLE_USER)
+        .def_readonly_static("ROLE_ASSISTANT", &ChatMessage::ROLE_ASSISTANT)
+        .def_readonly_static("ROLE_OBSERVATION", &ChatMessage::ROLE_OBSERVATION)
+        .def_readwrite("role", &ChatMessage::role)
+        .def_readwrite("content", &ChatMessage::content)
+        .def_readwrite("tool_calls", &ChatMessage::tool_calls);
+
+    py::class_<BaseTokenizer, PyBaseTokenizer>(m, "BaseTokenizer")
+        .def("encode", &BaseTokenizer::encode, "text"_a, "max_length"_a)
+        .def("decode", &BaseTokenizer::decode, "ids"_a)
+        .def("encode_messages", &BaseTokenizer::encode_messages, "messages"_a, "max_length"_a)
+        .def("decode_message", &BaseTokenizer::decode_message, "ids"_a);
+
+    py::class_<BaseModelForCausalLM, PyBaseModelForCausalLM>(m, "BaseModelForCausalLM")
+        .def("generate_next_token", &BaseModelForCausalLM::generate_next_token, "input_ids"_a, "gen_config"_a,
+             "n_past"_a, "n_ctx"_a)
+        .def_readonly("config", &BaseModelForCausalLM::config);
 
     // ===== ChatGLM =====
 
@@ -109,7 +158,7 @@ PYBIND11_MODULE(_C, m) {
     // ===== Pipeline ====
 
     py::class_<Pipeline>(m, "Pipeline")
-        .def(py::init<const std::string &>())
+        .def(py::init<const std::string &>(), "path"_a)
         .def_property_readonly("model", [](const Pipeline &self) { return self.model.get(); })
         .def_property_readonly("tokenizer", [](const Pipeline &self) { return self.tokenizer.get(); });
 }

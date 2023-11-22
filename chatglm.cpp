@@ -136,6 +136,23 @@ ggml_tensor *tensor_to_cpu(ggml_tensor *tensor) {
     return tensor;
 }
 
+const std::string ToolCallMessage::TYPE_FUNCTION = "function";
+const std::string ToolCallMessage::TYPE_CODE = "code";
+
+const std::string ChatMessage::ROLE_USER = "user";
+const std::string ChatMessage::ROLE_ASSISTANT = "assistant";
+const std::string ChatMessage::ROLE_SYSTEM = "system";
+const std::string ChatMessage::ROLE_OBSERVATION = "observation";
+
+void BaseTokenizer::check_chat_messages(const std::vector<ChatMessage> &messages) {
+    CHATGLM_CHECK(messages.size() % 2 == 1) << "invalid chat messages size " << messages.size();
+    for (size_t i = 0; i < messages.size(); i++) {
+        const std::string &target_role = (i % 2 == 0) ? ChatMessage::ROLE_USER : ChatMessage::ROLE_ASSISTANT;
+        CHATGLM_CHECK(messages[i].role == target_role)
+            << "expect messages[" << i << "].role to be " << target_role << ", but got " << messages[i].role;
+    }
+}
+
 // Adapted from https://github.com/ggerganov/llama.cpp/blob/master/llama.cpp
 void ggml_graph_compute_helper(std::vector<uninitialized_char> &buf, ggml_cgraph *graph, int n_threads) {
     struct ggml_cplan plan = ggml_graph_plan(graph, n_threads);
@@ -192,6 +209,24 @@ void StreamerGroup::end() {
     }
 }
 
+// reference: https://stackoverflow.com/questions/216823/how-to-trim-a-stdstring
+
+// trim from start (in place)
+static inline void ltrim(std::string &s) {
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) { return !std::isspace(ch); }));
+}
+
+// trim from end (in place)
+static inline void rtrim(std::string &s) {
+    s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base(), s.end());
+}
+
+// trim from both ends (in place)
+static inline void trim(std::string &s) {
+    rtrim(s);
+    ltrim(s);
+}
+
 void TextStreamer::put(const std::vector<int> &output_ids) {
     if (is_prompt_) {
         // skip prompt
@@ -203,6 +238,9 @@ void TextStreamer::put(const std::vector<int> &output_ids) {
 
     token_cache_.insert(token_cache_.end(), output_ids.begin(), output_ids.end());
     std::string text = tokenizer_->decode(token_cache_);
+    if (is_first_line_) {
+        ltrim(text);
+    }
     if (text.empty()) {
         return;
     }
@@ -211,6 +249,7 @@ void TextStreamer::put(const std::vector<int> &output_ids) {
     if (text.back() == '\n') {
         // flush the cache after newline
         printable_text = text.substr(print_len_);
+        is_first_line_ = false;
         token_cache_.clear();
         print_len_ = 0;
     } else if (std::find(puncts.begin(), puncts.end(), text.back()) != puncts.end()) {
@@ -227,8 +266,12 @@ void TextStreamer::put(const std::vector<int> &output_ids) {
 
 void TextStreamer::end() {
     std::string text = tokenizer_->decode(token_cache_);
+    if (is_first_line_) {
+        ltrim(text);
+    }
     os_ << text.substr(print_len_) << std::endl;
     is_prompt_ = true;
+    is_first_line_ = true;
     token_cache_.clear();
     print_len_ = 0;
 }
@@ -418,20 +461,20 @@ int get_default_num_threads() {
 
 std::string to_string(ModelType model_type) {
     switch (model_type) {
-    case MODEL_TYPE_CHATGLM:
+    case ModelType::CHATGLM:
         return "ChatGLM";
-    case MODEL_TYPE_CHATGLM2:
+    case ModelType::CHATGLM2:
         return "ChatGLM2";
-    case MODEL_TYPE_CHATGLM3:
+    case ModelType::CHATGLM3:
         return "ChatGLM3";
-    case MODEL_TYPE_BAICHUAN7B:
+    case ModelType::BAICHUAN7B:
         return "Baichuan7B";
-    case MODEL_TYPE_BAICHUAN13B:
+    case ModelType::BAICHUAN13B:
         return "Baichuan13B";
-    case MODEL_TYPE_INTERNLM:
+    case ModelType::INTERNLM:
         return "InternLM";
     default:
-        CHATGLM_THROW << "unknown model type " << model_type;
+        CHATGLM_THROW << "unknown model type " << (int)model_type;
     }
 }
 
@@ -632,7 +675,9 @@ std::vector<int> BaseModelForCausalLM::generate(const std::vector<int> &input_id
             streamer->put({next_token_id});
         }
 
-        if (next_token_id == config.eos_token_id) {
+        if (next_token_id == config.eos_token_id ||
+            std::find(config.extra_eos_token_ids.begin(), config.extra_eos_token_ids.end(), next_token_id) !=
+                config.extra_eos_token_ids.end()) {
             break;
         }
     }
@@ -669,23 +714,23 @@ std::vector<int> ChatGLMTokenizer::encode(const std::string &text, int max_lengt
     return ids;
 }
 
-std::vector<int> ChatGLMTokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
-    std::string prompt = build_prompt(history);
+std::vector<int> ChatGLMTokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
+    std::string prompt = build_prompt(messages);
     std::vector<int> input_ids = encode(prompt, max_length);
     return input_ids;
 }
 
-std::string ChatGLMTokenizer::build_prompt(const std::vector<std::string> &history) {
-    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
+std::string ChatGLMTokenizer::build_prompt(const std::vector<ChatMessage> &messages) {
+    check_chat_messages(messages);
 
     std::ostringstream oss_prompt;
-    if (history.size() == 1) {
-        oss_prompt << history.front();
+    if (messages.size() == 1) {
+        oss_prompt << messages.front().content;
     } else {
-        for (size_t i = 0; i < history.size(); i += 2) {
-            oss_prompt << "[Round " << i / 2 << "]\n问：" << history[i] << "\n答：";
-            if (i < history.size() - 1) {
-                oss_prompt << history[i + 1] << "\n";
+        for (size_t i = 0; i < messages.size(); i += 2) {
+            oss_prompt << "[Round " << i / 2 << "]\n问：" << messages[i].content << "\n答：";
+            if (i + 1 < messages.size()) {
+                oss_prompt << messages[i + 1].content << "\n";
             }
         }
     }
@@ -909,20 +954,20 @@ std::string ChatGLM2Tokenizer::decode(const std::vector<int> &ids) const {
     return text;
 }
 
-std::vector<int> ChatGLM2Tokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
-    std::string prompt = build_prompt(history);
+std::vector<int> ChatGLM2Tokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
+    std::string prompt = build_prompt(messages);
     std::vector<int> input_ids = encode(prompt, max_length);
     return input_ids;
 }
 
-std::string ChatGLM2Tokenizer::build_prompt(const std::vector<std::string> &history) {
-    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
+std::string ChatGLM2Tokenizer::build_prompt(const std::vector<ChatMessage> &messages) {
+    check_chat_messages(messages);
 
     std::ostringstream oss_prompt;
-    for (size_t i = 0; i < history.size(); i += 2) {
-        oss_prompt << "[Round " << i / 2 + 1 << "]\n\n问：" << history[i] << "\n\n答：";
-        if (i < history.size() - 1) {
-            oss_prompt << history[i + 1] << "\n\n";
+    for (size_t i = 0; i < messages.size(); i += 2) {
+        oss_prompt << "[Round " << i / 2 + 1 << "]\n\n问：" << messages[i].content << "\n\n答：";
+        if (i < messages.size() - 1) {
+            oss_prompt << messages[i + 1].content << "\n\n";
         }
     }
     return oss_prompt.str();
@@ -1014,6 +1059,22 @@ ChatGLM3Tokenizer::ChatGLM3Tokenizer(std::string_view serialized_model_proto) {
     user_token_id = special_id++;
     assistant_token_id = special_id++;
     observation_token_id = special_id++;
+
+    special_tokens = {
+        {"[MASK]", mask_token_id},
+        {"[gMASK]", gmask_token_id},
+        {"[sMASK]", smask_token_id},
+        {"sop", sop_token_id},
+        {"eop", eop_token_id},
+        {"<|system|>", system_token_id},
+        {"<|user|>", user_token_id},
+        {"<|assistant|>", assistant_token_id},
+        {"<|observation|>", observation_token_id},
+    };
+
+    for (const auto &item : special_tokens) {
+        index_special_tokens[item.second] = item.first;
+    }
 }
 
 std::vector<int> ChatGLM3Tokenizer::encode(const std::string &text, int max_length) const {
@@ -1025,43 +1086,137 @@ std::vector<int> ChatGLM3Tokenizer::encode(const std::string &text, int max_leng
 }
 
 std::string ChatGLM3Tokenizer::decode(const std::vector<int> &ids) const {
-    // filter out special tokens
-    std::vector<int> normal_ids(ids);
-    normal_ids.erase(std::remove_if(normal_ids.begin(), normal_ids.end(), [this](int id) { return is_special_id(id); }),
-                     normal_ids.end());
-
-    std::string text;
-    sp.Decode(normal_ids, &text);
-    text = replace_punctuations(text);
+    std::string text = decode_with_special_tokens(ids);
+    text = remove_special_tokens(text);
     return text;
 }
 
-std::vector<int> ChatGLM3Tokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
-    // TODO: need a new api for system / tools / metadata prompt
+std::string ChatGLM3Tokenizer::decode_with_special_tokens(const std::vector<int> &ids) const {
+    std::vector<std::string> pieces;
+    for (int id : ids) {
+        auto pos = index_special_tokens.find(id);
+        if (pos != index_special_tokens.end()) {
+            // special tokens
+            pieces.emplace_back(pos->second);
+        } else {
+            // normal tokens
+            pieces.emplace_back(sp.IdToPiece(id));
+        }
+    }
+
+    std::string text = sp.DecodePieces(pieces);
+    return text;
+}
+
+std::string ChatGLM3Tokenizer::remove_special_tokens(const std::string &text) {
+    std::string output = text;
+    static const std::vector<std::regex> special_token_regex{
+        // std::regex(R"(<\|assistant\|> interpreter)"),
+        // std::regex(R"(<\|assistant\|> interpre)"),
+        std::regex(R"(<\|assistant\|>)"),
+        std::regex(R"(<\|user\|>)"),
+        std::regex(R"(<\|observation\|>)"),
+    };
+    for (const auto &re : special_token_regex) {
+        output = std::regex_replace(output, re, "");
+    }
+    return output;
+}
+
+std::vector<int> ChatGLM3Tokenizer::encode_single_message(const std::string &role, const std::string &content) const {
+    std::vector<int> input_ids;
+    input_ids.emplace_back(get_command("<|" + role + "|>"));
+    // TODO: support metadata
     std::vector<int> newline_ids;
     sp.Encode("\n", &newline_ids);
+    input_ids.insert(input_ids.end(), newline_ids.begin(), newline_ids.end());
+    std::vector<int> content_ids;
+    sp.Encode(content, &content_ids);
+    input_ids.insert(input_ids.end(), content_ids.begin(), content_ids.end());
+    return input_ids;
+}
+
+std::vector<int> ChatGLM3Tokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
     std::vector<int> input_ids{gmask_token_id, sop_token_id};
-    for (size_t i = 0; i < history.size(); i++) {
-        // TODO: support all roles
-        input_ids.emplace_back((i % 2 == 0) ? user_token_id : assistant_token_id);
-        // TODO: support metadata
-        input_ids.insert(input_ids.end(), newline_ids.begin(), newline_ids.end());
-        std::vector<int> content_ids;
-        sp.Encode(history[i], &content_ids);
-        input_ids.insert(input_ids.end(), content_ids.begin(), content_ids.end());
+    for (const auto &msg : messages) {
+        auto msg_ids = encode_single_message(msg.role, msg.content);
+        input_ids.insert(input_ids.end(), msg_ids.begin(), msg_ids.end());
+
+        // encode code block into a separate message
+        if (!msg.tool_calls.empty() && msg.tool_calls.front().type == ToolCallMessage::TYPE_CODE) {
+            auto code_ids = encode_single_message(msg.role, msg.tool_calls.front().code.input);
+            input_ids.insert(input_ids.end(), code_ids.begin(), code_ids.end());
+        }
     }
     input_ids.emplace_back(assistant_token_id);
-    // NOTE: push '\n' into input_ids to avoid model generating it, saving 2 tokens
-    input_ids.insert(input_ids.end(), newline_ids.begin(), newline_ids.end());
     truncate(input_ids, max_length);
     return input_ids;
 }
 
-bool ChatGLM3Tokenizer::is_special_id(int id) const {
-    return id == mask_token_id || id == gmask_token_id || id == smask_token_id || id == sop_token_id ||
-           id == eop_token_id || id == system_token_id || id == user_token_id || id == assistant_token_id ||
-           id == observation_token_id;
+ChatMessage ChatGLM3Tokenizer::decode_message(const std::vector<int> &ids) const {
+    ChatMessage message;
+    if (!ids.empty() && ids.back() == observation_token_id) {
+        // insert an <|assistant|> token before content to match possible interpreter delimiter
+        std::vector<int> full_ids{assistant_token_id};
+        full_ids.insert(full_ids.end(), ids.begin(), ids.end());
+
+        std::string output = decode_with_special_tokens(full_ids);
+        const std::string ci_delim = "<|assistant|> interpreter";
+        size_t ci_pos = output.find(ci_delim);
+        if (ci_pos != std::string::npos) {
+            // code interpreter
+            std::string chat_output = output.substr(0, ci_pos);
+            chat_output = remove_special_tokens(chat_output);
+            trim(chat_output);
+            std::string code_output = output.substr(ci_pos + ci_delim.size());
+            code_output = remove_special_tokens(code_output);
+            trim(code_output);
+            message = ChatMessage(ChatMessage::ROLE_ASSISTANT, std::move(chat_output),
+                                  {ToolCallMessage(CodeMessage(std::move(code_output)))});
+        } else {
+            // tool call
+            output = remove_special_tokens(output);
+
+            // parse tool name
+            std::string tool_name = "PARSE_ERROR";
+            size_t pos = output.find('\n');
+            if (pos != std::string::npos) {
+                // split tool name and args by 1st linebreak
+                tool_name = output.substr(0, pos);
+                trim(tool_name);
+                output.erase(0, pos + 1);
+            }
+
+            // post process output
+            trim(output);
+
+            // extract args
+            std::string tool_args = "PARSE_ERROR";
+            static const std::regex args_regex(R"(```.*?\n(.*?)\n```)");
+            std::smatch sm;
+            if (std::regex_search(output, sm, args_regex)) {
+                CHATGLM_CHECK(sm.size() == 2) << "unexpected regex match results";
+                tool_args = sm[1];
+            }
+
+            message = ChatMessage(ChatMessage::ROLE_ASSISTANT, std::move(output),
+                                  {ToolCallMessage(FunctionMessage(std::move(tool_name), std::move(tool_args)))});
+        }
+    } else {
+        // conversation
+        message = BaseTokenizer::decode_message(ids);
+        trim(message.content); // strip leading linebreak in conversation mode
+    }
+    return message;
 }
+
+int ChatGLM3Tokenizer::get_command(const std::string &token) const {
+    auto pos = special_tokens.find(token);
+    CHATGLM_CHECK(pos != special_tokens.end()) << token << " is not a special token";
+    return pos->second;
+}
+
+bool ChatGLM3Tokenizer::is_special_id(int id) const { return index_special_tokens.count(id) > 0; }
 
 void ChatGLM3Tokenizer::truncate(std::vector<int> &ids, int max_length) {
     if ((int)ids.size() > max_length) {
@@ -1095,18 +1250,14 @@ std::string BaichuanTokenizer::decode(const std::vector<int> &ids) const {
     return text;
 }
 
-std::vector<int> BaichuanTokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
-    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
+std::vector<int> BaichuanTokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
+    check_chat_messages(messages);
 
     std::vector<int> ids;
     ids.reserve(max_length);
-    for (size_t i = 0; i < history.size(); i++) {
-        if (i % 2 == 0) {
-            ids.push_back(USER_TOKEN_ID);
-        } else {
-            ids.push_back(ASSISTANT_TOKEN_ID);
-        }
-        std::vector<int> content_ids = encode(history[i], max_length);
+    for (const auto &msg : messages) {
+        ids.push_back((msg.role == ChatMessage::ROLE_USER) ? USER_TOKEN_ID : ASSISTANT_TOKEN_ID);
+        std::vector<int> content_ids = encode(msg.content, max_length);
         ids.insert(ids.end(), content_ids.begin(), content_ids.end());
     }
     ids.push_back(ASSISTANT_TOKEN_ID);
@@ -1242,20 +1393,21 @@ std::string InternLMTokenizer::decode(const std::vector<int> &ids) const {
     return text;
 }
 
-std::vector<int> InternLMTokenizer::encode_history(const std::vector<std::string> &history, int max_length) const {
-    std::string prompt = build_prompt(history);
+std::vector<int> InternLMTokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
+    std::string prompt = build_prompt(messages);
     std::vector<int> input_ids = encode(prompt, max_length);
     return input_ids;
 }
 
-std::string InternLMTokenizer::build_prompt(const std::vector<std::string> &history) {
-    CHATGLM_CHECK(history.size() % 2 == 1) << "invalid history size " << history.size();
+std::string InternLMTokenizer::build_prompt(const std::vector<ChatMessage> &messages) {
+    check_chat_messages(messages);
 
     std::ostringstream oss_prompt;
-    for (size_t i = 0; i < history.size(); i += 2) {
-        oss_prompt << "<|User|>:" << history[i] << "<eoh>\n<|Bot|>:";
-        if (i < history.size() - 1) {
-            oss_prompt << history[i + 1] << "<eoa>\n";
+    for (const auto &msg : messages) {
+        if (msg.role == ChatMessage::ROLE_USER) {
+            oss_prompt << "<|User|>:" << msg.content << "<eoh>\n<|Bot|>:";
+        } else {
+            oss_prompt << msg.content << "<eoa>\n";
         }
     }
     return oss_prompt.str();
@@ -1324,7 +1476,7 @@ Pipeline::Pipeline(const std::string &path) {
     ModelType model_type = (ModelType)loader.read_basic<int>();
     // load version
     int version = loader.read_basic<int>();
-    if (model_type == MODEL_TYPE_CHATGLM) {
+    if (model_type == ModelType::CHATGLM) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
@@ -1339,7 +1491,7 @@ Pipeline::Pipeline(const std::string &path) {
         // load model
         model = std::make_unique<ChatGLMForCausalLM>(config);
         model->load(loader);
-    } else if (model_type == MODEL_TYPE_CHATGLM2 || model_type == MODEL_TYPE_CHATGLM3) {
+    } else if (model_type == ModelType::CHATGLM2 || model_type == ModelType::CHATGLM3) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
@@ -1350,17 +1502,19 @@ Pipeline::Pipeline(const std::string &path) {
         std::string_view serialized_model_proto((char *)mapped_file->data + loader.tell(), proto_size);
         loader.seek(proto_size, SEEK_CUR);
 
-        if (model_type == MODEL_TYPE_CHATGLM2) {
+        if (model_type == ModelType::CHATGLM2) {
             tokenizer = std::make_unique<ChatGLM2Tokenizer>(serialized_model_proto);
             model = std::make_unique<ChatGLM2ForCausalLM>(config);
         } else {
-            tokenizer = std::make_unique<ChatGLM3Tokenizer>(serialized_model_proto);
+            auto chatglm3_tokenizer = std::make_unique<ChatGLM3Tokenizer>(serialized_model_proto);
+            config.extra_eos_token_ids = {chatglm3_tokenizer->observation_token_id, chatglm3_tokenizer->user_token_id};
+            tokenizer = std::move(chatglm3_tokenizer);
             model = std::make_unique<ChatGLM3ForCausalLM>(config);
         }
 
         // load model
         model->load(loader);
-    } else if (model_type == MODEL_TYPE_BAICHUAN7B) {
+    } else if (model_type == ModelType::BAICHUAN7B) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
@@ -1376,7 +1530,7 @@ Pipeline::Pipeline(const std::string &path) {
         // load model
         model = std::make_unique<Baichuan7BForCausalLM>(config);
         model->load(loader);
-    } else if (model_type == MODEL_TYPE_BAICHUAN13B) {
+    } else if (model_type == ModelType::BAICHUAN13B) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
@@ -1392,7 +1546,7 @@ Pipeline::Pipeline(const std::string &path) {
         // load model
         model = std::make_unique<Baichuan13BForCausalLM>(config);
         model->load(loader);
-    } else if (model_type == MODEL_TYPE_INTERNLM) {
+    } else if (model_type == ModelType::INTERNLM) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
@@ -1413,7 +1567,7 @@ Pipeline::Pipeline(const std::string &path) {
         }
         model->load(loader);
     } else {
-        CHATGLM_THROW << "invalid model type " << model_type;
+        CHATGLM_THROW << "invalid model type " << (int)model_type;
     }
 }
 
@@ -1432,11 +1586,11 @@ std::string Pipeline::generate(const std::string &prompt, const GenerationConfig
     return output;
 }
 
-std::string Pipeline::chat(const std::vector<std::string> &history, const GenerationConfig &gen_config,
+ChatMessage Pipeline::chat(const std::vector<ChatMessage> &messages, const GenerationConfig &gen_config,
                            BaseStreamer *streamer) const {
-    std::vector<int> input_ids = tokenizer->encode_history(history, gen_config.max_context_length);
+    std::vector<int> input_ids = tokenizer->encode_messages(messages, gen_config.max_context_length);
     std::vector<int> new_output_ids = generate(input_ids, gen_config, streamer);
-    std::string output = tokenizer->decode(new_output_ids);
+    ChatMessage output = tokenizer->decode_message(new_output_ids);
     return output;
 }
 
