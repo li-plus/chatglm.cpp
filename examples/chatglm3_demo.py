@@ -311,7 +311,7 @@ def main():
 
             message_placeholder.markdown(response)
 
-        reply_message = Message.from_cpp(pipeline.merge_chunks(chunks))
+        reply_message = Message.from_cpp(pipeline.merge_streaming_messages(chunks))
         messages.append(reply_message)
         if not reply_message.tool_calls:
             break

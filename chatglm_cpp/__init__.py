@@ -160,6 +160,6 @@ class Pipeline(_C.Pipeline):
         output_ids = self._sync_generate_ids(input_ids=input_ids, gen_config=gen_config)
         return self.tokenizer.decode_message(output_ids)
 
-    def merge_chunks(self, chunks: List[DeltaMessage]) -> ChatMessage:
+    def merge_streaming_messages(self, chunks: List[DeltaMessage]) -> ChatMessage:
         output_ids = [x for chunk in chunks for x in chunk.token_ids]
         return self.tokenizer.decode_message(output_ids)

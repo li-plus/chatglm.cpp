@@ -139,7 +139,7 @@ def main() -> None:
             print(chunk.content, sep="", end="", flush=True)
             chunks.append(chunk)
         print()
-        messages.append(pipeline.merge_chunks(chunks))
+        messages.append(pipeline.merge_streaming_messages(chunks))
 
     print("Bye")
 

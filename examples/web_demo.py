@@ -54,7 +54,7 @@ def predict(input, chatbot, max_length, top_p, temperature, messages):
             chunks.append(chunk)
             chatbot[-1] = (chatbot[-1][0], postprocess(response))
             yield chatbot, messages
-        messages.append(pipeline.merge_chunks(chunks))
+        messages.append(pipeline.merge_streaming_messages(chunks))
     else:
         for chunk in pipeline.generate(input, **generation_kwargs):
             response += chunk
