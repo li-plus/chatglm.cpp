@@ -1,8 +1,7 @@
 import tempfile
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 import chatglm_cpp._C as _C
 from chatglm_cpp._C import ChatMessage
@@ -17,13 +16,13 @@ class DeltaMessage:
     token_ids: List[int]
 
 
-def _ensure_chat_message(message: Union[ChatMessage, Mapping[str, Any]]) -> ChatMessage:
+def _ensure_chat_message(message: Union[ChatMessage, Dict[str, Any]]) -> ChatMessage:
     if isinstance(message, ChatMessage):
         chat_message = message
-    elif isinstance(message, Mapping):
+    elif isinstance(message, dict):
         chat_message = ChatMessage(**message)
     else:
-        raise TypeError(f"expect message type to be ChatMessage or Mapping, but got {type(message)}")
+        raise TypeError(f"expect message type to be ChatMessage or dict, but got {type(message)}")
     return chat_message
 
 
