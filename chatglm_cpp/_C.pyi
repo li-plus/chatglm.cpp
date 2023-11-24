@@ -66,12 +66,13 @@ class GenerationConfig:
     do_sample: bool
     max_context_length: int
     max_length: int
+    max_new_tokens: int
     num_threads: int
     repetition_penalty: float
     temperature: float
     top_k: int
     top_p: float
-    def __init__(self, max_length: int = 2048, max_context_length: int = 512, do_sample: bool = True, top_k: int = 0, top_p: float = 0.7, temperature: float = 0.95, repetition_penalty: float = 1.0, num_threads: int = 0) -> None:
+    def __init__(self, max_length: int = 2048, max_new_tokens: int = -1, max_context_length: int = 512, do_sample: bool = True, top_k: int = 0, top_p: float = 0.7, temperature: float = 0.95, repetition_penalty: float = 1.0, num_threads: int = 0) -> None:
         ...
 class InternLM20BForCausalLM(BaseModelForCausalLM):
     pass

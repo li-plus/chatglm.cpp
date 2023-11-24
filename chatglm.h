@@ -814,6 +814,7 @@ class ModelLoader {
 
 struct GenerationConfig {
     int max_length;
+    int max_new_tokens;
     int max_context_length;
     bool do_sample;
     int top_k;
@@ -822,10 +823,12 @@ struct GenerationConfig {
     float repetition_penalty;
     int num_threads;
 
-    GenerationConfig(int max_length = 2048, int max_context_length = 512, bool do_sample = true, int top_k = 0,
-                     float top_p = 0.7, float temperature = 0.95, float repetition_penalty = 1.f, int num_threads = 0)
-        : max_length(max_length), max_context_length(max_context_length), do_sample(do_sample), top_k(top_k),
-          top_p(top_p), temperature(temperature), repetition_penalty(repetition_penalty), num_threads(num_threads) {}
+    GenerationConfig(int max_length = 2048, int max_new_tokens = -1, int max_context_length = 512,
+                     bool do_sample = true, int top_k = 0, float top_p = 0.7, float temperature = 0.95,
+                     float repetition_penalty = 1.f, int num_threads = 0)
+        : max_length(max_length), max_new_tokens(max_new_tokens), max_context_length(max_context_length),
+          do_sample(do_sample), top_k(top_k), top_p(top_p), temperature(temperature),
+          repetition_penalty(repetition_penalty), num_threads(num_threads) {}
 };
 
 int get_num_physical_cores();

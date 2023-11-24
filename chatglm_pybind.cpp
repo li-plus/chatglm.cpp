@@ -69,10 +69,11 @@ PYBIND11_MODULE(_C, m) {
         .def_property_readonly("model_type_name", &ModelConfig::model_type_name);
 
     py::class_<GenerationConfig>(m, "GenerationConfig")
-        .def(py::init<int, int, bool, int, float, float, float, int>(), "max_length"_a = 2048,
-             "max_context_length"_a = 512, "do_sample"_a = true, "top_k"_a = 0, "top_p"_a = 0.7, "temperature"_a = 0.95,
-             "repetition_penalty"_a = 1.0, "num_threads"_a = 0)
+        .def(py::init<int, int, int, bool, int, float, float, float, int>(), "max_length"_a = 2048,
+             "max_new_tokens"_a = -1, "max_context_length"_a = 512, "do_sample"_a = true, "top_k"_a = 0,
+             "top_p"_a = 0.7, "temperature"_a = 0.95, "repetition_penalty"_a = 1.0, "num_threads"_a = 0)
         .def_readwrite("max_length", &GenerationConfig::max_length)
+        .def_readwrite("max_new_tokens", &GenerationConfig::max_new_tokens)
         .def_readwrite("max_context_length", &GenerationConfig::max_context_length)
         .def_readwrite("do_sample", &GenerationConfig::do_sample)
         .def_readwrite("top_k", &GenerationConfig::top_k)

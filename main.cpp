@@ -28,6 +28,7 @@ struct Args {
     std::string prompt = "你好";
     std::string system = "";
     int max_length = 2048;
+    int max_new_tokens = -1;
     int max_context_length = 512;
     bool interactive = false;
     int top_k = 0;
@@ -44,7 +45,7 @@ static void usage(const std::string &prog) {
               << "options:\n"
               << "  -h, --help              show this help message and exit\n"
               << "  -m, --model PATH        model path (default: chatglm-ggml.bin)\n"
-              << "  --mode                  inference mode chose from {chat, generate} (default: chat)\n"
+              << "  --mode                  inference mode chosen from {chat, generate} (default: chat)\n"
               << "  --sync                  synchronized generation without streaming\n"
               << "  -p, --prompt PROMPT     prompt to start generation with (default: 你好)\n"
               << "  --pp, --prompt_path     path to the plain text file that stores the prompt\n"
@@ -52,6 +53,7 @@ static void usage(const std::string &prog) {
               << "  --sp, --system_path     path to the plain text file that stores the system message\n"
               << "  -i, --interactive       run in interactive mode\n"
               << "  -l, --max_length N      max total length including prompt and output (default: 2048)\n"
+              << "  --max_new_tokens N      max number of tokens to generate, ignoring the number of prompt tokens\n"
               << "  -c, --max_context_length N\n"
               << "                          max context length (default: 512)\n"
               << "  --top_k N               top-k sampling (default: 0)\n"
@@ -97,6 +99,8 @@ static Args parse_args(const std::vector<std::string> &argv) {
             args.interactive = true;
         } else if (arg == "-l" || arg == "--max_length") {
             args.max_length = std::stoi(argv.at(++i));
+        } else if (arg == "--max_new_tokens") {
+            args.max_new_tokens = std::stoi(argv.at(++i));
         } else if (arg == "-c" || arg == "--max_context_length") {
             args.max_context_length = std::stoi(argv.at(++i));
         } else if (arg == "--top_k") {
@@ -179,8 +183,8 @@ static void chat(Args &args) {
     }
     auto streamer = std::make_unique<chatglm::StreamerGroup>(std::move(streamers));
 
-    chatglm::GenerationConfig gen_config(args.max_length, args.max_context_length, args.temp > 0, args.top_k,
-                                         args.top_p, args.temp, args.repeat_penalty, args.num_threads);
+    chatglm::GenerationConfig gen_config(args.max_length, args.max_new_tokens, args.max_context_length, args.temp > 0,
+                                         args.top_k, args.top_p, args.temp, args.repeat_penalty, args.num_threads);
 
     if (args.verbose) {
         std::cout << "system info: | "
