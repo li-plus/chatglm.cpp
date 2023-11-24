@@ -135,7 +135,8 @@ TEST(DISABLED_Sampling, BenchmarkRepetitionPenalty) {
                                                           penalty);
     };
     auto elapsed_ms = timeit(fn, 2, 100);
-    std::cout << "cost " << elapsed_ms << " ms\n";
+    std::cout << "[" << ::testing::UnitTest::GetInstance()->current_test_info()->name() << "] " << elapsed_ms
+              << " ms\n";
 }
 
 TEST(Sampling, Temperature) {
