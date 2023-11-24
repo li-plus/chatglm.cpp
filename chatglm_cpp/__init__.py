@@ -47,6 +47,7 @@ class Pipeline(_C.Pipeline):
         messages: List[ChatMessage],
         *,
         max_length: int = 2048,
+        max_new_tokens: int = -1,
         max_context_length: int = 512,
         do_sample: bool = True,
         top_k: int = 0,
@@ -60,6 +61,7 @@ class Pipeline(_C.Pipeline):
         input_ids = self.tokenizer.encode_messages(messages, max_context_length)
         gen_config = _C.GenerationConfig(
             max_length=max_length,
+            max_new_tokens=max_new_tokens,
             max_context_length=max_context_length,
             do_sample=do_sample,
             top_k=top_k,
@@ -77,6 +79,7 @@ class Pipeline(_C.Pipeline):
         prompt: str,
         *,
         max_length: int = 2048,
+        max_new_tokens: int = -1,
         max_context_length: int = 512,
         do_sample: bool = True,
         top_k: int = 0,
@@ -89,6 +92,7 @@ class Pipeline(_C.Pipeline):
         input_ids = self.tokenizer.encode(prompt, max_context_length)
         gen_config = _C.GenerationConfig(
             max_length=max_length,
+            max_new_tokens=max_new_tokens,
             max_context_length=max_context_length,
             do_sample=do_sample,
             top_k=top_k,
@@ -105,8 +109,9 @@ class Pipeline(_C.Pipeline):
         input_ids = input_ids.copy()
         n_past = 0
         n_ctx = len(input_ids)
+        max_new_tokens = gen_config.max_new_tokens if gen_config.max_new_tokens > 0 else gen_config.max_length
 
-        while len(input_ids) < gen_config.max_length:
+        while len(input_ids) < min(gen_config.max_length, n_ctx + max_new_tokens):
             next_token_id = self.model.generate_next_token(input_ids, gen_config, n_past, n_ctx)
             yield next_token_id
             n_past = len(input_ids)

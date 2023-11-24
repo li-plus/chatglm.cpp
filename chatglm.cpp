@@ -663,8 +663,9 @@ std::vector<int> BaseModelForCausalLM::generate(const std::vector<int> &input_id
 
     int n_past = 0;
     const int n_ctx = input_ids.size();
+    const int max_new_tokens = (gen_config.max_new_tokens > 0) ? gen_config.max_new_tokens : gen_config.max_length;
 
-    while ((int)output_ids.size() < gen_config.max_length) {
+    while ((int)output_ids.size() < std::min(gen_config.max_length, n_ctx + max_new_tokens)) {
         int next_token_id = generate_next_token(output_ids, gen_config, n_past, n_ctx);
 
         n_past = output_ids.size();
