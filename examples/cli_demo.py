@@ -41,6 +41,12 @@ def main() -> None:
     parser.add_argument(
         "-l", "--max_length", default=2048, type=int, help="max total length including prompt and output"
     )
+    parser.add_argument(
+        "--max_new_tokens",
+        default=-1,
+        type=int,
+        help="max number of tokens to generate, ignoring the number of prompt tokens",
+    )
     parser.add_argument("-c", "--max_context_length", default=512, type=int, help="max context length")
     parser.add_argument("--top_k", default=0, type=int, help="top-k sampling")
     parser.add_argument("--top_p", default=0.7, type=float, help="top-p sampling")
@@ -65,6 +71,7 @@ def main() -> None:
 
     generation_kwargs = dict(
         max_length=args.max_length,
+        max_new_tokens=args.max_new_tokens,
         max_context_length=args.max_context_length,
         do_sample=args.temp > 0,
         top_k=args.top_k,
