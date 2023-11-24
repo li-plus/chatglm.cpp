@@ -118,7 +118,7 @@ TEST(Sampling, RepetitionPenalty) {
 }
 
 TEST(DISABLED_Sampling, BenchmarkRepetitionPenalty) {
-    constexpr float penalty = 1.2;
+    const float penalty = 1.2;
     constexpr size_t vocab_size = 128000;
     constexpr int seq_len = 32000;
     std::vector<float> logits(vocab_size);
@@ -130,7 +130,7 @@ TEST(DISABLED_Sampling, BenchmarkRepetitionPenalty) {
         input_ids[i] = i;
     }
 
-    auto fn = [&logits, &input_ids] {
+    auto fn = [&logits, &input_ids, penalty] {
         BaseModelForCausalLM::sampling_repetition_penalty(logits.data(), logits.data() + logits.size(), input_ids,
                                                           penalty);
     };
