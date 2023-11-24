@@ -36,6 +36,8 @@ static inline char *read_tensor_data(char *ptr, ggml_tensor *tensor) {
 
 static inline float random() { return rand() / (float)RAND_MAX; }
 
+static inline float random(float lo, float hi) { return lo + random() * (hi - lo); }
+
 static inline void random_fill(ggml_tensor *tensor) {
     std::vector<float> values(ggml_nelements(tensor));
     for (float &v : values) {
@@ -113,6 +115,28 @@ TEST(Sampling, RepetitionPenalty) {
     for (size_t i = 0; i < logits.size(); i++) {
         EXPECT_FLOAT_EQ(logits[i], target[i]);
     }
+}
+
+TEST(DISABLED_Sampling, BenchmarkRepetitionPenalty) {
+    const float penalty = 1.2;
+    constexpr size_t vocab_size = 128000;
+    constexpr int seq_len = 32000;
+    std::vector<float> logits(vocab_size);
+    for (auto &x : logits) {
+        x = random(-1, 1);
+    }
+    std::vector<int> input_ids(seq_len);
+    for (size_t i = 0; i < input_ids.size(); i++) {
+        input_ids[i] = i;
+    }
+
+    auto fn = [&logits, &input_ids, penalty] {
+        BaseModelForCausalLM::sampling_repetition_penalty(logits.data(), logits.data() + logits.size(), input_ids,
+                                                          penalty);
+    };
+    auto elapsed_ms = timeit(fn, 2, 100);
+    std::cout << "[" << ::testing::UnitTest::GetInstance()->current_test_info()->name() << "] " << elapsed_ms
+              << " ms\n";
 }
 
 TEST(Sampling, Temperature) {

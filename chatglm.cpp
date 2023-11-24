@@ -14,7 +14,6 @@
 #include <string>
 #include <sys/stat.h>
 #include <thread>
-#include <unordered_set>
 
 #ifdef __has_include
 #if __has_include(<unistd.h>)
@@ -589,19 +588,19 @@ int BaseModelForCausalLM::generate_next_token(const std::vector<int> &input_ids,
 void BaseModelForCausalLM::sampling_repetition_penalty(float *first, float *last, const std::vector<int> &input_ids,
                                                        float penalty) {
     CHATGLM_CHECK(penalty > 0) << "penalty must be a positive float, but got " << penalty;
-    std::unordered_set<int> unique_input_ids(input_ids.begin(), input_ids.end());
-    for (int id : unique_input_ids) {
-        CHATGLM_CHECK(first <= first + id && first + id < last) << "invalid input id " << id;
-        if (first[id] > 0) {
-            first[id] /= penalty;
-        } else {
-            first[id] *= penalty;
+    const float inv_penalty = 1.f / penalty;
+    const int vocab_size = last - first;
+    std::vector<bool> occurrence(vocab_size, false);
+    for (const int id : input_ids) {
+        if (!occurrence[id]) {
+            first[id] *= (first[id] > 0) ? inv_penalty : penalty;
         }
+        occurrence[id] = true;
     }
 }
 
 void BaseModelForCausalLM::sampling_temperature(float *first, float *last, float temp) {
-    float inv_temp = 1.f / temp;
+    const float inv_temp = 1.f / temp;
     for (float *it = first; it != last; it++) {
         *it *= inv_temp;
     }
@@ -616,12 +615,12 @@ TokenIdScore *BaseModelForCausalLM::sampling_top_p(TokenIdScore *first, TokenIdS
     sampling_softmax_inplace(first, last);
 
     while (first + 1 < last) {
-        float pivot_score = (last - 1)->score; // use mid score?
+        const float pivot_score = (last - 1)->score; // use mid score?
         TokenIdScore *mid =
             std::partition(first, last - 1, [pivot_score](const TokenIdScore &x) { return x.score > pivot_score; });
         std::swap(*mid, *(last - 1));
 
-        float prefix_sum =
+        const float prefix_sum =
             std::accumulate(first, mid, 0.f, [](float sum, const TokenIdScore &x) { return sum + x.score; });
         if (prefix_sum >= top_p) {
             last = mid;
