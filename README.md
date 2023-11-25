@@ -317,8 +317,8 @@ Here is a simple demo that uses `chatglm_cpp.Pipeline` to load the GGML model an
 >>> import chatglm_cpp
 >>> 
 >>> pipeline = chatglm_cpp.Pipeline("../chatglm-ggml.bin")
->>> pipeline.chat(["你好"])
-'你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。'
+>>> pipeline.chat([chatglm_cpp.ChatMessage(role="user", content="你好")])
+ChatMessage(role="assistant", content="你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。", tool_calls=[])
 ```
 
 To chat in stream, run the below Python example:
@@ -452,8 +452,8 @@ Sometimes it might be inconvenient to convert and save the intermediate GGML mod
 Loading checkpoint shards: 100%|██████████████████████████████████| 8/8 [00:10<00:00,  1.27s/it]
 Processing model states: 100%|████████████████████████████████| 339/339 [00:23<00:00, 14.73it/s]
 ...
->>> pipeline.chat(["你好"])
-'你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。'
+>>> pipeline.chat([chatglm_cpp.ChatMessage(role="user", content="你好")])
+ChatMessage(role="assistant", content="你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。", tool_calls=[])
 ```
 
 Likewise, replace the GGML model path with Hugging Face model in any example script, and it just works. For example:
