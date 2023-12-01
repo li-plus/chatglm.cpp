@@ -43,7 +43,7 @@ RUN \
         -e "s/security.ubuntu.com/mirrors.tuna.tsinghua.edu.cn/g" -i /etc/apt/sources.list && \
     apt update && \
     DEBIAN_FRONTEND=noninteractive apt install -yq --no-install-recommends \
-        python3 python3-pip && \
+        python3 python3-pip python3-dev && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /chatglm.cpp/build/bin/main /chatglm.cpp/build/bin/main
