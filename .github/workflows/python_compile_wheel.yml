@@ -10,8 +10,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        pyver: ["3.8", "3.9", "3.10", "3.11"]
+        os: [windows-latest]
+        pyver: ["3.10"]
     defaults:
       run:
         shell: pwsh
