@@ -272,6 +272,8 @@ cmake -B build -DGGML_CUBLAS=ON -DCUDA_ARCHITECTURES="80"       # for A100
 cmake -B build -DGGML_CUBLAS=ON -DCUDA_ARCHITECTURES="70;75"    # compatible with both V100 and T4
 ```
 
+To find out the CUDA architecture of your GPU device, see [Matching CUDA arch and CUDA gencode for various NVIDIA architectures](https://arnon.dk/matching-sm-architectures-arch-and-gencode-for-various-nvidia-cards/).
+
 **Metal**
 
 MPS (Metal Performance Shaders) allows computation to run on powerful Apple Silicon GPU. Add the CMake flag `-DGGML_METAL=ON` to enable it.
@@ -627,6 +629,21 @@ InternLM-20B:
 |--------------------------------|-------|-------|-------|-------|-------|-------|
 | ms/token (CPU @ Platinum 8260) | 230.0 | 236.7 | 276.6 | 290.6 | 357.1 | N/A   |
 | ms/token (CUDA @ V100 SXM2)    | 21.6  | 23.2  | 25.0  | 25.9  | 33.4  | N/A   |
+
+## Model Quality
+
+We measure model quality by evaluating the perplexity over the WikiText-2 test dataset, following the strided sliding window strategy in https://huggingface.co/docs/transformers/perplexity. Lower perplexity usually indicates a better model.
+
+Download and unzip the dataset from [link](https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-raw-v1.zip). Measure the perplexity with a stride of 512 and max input length of 2048:
+```sh
+./build/bin/perplexity -m <model_path> -f wikitext-2-raw/wiki.test.raw -s 512 -l 2048
+```
+
+|                         | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
+|-------------------------|-------|-------|-------|-------|-------|-------|
+| [ChatGLM3-6B-Base][1]   | 6.215 | 6.184 | 5.997 | 6.015 | 5.965 | 5.971 |
+
+[1]: https://huggingface.co/THUDM/chatglm3-6b-base
 
 ## Development
 

@@ -38,6 +38,8 @@ if (GGML_PERF)
     add_compile_definitions(GGML_PERF)
 endif ()
 
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+
 file(GLOB CPP_SOURCES
     ${PROJECT_SOURCE_DIR}/*.h
     ${PROJECT_SOURCE_DIR}/*.cpp)
@@ -47,8 +49,19 @@ set_source_files_properties(${CPP_SOURCES} PROPERTIES COMPILE_FLAGS "-pedantic-e
 add_library(chatglm STATIC chatglm.cpp)
 target_link_libraries(chatglm PUBLIC ggml sentencepiece-static)
 
-add_executable(main main.cpp)
-target_link_libraries(main PRIVATE chatglm)
+# c++ examples
+option(CHATGLM_ENABLE_EXAMPLES "chatglm: enable c++ examples" ON)
+if (CHATGLM_ENABLE_EXAMPLES)
+    add_executable(main main.cpp)
+    target_link_libraries(main PRIVATE chatglm)
+
+    find_package(OpenMP)
+    if (OpenMP_CXX_FOUND)
+        set(CHATGLM_OPENMP_TARGET OpenMP::OpenMP_CXX)
+    endif ()
+    add_executable(perplexity tests/perplexity.cpp)
+    target_link_libraries(perplexity PRIVATE chatglm ${CHATGLM_OPENMP_TARGET})
+endif ()
 
 # GoogleTest
 option(CHATGLM_ENABLE_TESTING "chatglm: enable testing" OFF)
@@ -75,7 +88,6 @@ endif ()
 
 option(CHATGLM_ENABLE_PYBIND "chatglm: enable python binding" OFF)
 if (CHATGLM_ENABLE_PYBIND)
-    include_directories(${CMAKE_CURRENT_SOURCE_DIR})
     set_target_properties(chatglm ggml sentencepiece-static PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
     add_subdirectory(third_party/pybind11)
     pybind11_add_module(_C chatglm_pybind.cpp)
