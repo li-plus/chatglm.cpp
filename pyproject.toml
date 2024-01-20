@@ -13,10 +13,10 @@ authors = [
 maintainers = [
     {name = "Jiahao Li", email = "liplus17@163.com"},
 ]
-description = "C++ implementation of ChatGLM-6B & ChatGLM2-6B"
+description = "C++ implementation of ChatGLM family models and more LLMs"
 readme = "README.md"
 requires-python = ">=3.7"
-keywords = ["ChatGLM", "ChatGLM2", "Large Language Model"]
+keywords = ["ChatGLM", "ChatGLM2", "ChatGLM3", "Large Language Model"]
 license = {text = "MIT License"}
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -27,6 +27,7 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 dynamic = ["version"]
 

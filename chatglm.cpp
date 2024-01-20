@@ -81,15 +81,20 @@ std::string to_string(ggml_tensor *tensor, bool with_data) {
                     for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
                         auto ptr = (char *)tensor->data + i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] +
                                    i0 * tensor->nb[0];
-                        float val;
-                        if (tensor->type == GGML_TYPE_F32) {
-                            val = *(float *)ptr;
-                        } else if (tensor->type == GGML_TYPE_F16) {
-                            val = ggml_fp16_to_fp32(*(ggml_fp16_t *)ptr);
+                        oss << (i0 > 0 ? ", " : "");
+                        if (tensor->type == GGML_TYPE_I32) {
+                            oss << *(int *)ptr;
                         } else {
-                            CHATGLM_THROW << "unimplemented";
+                            float val;
+                            if (tensor->type == GGML_TYPE_F32) {
+                                val = *(float *)ptr;
+                            } else if (tensor->type == GGML_TYPE_F16) {
+                                val = ggml_fp16_to_fp32(*(ggml_fp16_t *)ptr);
+                            } else {
+                                CHATGLM_THROW << "unimplemented";
+                            }
+                            oss << std::setw(7) << std::fixed << std::setprecision(4) << val;
                         }
-                        oss << (i0 > 0 ? ", " : "") << std::setw(7) << std::fixed << std::setprecision(4) << val;
                     }
                     oss << "]";
                 }
@@ -496,12 +501,11 @@ BaseModelForCausalLM::BaseModelForCausalLM(ModelConfig config, size_t mem_size, 
 #endif
 }
 
-int BaseModelForCausalLM::generate_next_token(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
-                                              int n_past, int n_ctx) {
+ggml_tensor *BaseModelForCausalLM::forward_graph_compute(const std::vector<int> &input_ids, int n_past, int n_ctx,
+                                                         int n_threads, bool is_decoding) {
     ctx_.ctx_b = make_unique_ggml_context(ctx_.compute_buffer.size(), ctx_.compute_buffer.data(), false);
     ctx_.gf = {};
 
-    int n_threads = gen_config.num_threads; // user defined
     if (n_threads <= 0) {
         n_threads = get_default_num_threads(); // default thread num
     }
@@ -513,7 +517,7 @@ int BaseModelForCausalLM::generate_next_token(const std::vector<int> &input_ids,
     ggml_tensor *curr_input_ids = ggml_new_tensor_1d(ctx_.ctx_b.get(), GGML_TYPE_I32, curr_input_ids_size);
     memcpy(curr_input_ids->data, input_ids.data() + n_past, ggml_nbytes(curr_input_ids));
 
-    ggml_tensor *lm_logits = forward(&ctx_, curr_input_ids, n_past, n_ctx);
+    ggml_tensor *lm_logits = forward(&ctx_, curr_input_ids, n_past, n_ctx, is_decoding);
     lm_logits->backend = GGML_BACKEND_CPU;
 
     ggml_build_forward_expand(&ctx_.gf, lm_logits);
@@ -526,6 +530,13 @@ int BaseModelForCausalLM::generate_next_token(const std::vector<int> &input_ids,
 #ifdef GGML_PERF
     ggml_graph_print(&ctx_.gf);
 #endif
+
+    return lm_logits;
+}
+
+int BaseModelForCausalLM::generate_next_token(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
+                                              int n_past, int n_ctx) {
+    ggml_tensor *lm_logits = forward_graph_compute(input_ids, n_past, n_ctx, gen_config.num_threads, true);
 
     int vocab_size = lm_logits->ne[0];
     float *next_token_logits = (float *)lm_logits->data;

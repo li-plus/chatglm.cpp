@@ -51,6 +51,7 @@ class CMakeBuild(build_ext):
             f"-DPYTHON_EXECUTABLE={sys.executable}",
             f"-DCMAKE_BUILD_TYPE={cfg}",  # not used on MSVC, but no harm
             f"-DCHATGLM_ENABLE_PYBIND=ON",
+            f"-DCHATGLM_ENABLE_EXAMPLES=OFF",
             f"-DBUILD_SHARED_LIBS=OFF",
         ]
         build_args = []

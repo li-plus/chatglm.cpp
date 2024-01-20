@@ -855,7 +855,11 @@ class BaseModelForCausalLM {
     virtual ~BaseModelForCausalLM() = default;
 
     virtual void load(ModelLoader &loader) = 0;
-    virtual ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const = 0;
+    virtual ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx,
+                                 bool is_decoding) const = 0;
+
+    ggml_tensor *forward_graph_compute(const std::vector<int> &input_ids, int n_past, int n_ctx, int n_threads,
+                                       bool is_decoding);
 
     std::vector<int> generate(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
                               BaseStreamer *streamer = nullptr);
@@ -896,10 +900,11 @@ class BasicModelForCausalLM : public BaseModelForCausalLM {
     ~BasicModelForCausalLM() { to_cpu(); }
 
   public:
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx) const override {
+    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx,
+                         bool is_decoding) const override {
         ggml_tensor *transformer_outputs = transformer.forward(ctx, input_ids, n_past, n_ctx);
-        // NOTE: only compute next_token_logits for the last token
-        if (input_ids->ne[0] > 1) {
+        // NOTE: only compute next token logits for decoding
+        if (is_decoding && input_ids->ne[0] > 1) {
             transformer_outputs = tensor_assign_buffers(
                 ggml_view_1d(ctx->ctx_b.get(), transformer_outputs, config.hidden_size,
                              (input_ids->ne[0] - 1) * config.hidden_size * ggml_element_size(transformer_outputs)));
@@ -1011,7 +1016,7 @@ class ChatGLMForCausalLM : public BasicModelForCausalLM<ChatGLMModel> {
     StateDict state_dict() const;
 
   public:
-    static constexpr size_t MEM_SIZE = 512 * MB;      // 2k context
+    static constexpr size_t MEM_SIZE = 1280 * MB;     // 2k context
     static constexpr size_t SCRATCH_SIZE = 1024 * MB; // 2k context
 };
 
@@ -1061,7 +1066,7 @@ class ChatGLM2ForCausalLM : public BasicModelForCausalLM<ChatGLM2Model> {
     StateDict state_dict() const;
 
   public:
-    static constexpr size_t MEM_SIZE = 512 * MB;      // 2k context
+    static constexpr size_t MEM_SIZE = 1280 * MB;     // 2k context
     static constexpr size_t SCRATCH_SIZE = 1280 * MB; // 2k context
 };
 
@@ -1161,7 +1166,7 @@ class Baichuan7BForCausalLM : public BasicModelForCausalLM<Baichuan7BModel> {
     StateDict state_dict() const;
 
   public:
-    static constexpr size_t MEM_SIZE = 512 * MB;
+    static constexpr size_t MEM_SIZE = 1280 * MB;
     static constexpr size_t SCRATCH_SIZE = 1280 * MB;
 };
 
@@ -1187,7 +1192,7 @@ class Baichuan13BForCausalLM : public BasicModelForCausalLM<Baichuan13BModel> {
     StateDict state_dict() const;
 
   public:
-    static constexpr size_t MEM_SIZE = 512 * MB;
+    static constexpr size_t MEM_SIZE = 1280 * MB;
     static constexpr size_t SCRATCH_SIZE = 1280 * MB;
 };
 
@@ -1248,7 +1253,7 @@ class InternLMForCausalLM : public BasicModelForCausalLM<InternLMModel> {
     StateDict state_dict() const;
 
   public:
-    static constexpr size_t MEM_SIZE = 512 * MB;
+    static constexpr size_t MEM_SIZE = 1280 * MB;
     static constexpr size_t SCRATCH_SIZE = 1280 * MB;
 };
 
