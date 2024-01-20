@@ -498,7 +498,7 @@ For more options, please refer to [examples/langchain_client.py](examples/langch
 
 Start an API server compatible with [OpenAI chat completions protocol](https://platform.openai.com/docs/api-reference/chat):
 ```sh
-MODEL=./chatglm2-ggml.bin uvicorn chatglm_cpp.openai_api:app --host 127.0.0.1 --port 8000
+MODEL=./chatglm3-ggml.bin uvicorn chatglm_cpp.openai_api:app --host 127.0.0.1 --port 8000
 ```
 
 Test your endpoint with `curl`:
@@ -509,17 +509,22 @@ curl http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/jso
 
 Use the OpenAI client to chat with your model:
 ```python
->>> import openai
+>>> from openai import OpenAI
 >>> 
->>> openai.api_base = "http://127.0.0.1:8000/v1"
->>> response = openai.ChatCompletion.create(model="default-model", messages=[{"role": "user", "content": "你好"}])
->>> response["choices"][0]["message"]["content"]
-'你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。'
+>>> client = OpenAI(base_url="http://127.0.0.1:8000/v1")
+>>> response = client.chat.completions.create(model="default-model", messages=[{"role": "user", "content": "你好"}])
+>>> response.choices[0].message.content
+'你好👋！我是人工智能助手 ChatGLM3-6B，很高兴见到你，欢迎问我任何问题。'
 ```
 
 For stream response, check out the example client script:
 ```sh
-OPENAI_API_BASE=http://127.0.0.1:8000/v1 python3 examples/openai_client.py --stream --prompt 你好
+OPENAI_BASE_URL=http://127.0.0.1:8000/v1 python3 examples/openai_client.py --stream --prompt 你好
+```
+
+Tool calling is also supported:
+```sh
+OPENAI_BASE_URL=http://127.0.0.1:8000/v1 python3 examples/openai_client.py --tool_call --prompt 上海天气怎么样
 ```
 
 With this API server as backend, ChatGLM.cpp models can be seamlessly integrated into any frontend that uses OpenAI-style API, including [mckaywrigley/chatbot-ui](https://github.com/mckaywrigley/chatbot-ui), [fuergaosi233/wechat-chatgpt](https://github.com/fuergaosi233/wechat-chatgpt), [Yidadaa/ChatGPT-Next-Web](https://github.com/Yidadaa/ChatGPT-Next-Web), and more.

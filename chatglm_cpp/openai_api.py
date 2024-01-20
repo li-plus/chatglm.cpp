@@ -1,9 +1,11 @@
 import asyncio
+import json
 import logging
 import time
-from typing import List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 import chatglm_cpp
+import uvicorn
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, computed_field
@@ -14,18 +16,41 @@ logging.basicConfig(level=logging.INFO, format=r"%(asctime)s - %(module)s - %(le
 
 
 class Settings(BaseSettings):
-    model: str = "chatglm-ggml.bin"
+    model: str = "chatglm3-ggml.bin"
     num_threads: int = 0
+
+
+class ToolCallFunction(BaseModel):
+    arguments: str
+    name: str
+
+
+class ToolCall(BaseModel):
+    function: Optional[ToolCallFunction] = None
+    type: Literal["function"]
 
 
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant"]
     content: str
+    tool_calls: Optional[List[ToolCall]] = None
 
 
 class DeltaMessage(BaseModel):
     role: Optional[Literal["system", "user", "assistant"]] = None
     content: Optional[str] = None
+    tool_calls: Optional[List[ToolCall]] = None
+
+
+class ChatCompletionToolFunction(BaseModel):
+    description: Optional[str] = None
+    name: str
+    parameters: Dict
+
+
+class ChatCompletionTool(BaseModel):
+    type: Literal["function"] = "function"
+    function: ChatCompletionToolFunction
 
 
 class ChatCompletionRequest(BaseModel):
@@ -35,6 +60,7 @@ class ChatCompletionRequest(BaseModel):
     top_p: float = Field(default=0.7, ge=0.0, le=1.0)
     stream: bool = False
     max_tokens: int = Field(default=2048, ge=0)
+    tools: Optional[List[ChatCompletionTool]] = None
 
     model_config = {
         "json_schema_extra": {"examples": [{"model": "default-model", "messages": [{"role": "user", "content": "你好"}]}]}
@@ -44,7 +70,7 @@ class ChatCompletionRequest(BaseModel):
 class ChatCompletionResponseChoice(BaseModel):
     index: int = 0
     message: ChatMessage
-    finish_reason: Literal["stop", "length"] = "stop"
+    finish_reason: Literal["stop", "length", "function_call"]
 
 
 class ChatCompletionResponseStreamChoice(BaseModel):
@@ -144,10 +170,25 @@ async def stream_chat_event_publisher(history, body):
 
 @app.post("/v1/chat/completions")
 async def create_chat_completion(body: ChatCompletionRequest) -> ChatCompletionResponse:
+    def to_json_arguments(arguments):
+        def tool_call(**kwargs):
+            return kwargs
+
+        try:
+            return json.dumps(eval(arguments, dict(tool_call=tool_call)))
+        except Exception:
+            return arguments
+
     if not body.messages:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty messages")
 
     messages = [chatglm_cpp.ChatMessage(role=msg.role, content=msg.content) for msg in body.messages]
+    if body.tools:
+        system_content = (
+            "Answer the following questions as best as you can. You have access to the following tools:\n"
+            + json.dumps([tool.model_dump() for tool in body.tools], indent=4)
+        )
+        messages.insert(0, chatglm_cpp.ChatMessage(role="system", content=system_content))
 
     if body.stream:
         generator = stream_chat_event_publisher(messages, body)
@@ -166,9 +207,28 @@ async def create_chat_completion(body: ChatCompletionRequest) -> ChatCompletionR
     prompt_tokens = len(pipeline.tokenizer.encode_messages(messages, max_context_length))
     completion_tokens = len(pipeline.tokenizer.encode(output.content, body.max_tokens))
 
+    finish_reason = "stop"
+    tool_calls = None
+    if output.tool_calls:
+        tool_calls = [
+            ToolCall(
+                type=tool_call.type,
+                function=ToolCallFunction(
+                    name=tool_call.function.name, arguments=to_json_arguments(tool_call.function.arguments)
+                ),
+            )
+            for tool_call in output.tool_calls
+        ]
+        finish_reason = "function_call"
+
     return ChatCompletionResponse(
         object="chat.completion",
-        choices=[ChatCompletionResponseChoice(message=ChatMessage(role="assistant", content=output.content))],
+        choices=[
+            ChatCompletionResponseChoice(
+                message=ChatMessage(role="assistant", content=output.content, tool_calls=tool_calls),
+                finish_reason=finish_reason,
+            )
+        ],
         usage=ChatCompletionUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
     )
 
@@ -199,3 +259,7 @@ class ModelList(BaseModel):
 @app.get("/v1/models")
 async def list_models() -> ModelList:
     return ModelList(data=[ModelCard(id="gpt-3.5-turbo")])
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000, workers=1)
