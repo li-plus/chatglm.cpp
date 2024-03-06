@@ -37,17 +37,29 @@ def check_pipeline(model_path, prompt, target, gen_kwargs={}):
 
 @pytest.mark.skipif(not CHATGLM_MODEL_PATH.exists(), reason="model file not found")
 def test_chatglm_pipeline():
-    check_pipeline(model_path=CHATGLM_MODEL_PATH, prompt="你好", target="你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。")
+    check_pipeline(
+        model_path=CHATGLM_MODEL_PATH,
+        prompt="你好",
+        target="你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。",
+    )
 
 
 @pytest.mark.skipif(not CHATGLM2_MODEL_PATH.exists(), reason="model file not found")
 def test_chatglm2_pipeline():
-    check_pipeline(model_path=CHATGLM2_MODEL_PATH, prompt="你好", target="你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。")
+    check_pipeline(
+        model_path=CHATGLM2_MODEL_PATH,
+        prompt="你好",
+        target="你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。",
+    )
 
 
 @pytest.mark.skipif(not CHATGLM3_MODEL_PATH.exists(), reason="model file not found")
 def test_chatglm3_pipeline():
-    check_pipeline(model_path=CHATGLM3_MODEL_PATH, prompt="你好", target="你好👋！我是人工智能助手 ChatGLM3-6B，很高兴见到你，欢迎问我任何问题。")
+    check_pipeline(
+        model_path=CHATGLM3_MODEL_PATH,
+        prompt="你好",
+        target="你好👋！我是人工智能助手 ChatGLM3-6B，很高兴见到你，欢迎问我任何问题。",
+    )
 
 
 @pytest.mark.skipif(not CODEGEEX2_MODEL_PATH.exists(), reason="model file not found")

@@ -1,6 +1,7 @@
 """
 Convert Hugging Face ChatGLM/ChatGLM2 models to GGML format
 """
+
 import argparse
 import platform
 import struct

@@ -63,7 +63,9 @@ class ChatCompletionRequest(BaseModel):
     tools: Optional[List[ChatCompletionTool]] = None
 
     model_config = {
-        "json_schema_extra": {"examples": [{"model": "default-model", "messages": [{"role": "user", "content": "你好"}]}]}
+        "json_schema_extra": {
+            "examples": [{"model": "default-model", "messages": [{"role": "user", "content": "你好"}]}]
+        }
     }
 
 
@@ -108,7 +110,10 @@ class ChatCompletionResponse(BaseModel):
                     "choices": [
                         {
                             "index": 0,
-                            "message": {"role": "assistant", "content": "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。"},
+                            "message": {
+                                "role": "assistant",
+                                "content": "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。",
+                            },
                             "finish_reason": "stop",
                         }
                     ],
