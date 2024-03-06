@@ -1,6 +1,7 @@
 """
 Convert Hugging Face ChatGLM/ChatGLM2 models to GGML format
 """
+
 import argparse
 import platform
 import struct
@@ -534,7 +535,7 @@ def main():
     args = parser.parse_args()
 
     with open(args.save_path, "wb") as f:
-        convert(f, args.model_name_or_path, dtype=args.type)
+        convert(f, args.model_name_or_path, args.lora_model_name_or_path, dtype=args.type)
 
     print(f"GGML model saved to {args.save_path}")
 
