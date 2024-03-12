@@ -36,6 +36,19 @@ def check_pipeline(model_path, prompt, target, gen_kwargs={}):
 
 
 @pytest.mark.skipif(not CHATGLM_MODEL_PATH.exists(), reason="model file not found")
+def test_pipeline_options():
+    # check max_length option
+    pipeline = chatglm_cpp.Pipeline(CHATGLM_MODEL_PATH)
+    assert pipeline.model.config.max_length == 2048
+    pipeline = chatglm_cpp.Pipeline(CHATGLM_MODEL_PATH, max_length=234)
+    assert pipeline.model.config.max_length == 234
+
+    # check if resources are properly released
+    for _ in range(100):
+        chatglm_cpp.Pipeline(CHATGLM_MODEL_PATH)
+
+
+@pytest.mark.skipif(not CHATGLM_MODEL_PATH.exists(), reason="model file not found")
 def test_chatglm_pipeline():
     check_pipeline(
         model_path=CHATGLM_MODEL_PATH,

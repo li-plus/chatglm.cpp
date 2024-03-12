@@ -905,7 +905,7 @@ void BaseModelForCausalLM::sampling_softmax_inplace(TokenIdScore *first, TokenId
 std::vector<int> BaseModelForCausalLM::generate(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
                                                 BaseStreamer *streamer) {
     CHATGLM_CHECK(gen_config.max_length <= config.max_length)
-        << "requested max_length (" << gen_config.max_length << ") is larger than model's max_length ("
+        << "Requested max_length (" << gen_config.max_length << ") exceeds pre-configured model max_length ("
         << config.max_length << ")";
 
     std::vector<int> output_ids;
@@ -1700,7 +1700,16 @@ StateDict InternLMForCausalLM::state_dict() const {
 
 // ===== pipeline =====
 
-Pipeline::Pipeline(const std::string &path) {
+Pipeline::Pipeline(const std::string &path, int max_length) {
+    auto _update_config_max_length = [](ModelConfig &config, int max_length) {
+        if (max_length > 0) {
+            CHATGLM_CHECK(max_length <= config.max_length)
+                << "Requested max_length (" << max_length << ") exceeds the max possible model sequence length ("
+                << config.max_length;
+            config.max_length = max_length;
+        }
+    };
+
     mapped_file = std::make_unique<MappedFile>(path);
     ModelLoader loader(mapped_file->data, mapped_file->size);
 
@@ -1718,6 +1727,7 @@ Pipeline::Pipeline(const std::string &path) {
         // load config
         ModelConfig config(model_type, loader.read_basic<ConfigRecordV1>(), 1e-5f, ActivationType::GELU, true, true,
                            true, false, RopeType::CHATGLM, -1, AttentionMaskType::CHATGLM);
+        _update_config_max_length(config, max_length);
 
         // load tokenizer
         int proto_size = loader.read_basic<int>();
@@ -1734,6 +1744,7 @@ Pipeline::Pipeline(const std::string &path) {
         // load config
         ModelConfig config(model_type, loader.read_basic<ConfigRecordV2>(), 1e-5f, ActivationType::SILU, true, false,
                            false, false, RopeType::GPTJ, 2, AttentionMaskType::CAUSAL);
+        _update_config_max_length(config, max_length);
 
         // load tokenizer
         int proto_size = loader.read_basic<int>();
@@ -1758,6 +1769,7 @@ Pipeline::Pipeline(const std::string &path) {
         // load config
         ModelConfig config(model_type, loader.read_basic<ConfigRecordV1>(), 1e-6f, ActivationType::SILU, false, false,
                            false, false, RopeType::NEOX, 1, AttentionMaskType::CAUSAL);
+        _update_config_max_length(config, max_length);
 
         // load tokenizer
         int proto_size = loader.read_basic<int>();
@@ -1774,6 +1786,7 @@ Pipeline::Pipeline(const std::string &path) {
         // load config
         ModelConfig config(model_type, loader.read_basic<ConfigRecordV1>(), 1e-6f, ActivationType::SILU, false, false,
                            false, true, RopeType::DISABLED, -1, AttentionMaskType::CAUSAL);
+        _update_config_max_length(config, max_length);
 
         // load tokenizer
         int proto_size = loader.read_basic<int>();
@@ -1797,6 +1810,7 @@ Pipeline::Pipeline(const std::string &path) {
             config = ModelConfig(model_type, rec, 1e-6f, ActivationType::SILU, false, false, false, false,
                                  RopeType::NEOX, 1, AttentionMaskType::CAUSAL);
         }
+        _update_config_max_length(config, max_length);
 
         // load tokenizer
         int proto_size = loader.read_basic<int>();

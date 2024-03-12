@@ -171,7 +171,7 @@ static inline void print_message(const chatglm::ChatMessage &message) {
 static void chat(Args &args) {
     ggml_time_init();
     int64_t start_load_us = ggml_time_us();
-    chatglm::Pipeline pipeline(args.model_path);
+    chatglm::Pipeline pipeline(args.model_path, args.max_length);
     int64_t end_load_us = ggml_time_us();
 
     std::string model_name = pipeline.model->config.model_type_name();

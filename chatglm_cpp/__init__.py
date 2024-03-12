@@ -27,10 +27,14 @@ def _ensure_chat_message(message: Union[ChatMessage, Dict[str, Any]]) -> ChatMes
 
 
 class Pipeline(_C.Pipeline):
-    def __init__(self, model_path: str, *, dtype: Optional[str] = None) -> None:
+    def __init__(self, model_path: str, *, max_length: Optional[int] = None, dtype: Optional[str] = None) -> None:
+        kwargs = {}
+        if max_length is not None:
+            kwargs.update(max_length=max_length)
+
         if Path(model_path).is_file():
             # load ggml model
-            super().__init__(str(model_path))
+            super().__init__(str(model_path), **kwargs)
         else:
             # convert hf model to ggml format
             from chatglm_cpp.convert import convert
@@ -40,7 +44,7 @@ class Pipeline(_C.Pipeline):
 
             with tempfile.NamedTemporaryFile("wb") as f:
                 convert(f, model_path, dtype=dtype)
-                super().__init__(f.name)
+                super().__init__(f.name, **kwargs)
 
     def chat(
         self,

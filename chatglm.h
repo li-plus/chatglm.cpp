@@ -1065,7 +1065,7 @@ class InternLMForCausalLM : public BasicModelForCausalLM<InternLMModel> {
 
 class Pipeline {
   public:
-    Pipeline(const std::string &path);
+    Pipeline(const std::string &path, int max_length = -1);
 
     std::vector<int> generate(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
                               BaseStreamer *streamer = nullptr) const;
