@@ -751,7 +751,7 @@ TEST_F(ChatGLMTest, InternLMModel) {
 
     constexpr int seq_len = 3;
 
-    InternLM7BModel model(&ctx, config);
+    InternLMModel model(&ctx, config);
 
     std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
                                            model.layers[0].input_layernorm.weight,
@@ -1378,7 +1378,7 @@ TEST(Pipeline, InternLM) {
         GTEST_SKIP() << "Skipping InternLM e2e test (ggml model not found)";
     }
     Pipeline pipeline(model_path.string());
-    EXPECT_TRUE(dynamic_cast<InternLM7BForCausalLM *>(pipeline.model.get()));
+    EXPECT_TRUE(dynamic_cast<InternLMForCausalLM *>(pipeline.model.get()));
 
     // tokenizer
     {

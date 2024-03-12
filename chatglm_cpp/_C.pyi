@@ -3,7 +3,7 @@ ChatGLM.cpp python binding
 """
 from __future__ import annotations
 import typing
-__all__ = ['Baichuan13BForCausalLM', 'Baichuan7BForCausalLM', 'BaichuanTokenizer', 'BaseModelForCausalLM', 'BaseTokenizer', 'ChatGLM2ForCausalLM', 'ChatGLM2Tokenizer', 'ChatGLM3Tokenizer', 'ChatGLMForCausalLM', 'ChatGLMTokenizer', 'ChatMessage', 'CodeMessage', 'FunctionMessage', 'GenerationConfig', 'InternLM20BForCausalLM', 'InternLM7BForCausalLM', 'InternLMTokenizer', 'ModelConfig', 'ModelType', 'Pipeline', 'ToolCallMessage']
+__all__ = ['Baichuan13BForCausalLM', 'Baichuan7BForCausalLM', 'BaichuanTokenizer', 'BaseModelForCausalLM', 'BaseTokenizer', 'ChatGLM2ForCausalLM', 'ChatGLM2Tokenizer', 'ChatGLM3Tokenizer', 'ChatGLMForCausalLM', 'ChatGLMTokenizer', 'ChatMessage', 'CodeMessage', 'FunctionMessage', 'GenerationConfig', 'InternLMForCausalLM', 'InternLMTokenizer', 'ModelConfig', 'ModelType', 'Pipeline', 'ToolCallMessage']
 class Baichuan13BForCausalLM(BaseModelForCausalLM):
     pass
 class Baichuan7BForCausalLM(BaseModelForCausalLM):
@@ -74,9 +74,7 @@ class GenerationConfig:
     top_p: float
     def __init__(self, max_length: int = 2048, max_new_tokens: int = -1, max_context_length: int = 512, do_sample: bool = True, top_k: int = 0, top_p: float = 0.7, temperature: float = 0.95, repetition_penalty: float = 1.0, num_threads: int = 0) -> None:
         ...
-class InternLM20BForCausalLM(BaseModelForCausalLM):
-    pass
-class InternLM7BForCausalLM(BaseModelForCausalLM):
+class InternLMForCausalLM(BaseModelForCausalLM):
     pass
 class InternLMTokenizer(BaseTokenizer):
     pass

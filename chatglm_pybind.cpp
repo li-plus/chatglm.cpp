@@ -155,9 +155,7 @@ PYBIND11_MODULE(_C, m) {
 
     py::class_<InternLMTokenizer, BaseTokenizer>(m, "InternLMTokenizer");
 
-    py::class_<InternLM7BForCausalLM, BaseModelForCausalLM>(m, "InternLM7BForCausalLM");
-
-    py::class_<InternLM20BForCausalLM, BaseModelForCausalLM>(m, "InternLM20BForCausalLM");
+    py::class_<InternLMForCausalLM, BaseModelForCausalLM>(m, "InternLMForCausalLM");
 
     // ===== Pipeline ====
 

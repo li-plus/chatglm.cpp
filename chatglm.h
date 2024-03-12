@@ -1039,23 +1039,18 @@ class InternLMTokenizer : public BaseTokenizer {
     static constexpr int eos_token_id = 2;
 };
 
-using InternLM7BBlock = BasicBlock<RMSNorm, BasicAttention, BasicGLU>;
+using InternLMBlock = BasicBlock<RMSNorm, BasicAttention, BasicGLU>;
 
-using InternLM7BModel = BasicModel<InternLM7BBlock, RMSNorm, BasicPositionIdsGenerator>;
+using InternLMModel = BasicModel<InternLMBlock, RMSNorm, BasicPositionIdsGenerator>;
 
-using InternLM20BBlock = BasicBlock<RMSNorm, BasicAttention, BasicGLU>;
-
-using InternLM20BModel = BasicModel<InternLM20BBlock, RMSNorm, BasicPositionIdsGenerator>;
-
-template <typename InternLMModel>
 class InternLMForCausalLM : public BasicModelForCausalLM<InternLMModel> {
   public:
     InternLMForCausalLM(const ModelConfig &config);
 
     void load(ModelLoader &loader) override;
 
-    static int num_weights(int num_hidden_layers) {
-        return 3 + num_hidden_layers * (std::is_same_v<InternLMModel, InternLM7BModel> ? 9 : 7);
+    static int num_weights(int num_hidden_layers, int hidden_size) {
+        return 3 + num_hidden_layers * (hidden_size == 4096 ? 9 : 7);
     }
 
   private:
@@ -1065,10 +1060,6 @@ class InternLMForCausalLM : public BasicModelForCausalLM<InternLMModel> {
     static constexpr size_t MEM_SIZE = 1280 * MB;
     static constexpr size_t SCRATCH_SIZE = 1280 * MB;
 };
-
-using InternLM7BForCausalLM = InternLMForCausalLM<InternLM7BModel>;
-
-using InternLM20BForCausalLM = InternLMForCausalLM<InternLM20BModel>;
 
 // ===== pipeline =====
 

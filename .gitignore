@@ -21,3 +21,6 @@ build/
 
 # clangd
 .cache/
+
+# data
+/data/

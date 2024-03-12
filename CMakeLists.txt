@@ -106,6 +106,15 @@ add_custom_target(lint
     COMMAND isort ${PY_SOURCES}
     COMMAND black ${PY_SOURCES} --verbose)
 
+# check all
+add_custom_target(check
+    COMMAND cmake --build build -j
+    COMMAND ./build/bin/chatglm_test
+    COMMAND python3 setup.py develop
+    COMMAND python3 -m pytest tests/test_chatglm_cpp.py -v
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+)
+
 # mypy
 add_custom_target(mypy
     mypy chatglm_cpp examples --exclude __init__.pyi

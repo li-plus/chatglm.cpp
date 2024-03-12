@@ -1652,52 +1652,49 @@ std::string InternLMTokenizer::build_prompt(const std::vector<ChatMessage> &mess
     return oss_prompt.str();
 }
 
-template <typename InternLMModel>
-InternLMForCausalLM<InternLMModel>::InternLMForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM<InternLMModel>(config, MEM_SIZE, SCRATCH_SIZE, num_weights(config.num_hidden_layers)) {
-    this->state_dict_ = state_dict();
+InternLMForCausalLM::InternLMForCausalLM(const ModelConfig &config)
+    : BasicModelForCausalLM(config, MEM_SIZE, SCRATCH_SIZE, num_weights(config.num_hidden_layers, config.hidden_size)) {
+    state_dict_ = state_dict();
 }
 
-template <typename InternLMModel>
-void InternLMForCausalLM<InternLMModel>::load(ModelLoader &loader) {
-    for (auto &item : this->state_dict_) {
+void InternLMForCausalLM::load(ModelLoader &loader) {
+    for (auto &item : state_dict_) {
         const std::string &name = item.first;
         ggml_tensor *tensor = item.second;
         loader.read_tensor(name, tensor);
     }
 
-    this->to_device();
+    to_device();
 
-    this->ctx_.weight_buffer = std::string_view(loader.data, loader.size);
-    this->ctx_.init_device_context();
+    ctx_.weight_buffer = std::string_view(loader.data, loader.size);
+    ctx_.init_device_context();
 }
 
-template <typename InternLMModel>
-StateDict InternLMForCausalLM<InternLMModel>::state_dict() const {
+StateDict InternLMForCausalLM::state_dict() const {
     StateDict sd;
-    sd.reserve(num_weights(this->config.num_hidden_layers));
-    sd.emplace_back("model.embed_tokens.weight", this->transformer.word_embeddings.weight);
-    for (int i = 0; i < this->config.num_hidden_layers; i++) {
+    sd.reserve(num_weights(config.num_hidden_layers, config.hidden_size));
+    sd.emplace_back("model.embed_tokens.weight", transformer.word_embeddings.weight);
+    for (int i = 0; i < config.num_hidden_layers; i++) {
         std::string layer_prefix = "model.layers." + std::to_string(i) + '.';
-        sd.emplace_back(layer_prefix + "input_layernorm.weight", this->transformer.layers[i].input_layernorm.weight);
+        sd.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
         sd.emplace_back(layer_prefix + "self_attn.qkv_proj.weight",
-                        this->transformer.layers[i].attention.query_key_value.weight);
-        if (this->transformer.layers[i].attention.query_key_value.bias) {
+                        transformer.layers[i].attention.query_key_value.weight);
+        if (transformer.layers[i].attention.query_key_value.bias) {
             sd.emplace_back(layer_prefix + "self_attn.qkv_proj.bias",
-                            this->transformer.layers[i].attention.query_key_value.bias);
+                            transformer.layers[i].attention.query_key_value.bias);
         }
-        sd.emplace_back(layer_prefix + "self_attn.o_proj.weight", this->transformer.layers[i].attention.dense.weight);
-        if (this->transformer.layers[i].attention.dense.bias) {
-            sd.emplace_back(layer_prefix + "self_attn.o_proj.bias", this->transformer.layers[i].attention.dense.bias);
+        sd.emplace_back(layer_prefix + "self_attn.o_proj.weight", transformer.layers[i].attention.dense.weight);
+        if (transformer.layers[i].attention.dense.bias) {
+            sd.emplace_back(layer_prefix + "self_attn.o_proj.bias", transformer.layers[i].attention.dense.bias);
         }
         sd.emplace_back(layer_prefix + "post_attention_layernorm.weight",
-                        this->transformer.layers[i].post_attention_layernorm.weight);
-        sd.emplace_back(layer_prefix + "mlp.gate_proj.weight", this->transformer.layers[i].mlp.gate_proj.weight);
-        sd.emplace_back(layer_prefix + "mlp.up_proj.weight", this->transformer.layers[i].mlp.up_proj.weight);
-        sd.emplace_back(layer_prefix + "mlp.down_proj.weight", this->transformer.layers[i].mlp.down_proj.weight);
+                        transformer.layers[i].post_attention_layernorm.weight);
+        sd.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
+        sd.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
+        sd.emplace_back(layer_prefix + "mlp.down_proj.weight", transformer.layers[i].mlp.down_proj.weight);
     }
-    sd.emplace_back("model.norm.weight", this->transformer.final_layernorm.weight);
-    sd.emplace_back("lm_head.weight", this->lm_head.weight);
+    sd.emplace_back("model.norm.weight", transformer.final_layernorm.weight);
+    sd.emplace_back("lm_head.weight", lm_head.weight);
     return sd;
 }
 
@@ -1808,11 +1805,7 @@ Pipeline::Pipeline(const std::string &path) {
         tokenizer = std::make_unique<InternLMTokenizer>(serialized_model_proto);
 
         // load model
-        if (config.hidden_size == 4096) {
-            model = std::make_unique<InternLM7BForCausalLM>(config);
-        } else {
-            model = std::make_unique<InternLM20BForCausalLM>(config);
-        }
+        model = std::make_unique<InternLMForCausalLM>(config);
         model->load(loader);
     } else {
         CHATGLM_THROW << "invalid model type " << (int)model_type;
