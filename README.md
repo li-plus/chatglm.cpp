@@ -23,6 +23,8 @@ Support Matrix:
 * Platforms: Linux, MacOS, Windows
 * Models: [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [ChatGLM3-6B](https://github.com/THUDM/ChatGLM3), [CodeGeeX2](https://github.com/THUDM/CodeGeeX2), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan-7B](https://github.com/baichuan-inc/Baichuan-7B), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan2](https://github.com/baichuan-inc/Baichuan2), [InternLM](https://github.com/InternLM/InternLM)
 
+**NOTE**: Baichuan & InternLM model series are deprecated in favor of [llama.cpp](https://github.com/ggerganov/llama.cpp).
+
 ## Getting Started
 
 **Preparation**

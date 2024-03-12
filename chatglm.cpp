@@ -1764,6 +1764,8 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
         // load model
         model->load(loader);
     } else if (model_type == ModelType::BAICHUAN7B) {
+        std::cerr << "[WARN] Baichuan models are deprecated in favor of llama.cpp, and will be removed in next major "
+                     "version of chatglm.cpp\n";
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
@@ -1781,6 +1783,8 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
         model = std::make_unique<Baichuan7BForCausalLM>(config);
         model->load(loader);
     } else if (model_type == ModelType::BAICHUAN13B) {
+        std::cerr << "[WARN] Baichuan models are deprecated in favor of llama.cpp, and will be removed in next major "
+                     "version of chatglm.cpp\n";
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
@@ -1798,6 +1802,8 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
         model = std::make_unique<Baichuan13BForCausalLM>(config);
         model->load(loader);
     } else if (model_type == ModelType::INTERNLM) {
+        std::cerr << "[WARN] InternLM models are deprecated in favor of llama.cpp, and will be removed in next major "
+                     "version of chatglm.cpp\n";
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
