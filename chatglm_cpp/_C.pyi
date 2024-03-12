@@ -174,7 +174,7 @@ class ModelType:
     def value(self) -> int:
         ...
 class Pipeline:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, max_length: int = -1) -> None:
         ...
     @property
     def model(self) -> BaseModelForCausalLM:

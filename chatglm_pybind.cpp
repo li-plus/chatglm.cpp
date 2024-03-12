@@ -160,7 +160,7 @@ PYBIND11_MODULE(_C, m) {
     // ===== Pipeline ====
 
     py::class_<Pipeline>(m, "Pipeline")
-        .def(py::init<const std::string &>(), "path"_a)
+        .def(py::init<const std::string &, int>(), "path"_a, "max_length"_a = -1)
         .def_property_readonly("model", [](const Pipeline &self) { return self.model.get(); })
         .def_property_readonly("tokenizer", [](const Pipeline &self) { return self.tokenizer.get(); });
 }
