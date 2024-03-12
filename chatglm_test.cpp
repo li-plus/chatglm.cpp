@@ -581,15 +581,14 @@ TEST_F(ChatGLMTest, BenchmarkRMSNorm) {
 TEST_F(ChatGLMTest, GLMModel) {
     fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/glm_model.data";
 
-    ModelConfig config;
-    config.hidden_size = 32;
-    config.num_attention_heads = 8;
-    config.num_kv_heads = 2;
-    config.intermediate_size = config.hidden_size * 4;
-    config.num_hidden_layers = 1;
-    config.vocab_size = 5;
-    config.max_length = 8;
-    config.norm_eps = 1e-5;
+    ModelConfig config(
+        ModelType::CHATGLM, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
+        /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/128, /*norm_eps=*/1e-5f,
+        /*hidden_act=*/ActivationType::GELU, /*use_qkv_bias=*/true, /*use_dense_bias=*/true,
+        /*interleaved_qkv=*/true, /*use_alibi=*/false, /*rope_type=*/RopeType::CHATGLM, /*rope_dim_scale=*/-1,
+        /*attn_mask_type=*/AttentionMaskType::CHATGLM,
+        /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
+        /*extra_eos_token_ids=*/{});
 
     constexpr int seq_len = 3;
 
@@ -614,79 +613,17 @@ TEST_F(ChatGLMTest, GLMModel) {
     test_model(model, config, data_path, seq_len, all_weights);
 }
 
-// TEST_F(ChatGLMTest, BenchmarkGLMBlock) {
-//     constexpr int hidden_size = 4096;
-//     constexpr int num_attention_heads = 32;
-//     constexpr int num_hidden_layers = 28;
-//     constexpr int max_length = 2048;
-//     constexpr int seq_len = 64;
-
-//     ggml_type dtypes[]{GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0};
-//     for (const auto dtype : dtypes) {
-//         SetUp();
-
-//         ctx.dtype = dtype;
-//         GLMBlock model(&ctx, hidden_size, num_attention_heads, num_hidden_layers, max_length);
-
-//         ggml_tensor *self_attn_x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
-//         ggml_tensor *cross_attn_x = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
-
-//         std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
-//                                                model.input_layernorm.bias,
-//                                                model.attention.query_key_value.weight,
-//                                                model.attention.query_key_value.bias,
-//                                                model.attention.dense.weight,
-//                                                model.attention.dense.bias,
-//                                                model.post_attention_layernorm.weight,
-//                                                model.post_attention_layernorm.bias,
-//                                                model.mlp.dense_h_to_4h.weight,
-//                                                model.mlp.dense_h_to_4h.bias,
-//                                                model.mlp.dense_4h_to_h.weight,
-//                                                model.mlp.dense_4h_to_h.bias,
-//                                                self_attn_x,
-//                                                cross_attn_x};
-
-//         for (auto tensor : all_tensors) {
-//             random_fill(tensor);
-//             tensor_to_device(tensor);
-//         }
-
-//         // self attention
-//         reset_cgraph();
-//         {
-//             ggml_tensor *self_attn_y = model.forward(&ctx, self_attn_x, 0, seq_len);
-//             ggml_build_forward_expand(&ctx.gf, self_attn_y);
-//             std::cout << "[Benchmark] GLMBlock " << ggml_type_name(dtype)
-//                       << " self attn time: " << perf_cpu_graph_compute() << " ms\n";
-//         }
-
-//         // cross attention
-//         reset_cgraph();
-//         {
-//             ggml_tensor *cross_attn_y = model.forward(&ctx, cross_attn_x, seq_len, seq_len);
-//             ggml_build_forward_expand(&ctx.gf, cross_attn_y);
-//             std::cout << "[Benchmark] GLMBlock " << ggml_type_name(dtype)
-//                       << " cross attn time: " << perf_device_graph_compute() << " ms\n";
-//         }
-
-//         for (auto tensor : all_tensors) {
-//             tensor_to_cpu(tensor);
-//         }
-//     }
-// }
-
 TEST_F(ChatGLMTest, GLM2Model) {
     fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/glm2_model.data";
 
-    ModelConfig config;
-    config.vocab_size = 5;
-    config.hidden_size = 32;
-    config.num_attention_heads = 8;
-    config.num_kv_heads = 2;
-    config.num_hidden_layers = 1;
-    config.intermediate_size = 48;
-    config.norm_eps = 1e-5;
-    config.max_length = 8;
+    ModelConfig config(
+        ModelType::CHATGLM2, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
+        /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
+        /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/false,
+        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_dim_scale=*/2,
+        /*attn_mask_type=*/AttentionMaskType::CAUSAL,
+        /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
+        /*extra_eos_token_ids=*/{});
 
     constexpr int seq_len = 3;
 
@@ -709,84 +646,17 @@ TEST_F(ChatGLMTest, GLM2Model) {
     test_model(model, config, data_path, seq_len, all_weights);
 }
 
-// TEST_F(ChatGLMTest, BenchmarkGLM2Block) {
-//     constexpr int seq_len = 64;
-//     constexpr int hidden_size = 4096;
-//     constexpr int num_attention_heads = 32;
-//     constexpr int num_kv_heads = 2;
-//     constexpr int ffn_hidden_size = 13696;
-//     constexpr int max_length = 2048;
-
-// #ifdef GGML_USE_METAL
-//     ggml_type dtypes[]{GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0};
-// #else
-//     ggml_type dtypes[]{GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0};
-// #endif
-//     for (const auto dtype : dtypes) {
-//         SetUp();
-
-//         ctx.dtype = dtype;
-//         GLM2Block model(&ctx, hidden_size, num_attention_heads, num_kv_heads, ffn_hidden_size, max_length, 1e-5);
-//         tensor_to_device(model.attention.k_cache);
-//         tensor_to_device(model.attention.v_cache);
-
-//         ggml_tensor *self_attn_x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size, seq_len);
-//         ggml_tensor *cross_attn_x = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden_size);
-
-//         std::vector<ggml_tensor *> all_tensors{model.input_layernorm.weight,
-//                                                model.attention.query_key_value.weight,
-//                                                model.attention.query_key_value.bias,
-//                                                model.attention.dense.weight,
-//                                                model.post_attention_layernorm.weight,
-//                                                model.mlp.gate_proj.weight,
-//                                                model.mlp.up_proj.weight,
-//                                                model.mlp.down_proj.weight,
-//                                                self_attn_x,
-//                                                cross_attn_x};
-
-//         for (auto tensor : all_tensors) {
-//             random_fill(tensor);
-//             tensor_to_device(tensor);
-//         }
-
-//         // self attention
-//         reset_cgraph();
-//         {
-//             ggml_tensor *self_attn_y = model.forward(&ctx, self_attn_x, 0, seq_len);
-//             ggml_build_forward_expand(&ctx.gf, self_attn_y);
-//             std::cout << "[Benchmark] GLM2Block " << ggml_type_name(dtype)
-//                       << " self attn time: " << perf_device_graph_compute() << " ms\n";
-//         }
-
-//         // cross attention
-//         reset_cgraph();
-//         {
-//             ggml_tensor *cross_attn_y = model.forward(&ctx, cross_attn_x, seq_len, seq_len);
-//             ggml_build_forward_expand(&ctx.gf, cross_attn_y);
-//             std::cout << "[Benchmark] GLM2Block " << ggml_type_name(dtype)
-//                       << " cross attn time: " << perf_device_graph_compute() << " ms\n";
-//         }
-
-//         for (auto tensor : all_tensors) {
-//             tensor_to_cpu(tensor);
-//         }
-//         tensor_to_cpu(model.attention.k_cache);
-//         tensor_to_cpu(model.attention.v_cache);
-//     }
-// }
-
 TEST_F(ChatGLMTest, GLM3Model) {
     fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/glm3_model.data";
 
-    ModelConfig config;
-    config.vocab_size = 5;
-    config.hidden_size = 32;
-    config.num_attention_heads = 8;
-    config.num_kv_heads = 2;
-    config.num_hidden_layers = 1;
-    config.intermediate_size = 48;
-    config.norm_eps = 1e-5;
-    config.max_length = 8;
+    ModelConfig config(
+        ModelType::CHATGLM3, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
+        /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
+        /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/false,
+        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_dim_scale=*/2,
+        /*attn_mask_type=*/AttentionMaskType::CAUSAL,
+        /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
+        /*extra_eos_token_ids=*/{});
 
     constexpr int seq_len = 3;
 
@@ -812,15 +682,14 @@ TEST_F(ChatGLMTest, GLM3Model) {
 TEST_F(ChatGLMTest, Baichuan7BModel) {
     fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/baichuan7b_model.data";
 
-    ModelConfig config;
-    config.hidden_size = 32;
-    config.num_attention_heads = 8;
-    config.num_kv_heads = config.num_attention_heads;
-    config.intermediate_size = config.hidden_size * 3;
-    config.num_hidden_layers = 1;
-    config.vocab_size = 5;
-    config.max_length = 8;
-    config.norm_eps = 1e-6;
+    ModelConfig config(
+        ModelType::BAICHUAN7B, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
+        /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/32 * 3, /*norm_eps=*/1e-6f,
+        /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/false, /*use_dense_bias=*/false,
+        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::NEOX, /*rope_dim_scale=*/1,
+        /*attn_mask_type=*/AttentionMaskType::CAUSAL,
+        /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
+        /*extra_eos_token_ids=*/{});
 
     constexpr int seq_len = 3;
 
@@ -842,15 +711,14 @@ TEST_F(ChatGLMTest, Baichuan7BModel) {
 TEST_F(ChatGLMTest, Baichuan13BModel) {
     fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/baichuan13b_model.data";
 
-    ModelConfig config;
-    config.hidden_size = 32;
-    config.num_attention_heads = 8;
-    config.num_kv_heads = config.num_attention_heads;
-    config.intermediate_size = config.hidden_size * 3;
-    config.num_hidden_layers = 1;
-    config.vocab_size = 5;
-    config.max_length = 8;
-    config.norm_eps = 1e-6;
+    ModelConfig config(
+        ModelType::BAICHUAN13B, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
+        /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/32 * 3, /*norm_eps=*/1e-6f,
+        /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/false, /*use_dense_bias=*/false,
+        /*interleaved_qkv=*/false, /*use_alibi=*/true, /*rope_type=*/RopeType::DISABLED, /*rope_dim_scale=*/-1,
+        /*attn_mask_type=*/AttentionMaskType::CAUSAL,
+        /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
+        /*extra_eos_token_ids=*/{});
 
     constexpr int seq_len = 3;
 
@@ -872,19 +740,18 @@ TEST_F(ChatGLMTest, Baichuan13BModel) {
 TEST_F(ChatGLMTest, InternLMModel) {
     fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/internlm_model.data";
 
-    ModelConfig config;
-    config.hidden_size = 32;
-    config.num_attention_heads = 8;
-    config.num_kv_heads = config.num_attention_heads;
-    config.intermediate_size = config.hidden_size * 3;
-    config.num_hidden_layers = 1;
-    config.vocab_size = 5;
-    config.max_length = 8;
-    config.norm_eps = 1e-6;
+    ModelConfig config(
+        ModelType::INTERNLM, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
+        /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/32 * 3, /*norm_eps=*/1e-6f,
+        /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/true,
+        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::NEOX, /*rope_dim_scale=*/1,
+        /*attn_mask_type=*/AttentionMaskType::CAUSAL,
+        /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
+        /*extra_eos_token_ids=*/{});
 
     constexpr int seq_len = 3;
 
-    InternLM7BModel model(&ctx, config);
+    InternLMModel model(&ctx, config);
 
     std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
                                            model.layers[0].input_layernorm.weight,
@@ -1511,7 +1378,7 @@ TEST(Pipeline, InternLM) {
         GTEST_SKIP() << "Skipping InternLM e2e test (ggml model not found)";
     }
     Pipeline pipeline(model_path.string());
-    EXPECT_TRUE(dynamic_cast<InternLM7BForCausalLM *>(pipeline.model.get()));
+    EXPECT_TRUE(dynamic_cast<InternLMForCausalLM *>(pipeline.model.get()));
 
     // tokenizer
     {
