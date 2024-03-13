@@ -274,7 +274,7 @@ cmake -B build -DGGML_CUBLAS=ON -DCUDA_ARCHITECTURES="80"       # for A100
 cmake -B build -DGGML_CUBLAS=ON -DCUDA_ARCHITECTURES="70;75"    # compatible with both V100 and T4
 ```
 
-To find out the CUDA architecture of your GPU device, see [Matching CUDA arch and CUDA gencode for various NVIDIA architectures](https://arnon.dk/matching-sm-architectures-arch-and-gencode-for-various-nvidia-cards/).
+To find out the CUDA architecture of your GPU device, see [Your GPU Compute Capability](https://developer.nvidia.com/cuda-gpus).
 
 **Metal**
 

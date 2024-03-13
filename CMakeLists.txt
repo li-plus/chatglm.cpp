@@ -25,7 +25,12 @@ add_subdirectory(third_party/sentencepiece)
 
 if (GGML_CUBLAS)
     add_compile_definitions(GGML_USE_CUBLAS)
-    set(CUDA_ARCHITECTURES "52;61;70;75;80;86" CACHE STRING "chatglm: cuda architectures to compile")
+    enable_language(CUDA)
+    if (CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL "11.8")
+        set(CUDA_ARCHITECTURES "52;61;70;75;80;86;90" CACHE STRING "chatglm: cuda architectures to compile")
+    else ()
+        set(CUDA_ARCHITECTURES "52;61;70;75;80;86" CACHE STRING "chatglm: cuda architectures to compile")
+    endif ()
     set_property(TARGET ggml PROPERTY CUDA_ARCHITECTURES ${CUDA_ARCHITECTURES})
 endif ()
 
