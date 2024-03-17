@@ -22,11 +22,22 @@ static inline void expect_all_close(ggml_tensor *a, ggml_tensor *b, float atol =
     ASSERT_EQ(a->type, GGML_TYPE_F32);
     ASSERT_EQ(ggml_nelements(a), ggml_nelements(b));
     int64_t numel = ggml_nelements(a);
+    float max_abs_diff = 0.f;
+    int64_t num_mismatch = 0;
     for (int64_t i = 0; i < numel; i++) {
         float ai = ((float *)a->data)[i];
         float bi = ((float *)b->data)[i];
-        EXPECT_LT(std::abs(ai - bi), atol + rtol * std::abs(bi)) << "diff " << ai << " vs " << bi;
+        float abs_diff = std::abs(ai - bi);
+        max_abs_diff = std::max(max_abs_diff, abs_diff);
+        if (abs_diff >= atol + rtol * std::abs(bi)) {
+            num_mismatch++;
+        }
     }
+    EXPECT_EQ(num_mismatch, 0) << "Tensors are not close!\n\n"
+                               << "Mismatched elements: " << num_mismatch << " / " << numel << " ("
+                               << num_mismatch * 100 / numel << "%)\n"
+                               << "Greatest absolute difference: " << max_abs_diff << " (up to " << std::scientific
+                               << atol << " allowed)\n";
 }
 
 static inline char *read_tensor_data(char *ptr, ggml_tensor *tensor) {
@@ -284,9 +295,6 @@ class ChatGLMTest : public ::testing::Test {
         MappedFile mapped_file(data_path.string());
         char *ptr = mapped_file.data;
 
-        tensor_to_device(model.layers[0].attention.k_cache);
-        tensor_to_device(model.layers[0].attention.v_cache);
-
         ggml_tensor *x1 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, seq_len);
         ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size, seq_len);
         ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
@@ -299,6 +307,41 @@ class ChatGLMTest : public ::testing::Test {
 
         std::vector<ggml_tensor *> cpu_tensors{model.word_embeddings.weight, x1, x2, x3};
 
+        if (config.num_virtual_tokens > 0) {
+            reset_cgraph();
+            const int head_size = config.hidden_size / config.num_attention_heads;
+            ggml_tensor *past_key_values =
+                ggml_new_tensor_4d(ctx.ctx_b.get(), GGML_TYPE_F32, head_size, config.num_kv_heads,
+                                   config.num_hidden_layers * 2, config.num_virtual_tokens); // [v, l * 2, #h, d]
+            ptr = read_tensor_data(ptr, past_key_values);
+            for (size_t i = 0; i < model.layers.size(); i++) {
+                auto &attn = model.layers[i].attention;
+                ggml_tensor *virtual_key = ggml_view_3d(
+                    ctx.ctx_b.get(), past_key_values, head_size, config.num_kv_heads, config.num_virtual_tokens,
+                    past_key_values->nb[1], past_key_values->nb[3], i * 2 * past_key_values->nb[2]); // [v, #h, d]
+                virtual_key = ggml_permute(ctx.ctx_b.get(), virtual_key, 0, 2, 1, 3);                // [#h, v, d]
+                ggml_tensor *k_cache_view =
+                    ggml_view_3d(ctx.ctx_b.get(), attn.k_cache, head_size, config.num_virtual_tokens,
+                                 config.num_kv_heads, attn.k_cache->nb[1], attn.k_cache->nb[2], 0); // [#h, v, d]
+                ggml_build_forward_expand(
+                    &ctx.gf, ggml_cpy(ctx.ctx_b.get(), (ggml_cont(ctx.ctx_b.get(), virtual_key)), k_cache_view));
+
+                ggml_tensor *virtual_value = ggml_view_3d(
+                    ctx.ctx_b.get(), past_key_values, head_size, config.num_kv_heads, config.num_virtual_tokens,
+                    past_key_values->nb[1], past_key_values->nb[3], (i * 2 + 1) * past_key_values->nb[2]); // [v, #h, d]
+                virtual_value = ggml_permute(ctx.ctx_b.get(), virtual_value, 1, 2, 0, 3);                  // [#h, d, v]
+                ggml_tensor *v_cache_view =
+                    ggml_view_3d(ctx.ctx_b.get(), attn.v_cache, config.num_virtual_tokens, head_size,
+                                 config.num_kv_heads, attn.v_cache->nb[1], attn.v_cache->nb[2], 0); // [#h, d, v]
+                ggml_build_forward_expand(
+                    &ctx.gf, ggml_cpy(ctx.ctx_b.get(), (ggml_cont(ctx.ctx_b.get(), virtual_value)), v_cache_view));
+            }
+            device_graph_compute(1);
+        }
+
+        tensor_to_device(model.layers[0].attention.k_cache);
+        tensor_to_device(model.layers[0].attention.v_cache);
+
         for (auto tensor : all_tensors) {
             ptr = read_tensor_data(ptr, tensor);
             if (std::find(cpu_tensors.begin(), cpu_tensors.end(), tensor) == cpu_tensors.end()) {
@@ -310,6 +353,7 @@ class ChatGLMTest : public ::testing::Test {
 
         // self attention
         {
+            reset_cgraph();
             ggml_tensor *out_y1 = model.forward(&ctx, x1, 0, seq_len);
             EXPECT_EQ(out_y1->backend, ref_y1->backend);
             out_y1->backend = GGML_BACKEND_CPU;
@@ -320,8 +364,8 @@ class ChatGLMTest : public ::testing::Test {
         }
 
         // cross attention
-        reset_cgraph();
         {
+            reset_cgraph();
             ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len, seq_len);
             EXPECT_EQ(out_y2->backend, ref_y2->backend);
             out_y2->backend = GGML_BACKEND_CPU;
@@ -330,8 +374,8 @@ class ChatGLMTest : public ::testing::Test {
 
             expect_all_close(ref_y2, out_y2, 5e-4);
         }
-        reset_cgraph();
         {
+            reset_cgraph();
             ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1, seq_len);
             EXPECT_EQ(out_y3->backend, ref_y3->backend);
             out_y3->backend = GGML_BACKEND_CPU;
@@ -586,7 +630,42 @@ TEST_F(ChatGLMTest, GLMModel) {
         /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/128, /*norm_eps=*/1e-5f,
         /*hidden_act=*/ActivationType::GELU, /*use_qkv_bias=*/true, /*use_dense_bias=*/true,
         /*interleaved_qkv=*/true, /*use_alibi=*/false, /*rope_type=*/RopeType::CHATGLM, /*rope_dim_scale=*/-1,
-        /*attn_mask_type=*/AttentionMaskType::CHATGLM,
+        /*attn_mask_type=*/AttentionMaskType::CHATGLM, /*num_virtual_tokens=*/0,
+        /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
+        /*extra_eos_token_ids=*/{});
+
+    constexpr int seq_len = 3;
+
+    ChatGLMModel model(&ctx, config);
+
+    std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
+                                           model.layers[0].input_layernorm.weight,
+                                           model.layers[0].input_layernorm.bias,
+                                           model.layers[0].attention.query_key_value.weight,
+                                           model.layers[0].attention.query_key_value.bias,
+                                           model.layers[0].attention.dense.weight,
+                                           model.layers[0].attention.dense.bias,
+                                           model.layers[0].post_attention_layernorm.weight,
+                                           model.layers[0].post_attention_layernorm.bias,
+                                           model.layers[0].mlp.dense_h_to_4h.weight,
+                                           model.layers[0].mlp.dense_h_to_4h.bias,
+                                           model.layers[0].mlp.dense_4h_to_h.weight,
+                                           model.layers[0].mlp.dense_4h_to_h.bias,
+                                           model.final_layernorm.weight,
+                                           model.final_layernorm.bias};
+
+    test_model(model, config, data_path, seq_len, all_weights);
+}
+
+TEST_F(ChatGLMTest, GLMPTuningV2Model) {
+    fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/glm_ptuning_v2_model.data";
+
+    ModelConfig config(
+        ModelType::CHATGLM, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
+        /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/128, /*norm_eps=*/1e-5f,
+        /*hidden_act=*/ActivationType::GELU, /*use_qkv_bias=*/true, /*use_dense_bias=*/true,
+        /*interleaved_qkv=*/true, /*use_alibi=*/false, /*rope_type=*/RopeType::CHATGLM, /*rope_dim_scale=*/-1,
+        /*attn_mask_type=*/AttentionMaskType::CHATGLM, /*num_virtual_tokens=*/5,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
 
@@ -621,16 +700,13 @@ TEST_F(ChatGLMTest, GLM2Model) {
         /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
         /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/false,
         /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_dim_scale=*/2,
-        /*attn_mask_type=*/AttentionMaskType::CAUSAL,
+        /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
 
     constexpr int seq_len = 3;
 
     ChatGLM2Model model(&ctx, config);
-
-    tensor_to_device(model.layers[0].attention.k_cache);
-    tensor_to_device(model.layers[0].attention.v_cache);
 
     std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
                                            model.layers[0].input_layernorm.weight,
@@ -654,7 +730,7 @@ TEST_F(ChatGLMTest, GLM3Model) {
         /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
         /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/false,
         /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_dim_scale=*/2,
-        /*attn_mask_type=*/AttentionMaskType::CAUSAL,
+        /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
 
@@ -662,8 +738,35 @@ TEST_F(ChatGLMTest, GLM3Model) {
 
     ChatGLM3Model model(&ctx, config);
 
-    tensor_to_device(model.layers[0].attention.k_cache);
-    tensor_to_device(model.layers[0].attention.v_cache);
+    std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
+                                           model.layers[0].input_layernorm.weight,
+                                           model.layers[0].attention.query_key_value.weight,
+                                           model.layers[0].attention.query_key_value.bias,
+                                           model.layers[0].attention.dense.weight,
+                                           model.layers[0].post_attention_layernorm.weight,
+                                           model.layers[0].mlp.gate_proj.weight,
+                                           model.layers[0].mlp.up_proj.weight,
+                                           model.layers[0].mlp.down_proj.weight,
+                                           model.final_layernorm.weight};
+
+    test_model(model, config, data_path, seq_len, all_weights);
+}
+
+TEST_F(ChatGLMTest, GLM3PTuningV2Model) {
+    fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/glm3_ptuning_v2_model.data";
+
+    ModelConfig config(
+        ModelType::CHATGLM3, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
+        /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
+        /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/false,
+        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_dim_scale=*/2,
+        /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/5,
+        /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
+        /*extra_eos_token_ids=*/{});
+
+    constexpr int seq_len = 3;
+
+    ChatGLM3Model model(&ctx, config);
 
     std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
                                            model.layers[0].input_layernorm.weight,
@@ -687,7 +790,7 @@ TEST_F(ChatGLMTest, Baichuan7BModel) {
         /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/32 * 3, /*norm_eps=*/1e-6f,
         /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/false, /*use_dense_bias=*/false,
         /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::NEOX, /*rope_dim_scale=*/1,
-        /*attn_mask_type=*/AttentionMaskType::CAUSAL,
+        /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
 
@@ -716,7 +819,7 @@ TEST_F(ChatGLMTest, Baichuan13BModel) {
         /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/32 * 3, /*norm_eps=*/1e-6f,
         /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/false, /*use_dense_bias=*/false,
         /*interleaved_qkv=*/false, /*use_alibi=*/true, /*rope_type=*/RopeType::DISABLED, /*rope_dim_scale=*/-1,
-        /*attn_mask_type=*/AttentionMaskType::CAUSAL,
+        /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
 
@@ -745,7 +848,7 @@ TEST_F(ChatGLMTest, InternLMModel) {
         /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/32 * 3, /*norm_eps=*/1e-6f,
         /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/true,
         /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::NEOX, /*rope_dim_scale=*/1,
-        /*attn_mask_type=*/AttentionMaskType::CAUSAL,
+        /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
 

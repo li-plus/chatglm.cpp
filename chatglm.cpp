@@ -171,7 +171,7 @@ void ggml_graph_compute_helper(std::vector<uninitialized_char> &buf, ggml_cgraph
 
 // for debugging purpose
 [[maybe_unused]] static inline ggml_tensor *add_zero(ggml_context *ctx, ggml_tensor *tensor) {
-    ggml_tensor *zeros = ggml_new_tensor(ctx, tensor->type, tensor->n_dims, tensor->ne);
+    ggml_tensor *zeros = ggml_new_tensor(ctx, GGML_TYPE_F32, tensor->n_dims, tensor->ne);
     ggml_set_f32(zeros, 0);
     tensor_to_device(zeros);
     ggml_tensor *out = tensor_assign_buffers(ggml_add(ctx, tensor, zeros));
@@ -452,15 +452,12 @@ ggml_tensor *RMSNorm::forward(ModelContext *ctx, ggml_tensor *input) const {
 static ggml_tensor *apply_activation_inplace(ggml_context *ctx, ggml_tensor *hidden_states, ActivationType hidden_act) {
     switch (hidden_act) {
     case ActivationType::GELU:
-        hidden_states = tensor_assign_buffers(ggml_gelu_inplace(ctx, hidden_states));
-        break;
+        return tensor_assign_buffers(ggml_gelu_inplace(ctx, hidden_states));
     case ActivationType::SILU:
-        hidden_states = tensor_assign_buffers(ggml_silu_inplace(ctx, hidden_states));
-        break;
+        return tensor_assign_buffers(ggml_silu_inplace(ctx, hidden_states));
     default:
         CHATGLM_THROW << "Unknown activation type " << (int)hidden_act;
     }
-    return hidden_states;
 }
 
 ggml_tensor *BasicMLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) const {
@@ -516,8 +513,8 @@ std::string to_string(ModelType model_type) {
 
 static ggml_tensor *apply_rotary_emb_basic(ModelContext *ctx, ggml_tensor *layer, ggml_tensor *position_ids, int n_ctx,
                                            RopeType rope_type, int dim_scale) {
-    // tensor a (activation) is of shape [qlen, heads, head_size]
-    // tensor b (position_ids) is of shape [qlen]
+    // tensor a (activation) is of shape [s, #h, d]
+    // tensor b (position_ids) is of shape [s]
     ggml_context *gctx = ctx->ctx_b.get();
 #ifdef GGML_USE_CUBLAS
     if (!ggml_is_contiguous(layer)) {
@@ -527,13 +524,13 @@ static ggml_tensor *apply_rotary_emb_basic(ModelContext *ctx, ggml_tensor *layer
     const int head_size = layer->ne[0];
     const int rope_dim = head_size / dim_scale;
     layer = tensor_assign_buffers(
-        ggml_rope_inplace(gctx, layer, position_ids, rope_dim, (int)rope_type, n_ctx)); // [qlen, heads, head_size]
+        ggml_rope_inplace(gctx, layer, position_ids, rope_dim, (int)rope_type, n_ctx)); // [s, #h, d]
     return layer;
 }
 
 static ggml_tensor *apply_rotary_emb_glm(ModelContext *ctx, ggml_tensor *layer, ggml_tensor *position_ids, int n_ctx) {
-    // tensor a (activation) is of shape [qlen, heads, head_size]
-    // tensor b (position_ids) is of shape [2 * qlen]
+    // tensor a (activation) is of shape [s, #h, d]
+    // tensor b (position_ids) is of shape [2 * s]
     ggml_context *gctx = ctx->ctx_b.get();
 
     const int head_size = layer->ne[0];
@@ -556,9 +553,9 @@ static ggml_tensor *apply_rotary_emb_glm(ModelContext *ctx, ggml_tensor *layer, 
 #endif
 
     a1_rope = tensor_assign_buffers(
-        ggml_rope_inplace(gctx, a1_rope, b1, rope_dim, (int)RopeType::NEOX, n_ctx)); // [qlen, heads, head_size/2]
+        ggml_rope_inplace(gctx, a1_rope, b1, rope_dim, (int)RopeType::NEOX, n_ctx)); // [s, #h, d/2]
     a2_rope = tensor_assign_buffers(
-        ggml_rope_inplace(gctx, a2_rope, b2, rope_dim, (int)RopeType::NEOX, n_ctx)); // [qlen, heads, head_size/2]
+        ggml_rope_inplace(gctx, a2_rope, b2, rope_dim, (int)RopeType::NEOX, n_ctx)); // [s, #h, d/2]
 
 #ifdef GGML_USE_CUBLAS
     a1_rope = ggml_cpy(gctx, a1_rope, a1);
@@ -575,17 +572,14 @@ static ggml_tensor *apply_rotary_emb(ModelContext *ctx, ggml_tensor *layer, ggml
     switch (rope_type) {
     case RopeType::GPTJ:
     case RopeType::NEOX:
-        layer = apply_rotary_emb_basic(ctx, layer, position_ids, n_ctx, rope_type, dim_scale);
-        break;
+        return apply_rotary_emb_basic(ctx, layer, position_ids, n_ctx, rope_type, dim_scale);
     case RopeType::CHATGLM:
-        layer = apply_rotary_emb_glm(ctx, layer, position_ids, n_ctx);
-        break;
+        return apply_rotary_emb_glm(ctx, layer, position_ids, n_ctx);
     case RopeType::DISABLED:
-        break;
+        return layer;
     default:
         CHATGLM_THROW << "Unknown rope type " << (int)rope_type;
     }
-    return layer;
 }
 
 static inline ggml_tensor *apply_attention_mask_causal(ModelContext *ctx, ggml_tensor *attn_scores, int n_past) {
@@ -593,16 +587,18 @@ static inline ggml_tensor *apply_attention_mask_causal(ModelContext *ctx, ggml_t
 }
 
 static ggml_tensor *apply_attention_mask_glm(ModelContext *ctx, ggml_tensor *attn_scores, int n_past) {
-    // attn_scores is of shape [heads, qlen, klen]
+    // attn_scores: [#h, s, kvs]
+    // semantic: attn_scores[:, :-1, -1] = -inf
     ggml_context *gctx = ctx->ctx_b.get();
+    const int kvlen = attn_scores->ne[0];
     const int qlen = attn_scores->ne[1];
     const int num_attention_heads = attn_scores->ne[2];
     ggml_tensor *inf = ggml_new_tensor_3d(gctx, attn_scores->type, 1, qlen - 1, num_attention_heads);
     ggml_set_f32(inf, -INFINITY);
     tensor_to_device(inf); // TODO: optimize
-    ggml_tensor *masked_attn_scores = tensor_assign_buffers(
-        ggml_view_3d(gctx, attn_scores, 1, qlen - 1, num_attention_heads, qlen * ggml_element_size(attn_scores),
-                     qlen * qlen * ggml_element_size(attn_scores), (qlen - 1) * ggml_element_size(attn_scores)));
+    ggml_tensor *masked_attn_scores =
+        tensor_assign_buffers(ggml_view_3d(gctx, attn_scores, 1, qlen - 1, num_attention_heads, attn_scores->nb[1],
+                                           attn_scores->nb[2], (kvlen - 1) * attn_scores->nb[0]));
     ggml_build_forward_expand(&ctx->gf, ggml_cpy(gctx, inf, masked_attn_scores));
     return attn_scores;
 }
@@ -629,12 +625,12 @@ ggml_tensor *BasicAttention::forward(ModelContext *ctx, ggml_tensor *hidden_stat
     const int num_shared_q_heads = num_attention_heads / num_kv_heads;
     const bool is_gqa = num_shared_q_heads > 1;
 
-    ggml_tensor *qkv = query_key_value.forward(ctx, hidden_states); // [qlen, hidden + 2 * kv_hidden]
+    ggml_tensor *qkv = query_key_value.forward(ctx, hidden_states); // [sq, (#h + 2 * #kvh) * d]
 
     // split mixed qkv into separate query, key and value
-    ggml_tensor *query_layer; // [qlen, heads, head_size]
-    ggml_tensor *key_layer;   // [qlen, kv_heads, head_size]
-    ggml_tensor *value_layer; // [qlen, kv_heads, head_size]
+    ggml_tensor *query_layer; // [s, #h, d]
+    ggml_tensor *key_layer;   // [s, #kvh, d]
+    ggml_tensor *value_layer; // [s, #kvh, d]
 
     if (interleaved_qkv) {
         CHATGLM_CHECK(!is_gqa) << "interleaved qkv is not supported for GQA";
@@ -658,39 +654,36 @@ ggml_tensor *BasicAttention::forward(ModelContext *ctx, ggml_tensor *hidden_stat
     query_layer = apply_rotary_emb(ctx, query_layer, position_ids, n_ctx, rope_type, rope_dim_scale);
     key_layer = apply_rotary_emb(ctx, key_layer, position_ids, n_ctx, rope_type, rope_dim_scale);
 
-    query_layer =
-        tensor_assign_buffers(ggml_cont(gctx, ggml_permute(gctx, query_layer, 0, 2, 1, 3))); // [heads, qlen, head_size]
+    query_layer = tensor_assign_buffers(ggml_cont(gctx, ggml_permute(gctx, query_layer, 0, 2, 1, 3))); // [#h, s, d]
     if (num_shared_q_heads > 1) {
-        query_layer =
-            tensor_assign_buffers(ggml_reshape_3d(gctx, query_layer, head_size, num_shared_q_heads * qlen,
-                                                  num_kv_heads)); // [kv_heads, shared_qheads * qlen, head_size]
+        query_layer = tensor_assign_buffers(ggml_reshape_3d(gctx, query_layer, head_size, num_shared_q_heads * qlen,
+                                                            num_kv_heads)); // [#kvh, (#h/#kvh) * s, d]
     }
 
-    key_layer = tensor_assign_buffers(ggml_permute(gctx, key_layer, 0, 2, 1, 3)); // [kv_heads, qlen, head_size]
-
-    value_layer = tensor_assign_buffers(ggml_permute(gctx, value_layer, 1, 2, 0, 3)); // [kv_heads, head_size, qlen]
+    key_layer = tensor_assign_buffers(ggml_permute(gctx, key_layer, 0, 2, 1, 3)); // [#kvh, s, d]
+    value_layer = tensor_assign_buffers(ggml_permute(gctx, value_layer, 1, 2, 0, 3)); // [#kvh, d, s]
 
     // store key & value to cache
     ggml_tensor *k_cache_view = tensor_assign_buffers(
         ggml_view_3d(gctx, k_cache, head_size, qlen, num_kv_heads, k_cache->nb[1], k_cache->nb[2],
-                     n_past * head_size * ggml_element_size(k_cache))); // [kv_heads, qlen, head_size]
+                     (num_virtual_tokens + n_past) * head_size * ggml_element_size(k_cache))); // [#kvh, s, d]
     ggml_build_forward_expand(&ctx->gf, ggml_cpy(gctx, key_layer, k_cache_view));
     ggml_tensor *v_cache_view =
         tensor_assign_buffers(ggml_view_3d(gctx, v_cache, qlen, head_size, num_kv_heads, v_cache->nb[1], v_cache->nb[2],
-                                           n_past * ggml_element_size(v_cache))); // [kv_heads, head_size, qlen]
+                                           (num_virtual_tokens + n_past) * ggml_element_size(v_cache))); // [#kvh, d, s]
     ggml_build_forward_expand(&ctx->gf, ggml_cpy(gctx, value_layer, v_cache_view));
 
     // concat key & value with past kv
-    key_layer = tensor_assign_buffers(ggml_view_3d(gctx, k_cache, head_size, n_past + qlen, num_kv_heads,
-                                                   k_cache->nb[1], k_cache->nb[2],
-                                                   0)); // [kv_heads, klen, head_size]
-    value_layer = tensor_assign_buffers(ggml_view_3d(gctx, v_cache, n_past + qlen, head_size, num_kv_heads,
-                                                     v_cache->nb[1], v_cache->nb[2],
-                                                     0)); // [kv_heads, head_size, klen]
+    key_layer = tensor_assign_buffers(ggml_view_3d(gctx, k_cache, head_size, num_virtual_tokens + n_past + qlen,
+                                                   num_kv_heads, k_cache->nb[1], k_cache->nb[2],
+                                                   0)); // [#kvh, kvs, d]
+    value_layer = tensor_assign_buffers(ggml_view_3d(gctx, v_cache, num_virtual_tokens + n_past + qlen, head_size,
+                                                     num_kv_heads, v_cache->nb[1], v_cache->nb[2],
+                                                     0)); // [#kvh, d, kvs]
 
     // attention
     ggml_tensor *attn_scores =
-        tensor_assign_buffers(ggml_mul_mat(gctx, key_layer, query_layer)); // [kv_heads, shared_qheads * qlen, klen]
+        tensor_assign_buffers(ggml_mul_mat(gctx, key_layer, query_layer)); // [#kvh, (#h/#kvh) * s, kvs]
     attn_scores =
         tensor_assign_buffers(ggml_scale_inplace(gctx, attn_scores, ggml_new_f32(gctx, 1.f / std::sqrt(head_size))));
     if (use_alibi) {
@@ -699,27 +692,27 @@ ggml_tensor *BasicAttention::forward(ModelContext *ctx, ggml_tensor *hidden_stat
     if (n_past == 0) {
         // build attention mask for context input
         if (num_shared_q_heads > 1) {
-            attn_scores = ggml_reshape_3d(gctx, attn_scores, n_past + qlen, qlen,
-                                          num_attention_heads); // [heads, qlen, klen]
+            attn_scores = ggml_reshape_3d(gctx, attn_scores, num_virtual_tokens + n_past + qlen, qlen,
+                                          num_attention_heads); // [#h, s, kvs]
         }
-        attn_scores = apply_attention_mask(ctx, attn_scores, n_past, attn_mask_type);
+        attn_scores = apply_attention_mask(ctx, attn_scores, num_virtual_tokens + n_past, attn_mask_type);
         if (num_shared_q_heads > 1) {
-            attn_scores = ggml_reshape_3d(gctx, attn_scores, n_past + qlen, num_shared_q_heads * qlen,
-                                          num_kv_heads); // [kv_heads, shared_qheads * qlen, klen]
+            attn_scores =
+                ggml_reshape_3d(gctx, attn_scores, num_virtual_tokens + n_past + qlen, num_shared_q_heads * qlen,
+                                num_kv_heads); // [#kvh, (#h/#kvh) * s, kvs]
         }
     }
     ggml_tensor *attn_probs =
-        tensor_assign_buffers(ggml_soft_max_inplace(gctx, attn_scores)); // [kv_heads, shared_qheads * qlen, klen]
+        tensor_assign_buffers(ggml_soft_max_inplace(gctx, attn_scores)); // [#kvh, (#h/#kvh) * s, kvs]
 
-    ggml_tensor *context_layer = tensor_assign_buffers(
-        ggml_mul_mat(gctx, value_layer, attn_probs)); // [kv_heads, shared_qheads * qlen, head_size]
+    ggml_tensor *context_layer =
+        tensor_assign_buffers(ggml_mul_mat(gctx, value_layer, attn_probs)); // [#kvh, (#h/#kvh) * s, d]
     if (num_shared_q_heads > 1) {
         context_layer = ggml_reshape_3d(gctx, context_layer, head_size, qlen,
-                                        num_attention_heads); // [heads, qlen, head_size]
+                                        num_attention_heads); // [#h, s, d]
     }
-    context_layer = tensor_assign_buffers(
-        ggml_cont(gctx, ggml_permute(gctx, context_layer, 0, 2, 1, 3))); // [qlen, heads, head_size]
-    context_layer = tensor_assign_buffers(ggml_reshape_2d(gctx, context_layer, hidden_size, qlen)); // [qlen, hidden]
+    context_layer = tensor_assign_buffers(ggml_cont(gctx, ggml_permute(gctx, context_layer, 0, 2, 1, 3))); // [s, #h, d]
+    context_layer = tensor_assign_buffers(ggml_reshape_2d(gctx, context_layer, hidden_size, qlen)); // [s, #h * d]
 
     ggml_tensor *attn_output = dense.forward(ctx, context_layer);
     return attn_output;
@@ -1726,7 +1719,7 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
 
         // load config
         ModelConfig config(model_type, loader.read_basic<ConfigRecordV1>(), 1e-5f, ActivationType::GELU, true, true,
-                           true, false, RopeType::CHATGLM, -1, AttentionMaskType::CHATGLM);
+                           true, false, RopeType::CHATGLM, -1, AttentionMaskType::CHATGLM, 0);
         _update_config_max_length(config, max_length);
 
         // load tokenizer
@@ -1743,7 +1736,7 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
 
         // load config
         ModelConfig config(model_type, loader.read_basic<ConfigRecordV2>(), 1e-5f, ActivationType::SILU, true, false,
-                           false, false, RopeType::GPTJ, 2, AttentionMaskType::CAUSAL);
+                           false, false, RopeType::GPTJ, 2, AttentionMaskType::CAUSAL, 0);
         _update_config_max_length(config, max_length);
 
         // load tokenizer
@@ -1770,7 +1763,7 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
 
         // load config
         ModelConfig config(model_type, loader.read_basic<ConfigRecordV1>(), 1e-6f, ActivationType::SILU, false, false,
-                           false, false, RopeType::NEOX, 1, AttentionMaskType::CAUSAL);
+                           false, false, RopeType::NEOX, 1, AttentionMaskType::CAUSAL, 0);
         _update_config_max_length(config, max_length);
 
         // load tokenizer
@@ -1789,7 +1782,7 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
 
         // load config
         ModelConfig config(model_type, loader.read_basic<ConfigRecordV1>(), 1e-6f, ActivationType::SILU, false, false,
-                           false, true, RopeType::DISABLED, -1, AttentionMaskType::CAUSAL);
+                           false, true, RopeType::DISABLED, -1, AttentionMaskType::CAUSAL, 0);
         _update_config_max_length(config, max_length);
 
         // load tokenizer
@@ -1811,10 +1804,10 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
         ModelConfig config;
         if (rec.hidden_size == 4096) {
             config = ModelConfig(model_type, rec, 1e-6f, ActivationType::SILU, true, true, false, false, RopeType::NEOX,
-                                 1, AttentionMaskType::CAUSAL);
+                                 1, AttentionMaskType::CAUSAL, 0);
         } else {
             config = ModelConfig(model_type, rec, 1e-6f, ActivationType::SILU, false, false, false, false,
-                                 RopeType::NEOX, 1, AttentionMaskType::CAUSAL);
+                                 RopeType::NEOX, 1, AttentionMaskType::CAUSAL, 0);
         }
         _update_config_max_length(config, max_length);
 
