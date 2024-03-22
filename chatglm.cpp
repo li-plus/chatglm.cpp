@@ -660,7 +660,7 @@ ggml_tensor *BasicAttention::forward(ModelContext *ctx, ggml_tensor *hidden_stat
                                                             num_kv_heads)); // [#kvh, (#h/#kvh) * s, d]
     }
 
-    key_layer = tensor_assign_buffers(ggml_permute(gctx, key_layer, 0, 2, 1, 3)); // [#kvh, s, d]
+    key_layer = tensor_assign_buffers(ggml_permute(gctx, key_layer, 0, 2, 1, 3));     // [#kvh, s, d]
     value_layer = tensor_assign_buffers(ggml_permute(gctx, value_layer, 1, 2, 0, 3)); // [#kvh, d, s]
 
     // store key & value to cache
@@ -1698,7 +1698,7 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
         if (max_length > 0) {
             CHATGLM_CHECK(max_length <= config.max_length)
                 << "Requested max_length (" << max_length << ") exceeds the max possible model sequence length ("
-                << config.max_length;
+                << config.max_length << ")";
             config.max_length = max_length;
         }
     };
@@ -1735,7 +1735,7 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
         CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
 
         // load config
-        ModelConfig config(model_type, loader.read_basic<ConfigRecordV2>(), 1e-5f, ActivationType::SILU, true, false,
+        ModelConfig config(model_type, loader.read_basic<ConfigRecordV1GQA>(), 1e-5f, ActivationType::SILU, true, false,
                            false, false, RopeType::GPTJ, 2, AttentionMaskType::CAUSAL, 0);
         _update_config_max_length(config, max_length);
 

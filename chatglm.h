@@ -76,7 +76,7 @@ struct ConfigRecordV1 {
 };
 
 // For compatibility
-struct ConfigRecordV2 : public ConfigRecordV1 {
+struct ConfigRecordV1GQA : public ConfigRecordV1 {
     int num_kv_heads;
 };
 
@@ -125,7 +125,7 @@ class ModelConfig {
                       attn_mask_type, num_virtual_tokens, rec.max_length, rec.bos_token_id, rec.eos_token_id,
                       rec.pad_token_id, rec.sep_token_id, {}) {}
 
-    ModelConfig(ModelType model_type, const ConfigRecordV2 &rec, float norm_eps, ActivationType hidden_act,
+    ModelConfig(ModelType model_type, const ConfigRecordV1GQA &rec, float norm_eps, ActivationType hidden_act,
                 bool use_qkv_bias, bool use_dense_bias, bool interleaved_qkv, bool use_alibi, RopeType rope_type,
                 int rope_dim_scale, AttentionMaskType attn_mask_type, int num_virtual_tokens)
         : ModelConfig(model_type, rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads, rec.num_kv_heads,
