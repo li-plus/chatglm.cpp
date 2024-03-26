@@ -8,12 +8,14 @@
 #include <iomanip>
 #include <iostream>
 #include <locale>
+#include <nlohmann/json.hpp>
 #include <numeric>
 #include <random>
 #include <regex>
 #include <string>
 #include <sys/stat.h>
 #include <thread>
+#include <unordered_map>
 
 #ifdef __has_include
 #if __has_include(<unistd.h>)
@@ -512,6 +514,15 @@ std::string to_string(ModelType model_type) {
     default:
         CHATGLM_THROW << "unknown model type " << (int)model_type;
     }
+}
+
+ModelType to_model_type(std::string s) {
+    static const std::unordered_map<std::string, ModelType> m{
+        {"CHATGLM", ModelType::CHATGLM},         {"CHATGLM2", ModelType::CHATGLM2},
+        {"CHATGLM3", ModelType::CHATGLM3},       {"BAICHUAN7B", ModelType::BAICHUAN7B},
+        {"BAICHUAN13B", ModelType::BAICHUAN13B}, {"INTERNLM", ModelType::INTERNLM}};
+    std::transform(s.begin(), s.end(), s.begin(), ::toupper);
+    return m.at(s);
 }
 
 static ggml_tensor *apply_rotary_emb_basic(ModelContext *ctx, ggml_tensor *layer, ggml_tensor *position_ids, int n_ctx,
@@ -1701,6 +1712,25 @@ StateDict InternLMForCausalLM::state_dict() const {
 // ===== pipeline =====
 
 Pipeline::Pipeline(const std::string &path, int max_length) {
+    mapped_file = std::make_unique<MappedFile>(path);
+    ModelLoader loader(mapped_file->data, mapped_file->size);
+
+    // load magic
+    std::string magic = loader.read_string(4);
+    CHATGLM_CHECK(magic == "ggml") << "model file is broken (bad magic)";
+
+    int version_or_model_type = loader.read_basic<int>();
+    if (version_or_model_type == 4) {
+        // new model format using json meta
+        load_model_v4(loader, max_length);
+    } else {
+        // v1 model format using preset config
+        ModelType model_type = (ModelType)version_or_model_type;
+        load_model_v1(loader, model_type, max_length);
+    }
+}
+
+void Pipeline::load_model_v1(ModelLoader &loader, ModelType model_type, int max_length) {
     auto _update_config_max_length = [](ModelConfig &config, int max_length) {
         if (max_length > 0) {
             CHATGLM_CHECK(max_length <= config.max_length)
@@ -1710,15 +1740,6 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
         }
     };
 
-    mapped_file = std::make_unique<MappedFile>(path);
-    ModelLoader loader(mapped_file->data, mapped_file->size);
-
-    // load magic
-    std::string magic = loader.read_string(4);
-    CHATGLM_CHECK(magic == "ggml") << "model file is broken (bad magic)";
-
-    // load model type
-    ModelType model_type = (ModelType)loader.read_basic<int>();
     // load version
     int version = loader.read_basic<int>();
     if (model_type == ModelType::CHATGLM) {
@@ -1830,6 +1851,51 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
     } else {
         CHATGLM_THROW << "invalid model type " << (int)model_type;
     }
+}
+
+void Pipeline::load_model_v4(ModelLoader &loader, int max_length) {
+    int config_size = loader.read_basic<int>();
+    std::string raw_config = loader.read_string(config_size);
+    json j_config = json::parse(raw_config);
+    std::cout << j_config.dump() << std::endl;
+
+    int tokenizer_model_size = j_config.at("tokenizer").at("model_size");
+    std::string_view serialized_model_proto(loader.data + loader.tell(), tokenizer_model_size);
+    loader.seek(tokenizer_model_size, SEEK_CUR);
+
+    ModelConfig config(j_config);
+    if (config.model_type == ModelType::CHATGLM) {
+        // TODO: move to template args
+        config.hidden_act = ActivationType::GELU;
+        config.use_qkv_bias = true;
+        config.use_dense_bias = true;
+        config.interleaved_qkv = true;
+        config.use_alibi = false;
+        config.rope_type = RopeType::CHATGLM;
+        config.rope_dim_scale = -1;
+        config.attn_mask_type = AttentionMaskType::CHATGLM;
+
+        // load tokenizer
+        tokenizer = std::make_unique<ChatGLMTokenizer>(serialized_model_proto);
+
+        // load model
+        model = std::make_unique<ChatGLMForCausalLM>(config);
+        model->load(loader);
+    } else if (config.model_type == ModelType::CHATGLM2 || config.model_type == ModelType::CHATGLM3) {
+
+    } else if (config.model_type == ModelType::BAICHUAN7B) {
+
+    } else if (config.model_type == ModelType::BAICHUAN13B) {
+
+    } else if (config.model_type == model_type == ModelType::INTERNLM)  {
+
+    } else {
+        CHATGLM_THROW << "invalid model type " << (int)model_type;
+    }
+    loader.read_string(tokenizer_model_size);
+
+    json j_model_config = j_config.at("model");
+
 }
 
 std::vector<int> Pipeline::generate(const std::vector<int> &input_ids, const GenerationConfig &gen_config,

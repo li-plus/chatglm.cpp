@@ -1,13 +1,12 @@
 """
-Convert Hugging Face ChatGLM family models to GGML format
+Convert Hugging Face ChatGLM/ChatGLM2 models to GGML format
 """
 
 import argparse
-import json
 import platform
 import struct
 import sys
-from enum import Enum, IntEnum
+from enum import Enum
 from pathlib import Path
 from typing import BinaryIO, Optional
 
@@ -30,7 +29,7 @@ if platform.system() == "Darwin":
     sys.modules["cpm_kernels"] = object()  # type: ignore
 
 
-class GGMLType(IntEnum):
+class GGMLType(Enum):
     F32 = 0
     F16 = 1
     Q4_0 = 2
@@ -128,8 +127,17 @@ def quantize_q5_1(tensor: torch.Tensor) -> torch.Tensor:
     return tensor
 
 
-def quantize_tensor(tensor: torch.Tensor, ggml_type: GGMLType):
+def dump_tensor(f, name: str, tensor: torch.Tensor, ggml_type: GGMLType):
     assert tensor.dtype == torch.float32
+
+    # tensor name
+    f.write(struct.pack("i", len(name.encode())))
+    f.write(name.encode())
+
+    # tensor shape & dtype
+    f.write(struct.pack("i" * (2 + tensor.ndim), tensor.ndim, *tensor.shape, ggml_type.value))
+
+    # tensor data
     if ggml_type == GGMLType.F32:
         tensor = tensor.float()
     elif ggml_type == GGMLType.F16:
@@ -145,50 +153,45 @@ def quantize_tensor(tensor: torch.Tensor, ggml_type: GGMLType):
     elif ggml_type == GGMLType.Q5_1:
         tensor = quantize_q5_1(tensor)
     else:
-        raise NotImplementedError(f"Cannot quantize tensor to dtype {ggml_type}")
-    return tensor
+        raise NotImplementedError(f"Cannot dump tensor of dtype {tensor.dtype}")
 
-
-def dump_tensor(f, tensor: torch.Tensor, ggml_type: GGMLType):
-    tensor = quantize_tensor(tensor, ggml_type)
     # align address
     aligned_pos = (f.tell() + (GGML_MEM_ALIGN - 1)) // GGML_MEM_ALIGN * GGML_MEM_ALIGN
     f.seek(aligned_pos)
     tensor.numpy().tofile(f)
 
 
-def dump_state_dict(f, tensor_meta, state_dict, quantization_bit):
+def dump_state_dict(f, weight_names, state_dict, quantization_bit, ggml_type):
     tensor_info = []
-    for meta in tqdm(tensor_meta, desc="Processing model states"):
-        name = meta["name"]
-        target_dtype = meta["dtype"]
-        target_shape = meta["shape"]
-
+    for name in tqdm(weight_names, desc="Processing model states"):
         tensor = state_dict[name]
         if tensor.ndim == 2:
-            # 2d weight: should quantize it if needed, de-quantize it back to float32 first
+            # 2d weight: should quantize it if needed
+
+            # step 1: de-quantize it back to float32
             if tensor.dtype == torch.int8:
                 assert quantization_bit in [4, 8]
                 scale = state_dict[f"{name}_scale"].float()  # channel-wise scale
 
                 if quantization_bit == 4:
                     # convert int4 weight to int8
-                    low_bits = (tensor << 4) >> 4
-                    high_bits = tensor >> 4
+                    low_bits = ((tensor << 4) & 0xF0) >> 4
+                    high_bits = (tensor & 0xF0) >> 4
                     tensor = torch.stack((high_bits, low_bits), dim=-1).view(tensor.shape[0], -1)
                 tensor = tensor * scale[:, None]
             else:
                 tensor = tensor.float()
+
+            # step 2: quantize it into ggml format
+            tensor_ggml_type = ggml_type
         else:
             # 1d weight: convert it to float32
             assert tensor.ndim == 1
             tensor = tensor.float()
-            assert target_dtype == GGMLType.F32
+            tensor_ggml_type = GGMLType.F32
 
-        assert tensor.shape == target_shape
-
-        dump_tensor(f, tensor, target_dtype)
-        tensor_info.append((name, tensor.shape, target_dtype.name))
+        dump_tensor(f, name, tensor, tensor_ggml_type)
+        tensor_info.append((name, tensor.shape, tensor_ggml_type.name))
 
     print(tabulate(tensor_info, headers=["name", "shape", "dtype"], tablefmt="psql"))
 
@@ -197,64 +200,50 @@ class BaseConverter:
     @classmethod
     def convert(cls, f, model, tokenizer, ggml_type):
         f.write(b"ggml")  # magic
-        f.write(struct.pack("I", 4))  # version 4
-        cls.dump(f, tokenizer, model, ggml_type)
+        f.write(struct.pack("ii", cls.MODEL_TYPE.value, 1))  # model type & version
+        cls.dump_config(f, model.config, ggml_type)
+        cls.dump_tokenizer(f, tokenizer)
+        cls.dump_model(f, model, ggml_type)
 
 
 class ChatGLMConverter(BaseConverter):
-    @classmethod
-    def dump(cls, f, tokenizer, model, ggml_type):
-        config = model.config
+    MODEL_TYPE = ModelType.CHATGLM
+
+    @staticmethod
+    def dump_config(f, config, ggml_type):
         assert config.position_encoding_2d, "unimplemented: position_encoding_2d should be True"
         assert (
             config.inner_hidden_size == 4 * config.hidden_size
         ), "unimplemented: inner_hidden_size should be 4 times hidden_size"
+        config_values = [
+            ggml_type.value,
+            config.vocab_size,
+            config.hidden_size,
+            config.num_attention_heads,
+            config.num_layers,
+            config.inner_hidden_size,
+            config.max_sequence_length,
+            config.bos_token_id if config.bos_token_id is not None else -1,
+            config.eos_token_id if config.eos_token_id is not None else -1,
+            config.pad_token_id if config.pad_token_id is not None else -1,
+            config.sep_token_id if config.sep_token_id is not None else -1,
+        ]
+        f.write(struct.pack("i" * len(config_values), *config_values))
 
+    @staticmethod
+    def dump_tokenizer(f, tokenizer):
+        serialized_model_proto = tokenizer.sp_tokenizer.text_tokenizer.sp.serialized_model_proto()
+        f.write(struct.pack("i", len(serialized_model_proto)))
+        f.write(serialized_model_proto)
+
+    @staticmethod
+    def dump_model(f, model, ggml_type):
         assert torch.allclose(
             model.state_dict()["transformer.word_embeddings.weight"], model.state_dict()["lm_head.weight"]
         ), "unimplemented: lm_head weight must be tied to input embedding"
 
-        tensor_meta = cls.get_tensor_meta(model, ggml_type)
-
-        header_config = dict(
-            tokenizer=dict(
-                type="spm", model_size=len(tokenizer.sp_tokenizer.text_tokenizer.sp.serialized_model_proto())
-            ),
-            model=dict(
-                model_type="chatglm",
-                dtype=ggml_type,
-                vocab_size=config.vocab_size,
-                hidden_size=config.hidden_size,
-                num_attention_heads=config.num_attention_heads,
-                num_kv_heads=config.num_attention_heads,
-                num_hidden_layers=config.num_layers,
-                intermediate_size=config.inner_hidden_size,
-                norm_eps=config.layernorm_epsilon,
-                max_length=config.max_sequence_length,
-                bos_token_id=config.bos_token_id,
-                eos_token_id=config.eos_token_id,
-                pad_token_id=config.pad_token_id,
-            ),
-            tensor_meta=tensor_meta,
-        )
-
-        # write header config
-        header_config_bytes = json.dumps(header_config, separators=(",", ":")).encode()
-        f.write(struct.pack("I", len(header_config_bytes)))
-        f.write(header_config_bytes)
-
-        # write tokenizer model
-        f.write(tokenizer.sp_tokenizer.text_tokenizer.sp.serialized_model_proto())
-
-        # write model weights
-        dump_state_dict(f, tensor_meta, model.state_dict(), config.quantization_bit)
-
-    @staticmethod
-    def get_tensor_meta(model, ggml_type):
-        config = model.config
-
         weight_names = ["transformer.word_embeddings.weight"]
-        for i in range(config.num_layers):
+        for i in range(model.config.num_layers):
             weight_names += [
                 f"transformer.layers.{i}.input_layernorm.weight",
                 f"transformer.layers.{i}.input_layernorm.bias",
@@ -273,21 +262,7 @@ class ChatGLMConverter(BaseConverter):
             "transformer.final_layernorm.weight",
             "transformer.final_layernorm.bias",
         ]
-
-        state_dict = model.state_dict()
-        tensor_meta = []
-        for name in weight_names:
-            weight = state_dict[name]
-            shape = weight.shape
-            if weight.ndim == 2:
-                dtype = ggml_type
-                if config.quantization_bit == 4:
-                    shape[-1] *= 2
-            else:
-                dtype = GGMLType.F32
-            tensor_meta.append(dict(name=name, dtype=dtype, shape=shape))
-
-        return tensor_meta
+        dump_state_dict(f, weight_names, model.state_dict(), model.config.quantization_bit, ggml_type)
 
 
 class ChatGLM2Converter(BaseConverter):
@@ -567,8 +542,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import sys
-
-    sys.argv[1:] = "-i THUDM/chatglm-6b -t q4_0 -o chatglm-ggml.bin".split()
-
     main()

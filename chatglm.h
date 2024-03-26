@@ -3,6 +3,7 @@
 #include <cmath>
 #include <ggml.h>
 #include <iomanip>
+#include <nlohmann/json.hpp>
 #include <sentencepiece_processor.h>
 #include <sstream>
 #include <unordered_map>
@@ -12,6 +13,8 @@
 #endif
 
 namespace chatglm {
+
+using json = nlohmann::json;
 
 // ===== common =====
 
@@ -56,6 +59,8 @@ enum class ModelType {
 };
 
 std::string to_string(ModelType model_type);
+
+ModelType to_model_type(std::string s) ;
 
 // For compatibility
 struct ConfigRecordV1 {
@@ -133,7 +138,24 @@ class ModelConfig {
                       interleaved_qkv, use_alibi, rope_type, rope_dim_scale, attn_mask_type, rec.max_length,
                       rec.bos_token_id, rec.eos_token_id, rec.pad_token_id, rec.sep_token_id, {}) {}
 
-    std::string model_type_name() const { return to_string(model_type); }
+    ModelConfig(const json &j_config){
+      model_type = to_model_type(j_config.at("model_type"));
+      dtype= j_config.at("dtype");
+      vocab_size=              j_config.at("vocab_size");
+      hidden_size=             j_config.at("hidden_size");
+      num_attention_heads =  j_config.at("num_attention_heads");
+      num_kv_heads =  j_config.value(    "num_key_value_heads", num_attention_heads);
+      num_hidden_layers=  j_config.at("num_hidden_layers");
+      intermediate_size=  j_config.at("intermediate_size");
+      norm_eps=  j_config.at("norm_eps");
+
+      max_length = j_config.at("max_length");
+      eos_token_id = j_config.at("eos_token_id");
+    }
+
+    std::string model_type_name() const {
+        return to_string(model_type);
+    }
 
   public:
     ModelType model_type;
@@ -145,6 +167,7 @@ class ModelConfig {
     int num_hidden_layers;
     int intermediate_size;
     float norm_eps;
+    // model arch related
     ActivationType hidden_act;
     bool use_qkv_bias;
     bool use_dense_bias;
@@ -687,6 +710,9 @@ class BaseModelForCausalLM {
     virtual ~BaseModelForCausalLM() = default;
 
     virtual void load(ModelLoader &loader) = 0;
+
+    virtual void load_v4(ModelLoader& loader, ) = 0;
+
     virtual ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx,
                                  bool is_decoding) const = 0;
 
@@ -1075,6 +1101,11 @@ class Pipeline {
 
     ChatMessage chat(const std::vector<ChatMessage> &messages, const GenerationConfig &gen_config,
                      BaseStreamer *streamer = nullptr) const;
+
+  private:
+    void load_model_v1(ModelLoader &loader, ModelType model_type, int max_length);
+
+    void load_model_v4(ModelLoader &loader, int max_length);
 
   public:
     std::unique_ptr<BaseTokenizer> tokenizer;

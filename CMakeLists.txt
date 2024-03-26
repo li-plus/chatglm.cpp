@@ -23,6 +23,9 @@ set(SPM_ENABLE_TCMALLOC OFF CACHE BOOL "chatglm: disable tcmalloc by default")
 include_directories(third_party/sentencepiece/src)
 add_subdirectory(third_party/sentencepiece)
 
+set(JSON_Install OFF CACHE INTERNAL "")
+add_subdirectory(third_party/json)
+
 if (GGML_CUBLAS)
     add_compile_definitions(GGML_USE_CUBLAS)
     enable_language(CUDA)
@@ -59,7 +62,7 @@ file(GLOB CPP_SOURCES
 set_source_files_properties(${CPP_SOURCES} PROPERTIES COMPILE_FLAGS "-pedantic-errors")
 
 add_library(chatglm STATIC chatglm.cpp)
-target_link_libraries(chatglm PUBLIC ggml sentencepiece-static)
+target_link_libraries(chatglm PUBLIC ggml sentencepiece-static nlohmann_json::nlohmann_json)
 
 # c++ examples
 option(CHATGLM_ENABLE_EXAMPLES "chatglm: enable c++ examples" ON)
