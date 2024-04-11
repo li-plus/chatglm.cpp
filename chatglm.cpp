@@ -512,7 +512,7 @@ std::string to_string(ModelType model_type) {
 }
 
 static ggml_tensor *apply_rotary_emb_basic(ModelContext *ctx, ggml_tensor *layer, ggml_tensor *position_ids, int n_ctx,
-                                           RopeType rope_type, int dim_scale) {
+                                           RopeType rope_type, float rope_theta, int dim_scale) {
     // tensor a (activation) is of shape [s, #h, d]
     // tensor b (position_ids) is of shape [s]
     ggml_context *gctx = ctx->ctx_b.get();
@@ -523,8 +523,8 @@ static ggml_tensor *apply_rotary_emb_basic(ModelContext *ctx, ggml_tensor *layer
 #endif
     const int head_size = layer->ne[0];
     const int rope_dim = head_size / dim_scale;
-    layer = tensor_assign_buffers(
-        ggml_rope_inplace(gctx, layer, position_ids, rope_dim, (int)rope_type, n_ctx)); // [s, #h, d]
+    layer = tensor_assign_buffers(ggml_rope_custom_inplace(gctx, layer, position_ids, rope_dim, (int)rope_type, n_ctx,
+                                                           rope_theta, 1.f)); // [s, #h, d]
     return layer;
 }
 
@@ -595,11 +595,11 @@ static ggml_tensor *apply_rotary_emb_glm(ModelContext *ctx, ggml_tensor *layer, 
 }
 
 static ggml_tensor *apply_rotary_emb(ModelContext *ctx, ggml_tensor *layer, ggml_tensor *position_ids, int n_ctx,
-                                     RopeType rope_type, int dim_scale) {
+                                     RopeType rope_type, float rope_theta, int dim_scale) {
     switch (rope_type) {
     case RopeType::GPTJ:
     case RopeType::NEOX:
-        return apply_rotary_emb_basic(ctx, layer, position_ids, n_ctx, rope_type, dim_scale);
+        return apply_rotary_emb_basic(ctx, layer, position_ids, n_ctx, rope_type, rope_theta, dim_scale);
     case RopeType::CHATGLM:
         return apply_rotary_emb_glm(ctx, layer, position_ids, n_ctx);
     // case RopeType::CHATGLM2:
@@ -680,8 +680,8 @@ ggml_tensor *BasicAttention::forward(ModelContext *ctx, ggml_tensor *hidden_stat
                                    qkv->nb[1], (hidden_size + head_size * num_kv_heads) * ggml_element_size(qkv));
     }
 
-    query_layer = apply_rotary_emb(ctx, query_layer, position_ids, n_ctx, rope_type, rope_dim_scale);
-    key_layer = apply_rotary_emb(ctx, key_layer, position_ids, n_ctx, rope_type, rope_dim_scale);
+    query_layer = apply_rotary_emb(ctx, query_layer, position_ids, n_ctx, rope_type, rope_theta, rope_dim_scale);
+    key_layer = apply_rotary_emb(ctx, key_layer, position_ids, n_ctx, rope_type, rope_theta, rope_dim_scale);
 
     query_layer = tensor_assign_buffers(ggml_cont(gctx, ggml_permute(gctx, query_layer, 0, 2, 1, 3))); // [#h, s, d]
     if (num_shared_q_heads > 1) {
@@ -1763,7 +1763,7 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
         ModelConfig config;
         if (version == 1) {
             config = ModelConfig(model_type, loader.read_basic<ConfigRecordV1>(), 1e-5f, ActivationType::GELU, true,
-                                 true, true, false, RopeType::CHATGLM, -1, AttentionMaskType::CHATGLM, 0);
+                                 true, true, false, RopeType::CHATGLM, 10000.f, -1, AttentionMaskType::CHATGLM, 0);
         } else if (version == 2) {
             config = ModelConfig(model_type, loader.read_basic<ConfigRecordV2>(), ActivationType::GELU, true, true,
                                  true, false, RopeType::CHATGLM, -1, AttentionMaskType::CHATGLM);
@@ -1786,7 +1786,7 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
         ModelConfig config;
         if (version == 1) {
             config = ModelConfig(model_type, loader.read_basic<ConfigRecordV1GQA>(), 1e-5f, ActivationType::SILU, true,
-                                 false, false, false, RopeType::GPTJ, 2, AttentionMaskType::CAUSAL, 0);
+                                 false, false, false, RopeType::GPTJ, 10000.f, 2, AttentionMaskType::CAUSAL, 0);
         } else if (version == 2) {
             config = ModelConfig(model_type, loader.read_basic<ConfigRecordV2>(), ActivationType::SILU, true, false,
                                  false, false, RopeType::GPTJ, 2, AttentionMaskType::CAUSAL);
@@ -1819,7 +1819,7 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
 
         // load config
         ModelConfig config(model_type, loader.read_basic<ConfigRecordV1>(), 1e-6f, ActivationType::SILU, false, false,
-                           false, false, RopeType::NEOX, 1, AttentionMaskType::CAUSAL, 0);
+                           false, false, RopeType::NEOX, 10000.f, 1, AttentionMaskType::CAUSAL, 0);
         _update_config_max_length(config, max_length);
 
         // load tokenizer
@@ -1838,7 +1838,7 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
 
         // load config
         ModelConfig config(model_type, loader.read_basic<ConfigRecordV1>(), 1e-6f, ActivationType::SILU, false, false,
-                           false, true, RopeType::DISABLED, -1, AttentionMaskType::CAUSAL, 0);
+                           false, true, RopeType::DISABLED, 10000.f, -1, AttentionMaskType::CAUSAL, 0);
         _update_config_max_length(config, max_length);
 
         // load tokenizer
@@ -1860,10 +1860,10 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
         ModelConfig config;
         if (rec.hidden_size == 4096) {
             config = ModelConfig(model_type, rec, 1e-6f, ActivationType::SILU, true, true, false, false, RopeType::NEOX,
-                                 1, AttentionMaskType::CAUSAL, 0);
+                                 10000.f, 1, AttentionMaskType::CAUSAL, 0);
         } else {
             config = ModelConfig(model_type, rec, 1e-6f, ActivationType::SILU, false, false, false, false,
-                                 RopeType::NEOX, 1, AttentionMaskType::CAUSAL, 0);
+                                 RopeType::NEOX, 10000.f, 1, AttentionMaskType::CAUSAL, 0);
         }
         _update_config_max_length(config, max_length);
 

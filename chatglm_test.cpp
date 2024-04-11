@@ -606,7 +606,8 @@ TEST_F(ChatGLMTest, GLMModel) {
         ModelType::CHATGLM, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
         /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/128, /*norm_eps=*/1e-5f,
         /*hidden_act=*/ActivationType::GELU, /*use_qkv_bias=*/true, /*use_dense_bias=*/true,
-        /*interleaved_qkv=*/true, /*use_alibi=*/false, /*rope_type=*/RopeType::CHATGLM, /*rope_dim_scale=*/-1,
+        /*interleaved_qkv=*/true, /*use_alibi=*/false, /*rope_type=*/RopeType::CHATGLM, /*rope_theta=*/10000.f,
+        /*rope_dim_scale=*/-1,
         /*attn_mask_type=*/AttentionMaskType::CHATGLM, /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
@@ -641,7 +642,8 @@ TEST_F(ChatGLMTest, GLMPTuningV2Model) {
         ModelType::CHATGLM, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
         /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/128, /*norm_eps=*/1e-5f,
         /*hidden_act=*/ActivationType::GELU, /*use_qkv_bias=*/true, /*use_dense_bias=*/true,
-        /*interleaved_qkv=*/true, /*use_alibi=*/false, /*rope_type=*/RopeType::CHATGLM, /*rope_dim_scale=*/-1,
+        /*interleaved_qkv=*/true, /*use_alibi=*/false, /*rope_type=*/RopeType::CHATGLM, /*rope_theta=*/10000.f,
+        /*rope_dim_scale=*/-1,
         /*attn_mask_type=*/AttentionMaskType::CHATGLM, /*num_virtual_tokens=*/5,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
@@ -676,7 +678,8 @@ TEST_F(ChatGLMTest, GLM2Model) {
         ModelType::CHATGLM2, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
         /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
         /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/false,
-        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_dim_scale=*/2,
+        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_theta=*/10000.f,
+        /*rope_dim_scale=*/2,
         /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
@@ -706,7 +709,8 @@ TEST_F(ChatGLMTest, GLM3Model) {
         ModelType::CHATGLM3, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
         /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
         /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/false,
-        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_dim_scale=*/2,
+        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_theta=*/10000.f,
+        /*rope_dim_scale=*/2,
         /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
@@ -736,7 +740,8 @@ TEST_F(ChatGLMTest, GLM3PTuningV2Model) {
         ModelType::CHATGLM3, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
         /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
         /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/false,
-        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_dim_scale=*/2,
+        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_theta=*/10000.f,
+        /*rope_dim_scale=*/2,
         /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/5,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
@@ -766,7 +771,8 @@ TEST_F(ChatGLMTest, Baichuan7BModel) {
         ModelType::BAICHUAN7B, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
         /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/32 * 3, /*norm_eps=*/1e-6f,
         /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/false, /*use_dense_bias=*/false,
-        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::NEOX, /*rope_dim_scale=*/1,
+        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::NEOX, /*rope_theta=*/10000.f,
+        /*rope_dim_scale=*/1,
         /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
@@ -795,7 +801,8 @@ TEST_F(ChatGLMTest, Baichuan13BModel) {
         ModelType::BAICHUAN13B, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
         /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/32 * 3, /*norm_eps=*/1e-6f,
         /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/false, /*use_dense_bias=*/false,
-        /*interleaved_qkv=*/false, /*use_alibi=*/true, /*rope_type=*/RopeType::DISABLED, /*rope_dim_scale=*/-1,
+        /*interleaved_qkv=*/false, /*use_alibi=*/true, /*rope_type=*/RopeType::DISABLED, /*rope_theta=*/10000.f,
+        /*rope_dim_scale=*/-1,
         /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
@@ -824,7 +831,8 @@ TEST_F(ChatGLMTest, InternLMModel) {
         ModelType::INTERNLM, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
         /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/32 * 3, /*norm_eps=*/1e-6f,
         /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/true,
-        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::NEOX, /*rope_dim_scale=*/1,
+        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::NEOX, /*rope_theta=*/10000.f,
+        /*rope_dim_scale=*/1,
         /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});

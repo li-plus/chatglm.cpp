@@ -123,42 +123,44 @@ class ModelConfig {
     ModelConfig(ModelType model_type, ggml_type dtype, int vocab_size, int hidden_size, int num_attention_heads,
                 int num_kv_heads, int num_hidden_layers, int intermediate_size, float norm_eps,
                 ActivationType hidden_act, bool use_qkv_bias, bool use_dense_bias, bool interleaved_qkv, bool use_alibi,
-                RopeType rope_type, int rope_dim_scale, AttentionMaskType attn_mask_type, int num_virtual_tokens,
-                int max_length, int bos_token_id, int eos_token_id, int pad_token_id, int sep_token_id,
-                std::vector<int> extra_eos_token_ids)
+                RopeType rope_type, float rope_theta, int rope_dim_scale, AttentionMaskType attn_mask_type,
+                int num_virtual_tokens, int max_length, int bos_token_id, int eos_token_id, int pad_token_id,
+                int sep_token_id, std::vector<int> extra_eos_token_ids)
         : model_type(model_type), dtype(dtype), vocab_size(vocab_size), hidden_size(hidden_size),
           num_attention_heads(num_attention_heads), num_kv_heads(num_kv_heads), num_hidden_layers(num_hidden_layers),
           intermediate_size(intermediate_size), norm_eps(norm_eps), hidden_act(hidden_act), use_qkv_bias(use_qkv_bias),
           use_dense_bias(use_dense_bias), interleaved_qkv(interleaved_qkv), use_alibi(use_alibi), rope_type(rope_type),
-          rope_dim_scale(rope_dim_scale), attn_mask_type(attn_mask_type), num_virtual_tokens(num_virtual_tokens),
-          max_length(max_length), bos_token_id(bos_token_id), eos_token_id(eos_token_id), pad_token_id(pad_token_id),
-          sep_token_id(sep_token_id), extra_eos_token_ids(std::move(extra_eos_token_ids)) {}
+          rope_theta(rope_theta), rope_dim_scale(rope_dim_scale), attn_mask_type(attn_mask_type),
+          num_virtual_tokens(num_virtual_tokens), max_length(max_length), bos_token_id(bos_token_id),
+          eos_token_id(eos_token_id), pad_token_id(pad_token_id), sep_token_id(sep_token_id),
+          extra_eos_token_ids(std::move(extra_eos_token_ids)) {}
 
     ModelConfig(ModelType model_type, const ConfigRecordV1 &rec, float norm_eps, ActivationType hidden_act,
                 bool use_qkv_bias, bool use_dense_bias, bool interleaved_qkv, bool use_alibi, RopeType rope_type,
-                int rope_dim_scale, AttentionMaskType attn_mask_type, int num_virtual_tokens)
+                float rope_theta, int rope_dim_scale, AttentionMaskType attn_mask_type, int num_virtual_tokens)
         : ModelConfig(model_type, rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads,
                       rec.num_attention_heads, rec.num_hidden_layers, rec.intermediate_size, norm_eps, hidden_act,
-                      use_qkv_bias, use_dense_bias, interleaved_qkv, use_alibi, rope_type, rope_dim_scale,
+                      use_qkv_bias, use_dense_bias, interleaved_qkv, use_alibi, rope_type, rope_theta, rope_dim_scale,
                       attn_mask_type, num_virtual_tokens, rec.max_length, rec.bos_token_id, rec.eos_token_id,
                       rec.pad_token_id, rec.sep_token_id, {}) {}
 
     ModelConfig(ModelType model_type, const ConfigRecordV1GQA &rec, float norm_eps, ActivationType hidden_act,
                 bool use_qkv_bias, bool use_dense_bias, bool interleaved_qkv, bool use_alibi, RopeType rope_type,
-                int rope_dim_scale, AttentionMaskType attn_mask_type, int num_virtual_tokens)
+                float rope_theta, int rope_dim_scale, AttentionMaskType attn_mask_type, int num_virtual_tokens)
         : ModelConfig(model_type, rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads, rec.num_kv_heads,
                       rec.num_hidden_layers, rec.intermediate_size, norm_eps, hidden_act, use_qkv_bias, use_dense_bias,
-                      interleaved_qkv, use_alibi, rope_type, rope_dim_scale, attn_mask_type, num_virtual_tokens,
-                      rec.max_length, rec.bos_token_id, rec.eos_token_id, rec.pad_token_id, rec.sep_token_id, {}) {}
+                      interleaved_qkv, use_alibi, rope_type, rope_theta, rope_dim_scale, attn_mask_type,
+                      num_virtual_tokens, rec.max_length, rec.bos_token_id, rec.eos_token_id, rec.pad_token_id,
+                      rec.sep_token_id, {}) {}
 
     ModelConfig(ModelType model_type, const ConfigRecordV2 &rec, ActivationType hidden_act, bool use_qkv_bias,
                 bool use_dense_bias, bool interleaved_qkv, bool use_alibi, RopeType rope_type, int rope_dim_scale,
                 AttentionMaskType attn_mask_type)
         : ModelConfig(model_type, rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads,
                       rec.num_key_value_heads, rec.num_hidden_layers, rec.intermediate_size, rec.norm_eps, hidden_act,
-                      use_qkv_bias, use_dense_bias, interleaved_qkv, use_alibi, rope_type, rope_dim_scale,
-                      attn_mask_type, rec.num_virtual_tokens, rec.max_length, -1, rec.eos_token_id, rec.pad_token_id,
-                      -1, {}) {}
+                      use_qkv_bias, use_dense_bias, interleaved_qkv, use_alibi, rope_type, rec.rope_theta,
+                      rope_dim_scale, attn_mask_type, rec.num_virtual_tokens, rec.max_length, -1, rec.eos_token_id,
+                      rec.pad_token_id, -1, {}) {}
 
     std::string model_type_name() const { return to_string(model_type); }
 
@@ -178,6 +180,7 @@ class ModelConfig {
     bool interleaved_qkv;
     bool use_alibi;
     RopeType rope_type;
+    float rope_theta;
     int rope_dim_scale;
     AttentionMaskType attn_mask_type;
     int num_virtual_tokens;
@@ -416,10 +419,10 @@ class BasicAttention {
     BasicAttention() = default;
     BasicAttention(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int max_length,
                    bool use_qkv_bias, bool use_dense_bias, bool interleaved_qkv, bool use_alibi, RopeType rope_type,
-                   int rope_dim_scale, AttentionMaskType attn_mask_type, int num_virtual_tokens)
+                   float rope_theta, int rope_dim_scale, AttentionMaskType attn_mask_type, int num_virtual_tokens)
         : num_attention_heads(num_attention_heads), num_kv_heads(num_kv_heads), interleaved_qkv(interleaved_qkv),
-          use_alibi(use_alibi), rope_type(rope_type), rope_dim_scale(rope_dim_scale), attn_mask_type(attn_mask_type),
-          num_virtual_tokens(num_virtual_tokens),
+          use_alibi(use_alibi), rope_type(rope_type), rope_theta(rope_theta), rope_dim_scale(rope_dim_scale),
+          attn_mask_type(attn_mask_type), num_virtual_tokens(num_virtual_tokens),
           query_key_value(ctx, hidden_size, hidden_size + 2 * (hidden_size / num_attention_heads) * num_kv_heads,
                           use_qkv_bias),
           dense(ctx, hidden_size, hidden_size, use_dense_bias),
@@ -437,6 +440,7 @@ class BasicAttention {
     bool interleaved_qkv;
     bool use_alibi;
     RopeType rope_type;
+    float rope_theta;
     int rope_dim_scale;
     AttentionMaskType attn_mask_type;
     int num_virtual_tokens;
@@ -452,11 +456,12 @@ class BasicBlock {
     BasicBlock() = default;
     BasicBlock(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int intermediate_size,
                int max_length, float norm_eps, ActivationType hidden_act, bool use_qkv_bias, bool use_dense_bias,
-               bool interleaved_qkv, bool use_alibi, RopeType rope_type, int rope_dim_scale,
+               bool interleaved_qkv, bool use_alibi, RopeType rope_type, float rope_theta, int rope_dim_scale,
                AttentionMaskType attn_mask_type, int num_virtual_tokens)
         : input_layernorm(ctx, hidden_size, false, norm_eps),
           attention(ctx, hidden_size, num_attention_heads, num_kv_heads, max_length, use_qkv_bias, use_dense_bias,
-                    interleaved_qkv, use_alibi, rope_type, rope_dim_scale, attn_mask_type, num_virtual_tokens),
+                    interleaved_qkv, use_alibi, rope_type, rope_theta, rope_dim_scale, attn_mask_type,
+                    num_virtual_tokens),
           post_attention_layernorm(ctx, hidden_size, false, norm_eps),
           mlp(ctx, hidden_size, intermediate_size, hidden_act) {}
 
@@ -583,7 +588,7 @@ class BasicModel {
             layers.emplace_back(ctx, config.hidden_size, config.num_attention_heads, config.num_kv_heads,
                                 config.intermediate_size, config.max_length, config.norm_eps, config.hidden_act,
                                 config.use_qkv_bias, config.use_dense_bias, config.interleaved_qkv, config.use_alibi,
-                                config.rope_type, config.rope_dim_scale, config.attn_mask_type,
+                                config.rope_type, config.rope_theta, config.rope_dim_scale, config.attn_mask_type,
                                 config.num_virtual_tokens);
         }
         return layers;
@@ -878,12 +883,12 @@ class GLMBlock : public BasicBlock<LayerNorm, BasicAttention, BasicMLP> {
     GLMBlock() = default;
     GLMBlock(ModelContext *ctx, int hidden_size, int num_attention_heads, int num_kv_heads, int intermediate_size,
              int max_length, float norm_eps, ActivationType hidden_act, bool use_qkv_bias, bool use_dense_bias,
-             bool interleaved_qkv, bool use_alibi, RopeType rope_type, int rope_dim_scale,
+             bool interleaved_qkv, bool use_alibi, RopeType rope_type, float rope_theta, int rope_dim_scale,
              AttentionMaskType attn_mask_type, int num_virtual_tokens)
         : BasicBlock(LayerNorm(ctx, hidden_size, false, norm_eps),
                      BasicAttention(ctx, hidden_size, num_attention_heads, num_attention_heads, max_length,
-                                    use_qkv_bias, use_dense_bias, interleaved_qkv, use_alibi, rope_type, rope_dim_scale,
-                                    attn_mask_type, num_virtual_tokens),
+                                    use_qkv_bias, use_dense_bias, interleaved_qkv, use_alibi, rope_type, rope_theta,
+                                    rope_dim_scale, attn_mask_type, num_virtual_tokens),
                      LayerNorm(ctx, hidden_size, false, norm_eps),
                      BasicMLP(ctx, hidden_size, intermediate_size, hidden_act)),
           alpha_value(std::sqrt(2.f * 28)) {}
