@@ -80,6 +80,23 @@ struct ConfigRecordV1GQA : public ConfigRecordV1 {
     int num_kv_heads;
 };
 
+// TODO: use json to serialize config
+struct ConfigRecordV2 {
+    ggml_type dtype;
+    int vocab_size;
+    int hidden_size;
+    int num_attention_heads;
+    int num_key_value_heads;
+    int num_hidden_layers;
+    int intermediate_size;
+    float norm_eps;
+    int num_virtual_tokens;
+    float rope_theta;
+    int max_length;
+    int eos_token_id;
+    int pad_token_id;
+};
+
 enum class ActivationType {
     GELU,
     SILU,
@@ -89,6 +106,7 @@ enum class RopeType {
     GPTJ = 0,
     NEOX = 2,
     CHATGLM = 4,
+    CHATGLM2 = 8,
     DISABLED = 10000,
 };
 
@@ -132,6 +150,15 @@ class ModelConfig {
                       rec.num_hidden_layers, rec.intermediate_size, norm_eps, hidden_act, use_qkv_bias, use_dense_bias,
                       interleaved_qkv, use_alibi, rope_type, rope_dim_scale, attn_mask_type, num_virtual_tokens,
                       rec.max_length, rec.bos_token_id, rec.eos_token_id, rec.pad_token_id, rec.sep_token_id, {}) {}
+
+    ModelConfig(ModelType model_type, const ConfigRecordV2 &rec, ActivationType hidden_act, bool use_qkv_bias,
+                bool use_dense_bias, bool interleaved_qkv, bool use_alibi, RopeType rope_type, int rope_dim_scale,
+                AttentionMaskType attn_mask_type)
+        : ModelConfig(model_type, rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads,
+                      rec.num_key_value_heads, rec.num_hidden_layers, rec.intermediate_size, rec.norm_eps, hidden_act,
+                      use_qkv_bias, use_dense_bias, interleaved_qkv, use_alibi, rope_type, rope_dim_scale,
+                      attn_mask_type, rec.num_virtual_tokens, rec.max_length, -1, rec.eos_token_id, rec.pad_token_id,
+                      -1, {}) {}
 
     std::string model_type_name() const { return to_string(model_type); }
 
@@ -520,6 +547,34 @@ class BasicModel {
         return hidden_states;
     }
 
+    void load_prefix_cache(const ModelConfig &config, ggml_tensor *past_key_values) {
+        ggml_cgraph gf{};
+        auto ctx = make_unique_ggml_context(config.num_hidden_layers * 7 * ggml_tensor_overhead(), nullptr, false);
+        const int head_size = config.hidden_size / config.num_attention_heads;
+        for (size_t i = 0; i < layers.size(); i++) {
+            auto &attn = layers[i].attention;
+            ggml_tensor *virtual_key = ggml_view_3d(ctx.get(), past_key_values, head_size, config.num_virtual_tokens,
+                                                    config.num_kv_heads, past_key_values->nb[1], past_key_values->nb[2],
+                                                    i * 2 * past_key_values->nb[3]); // [#h, v, d]
+            ggml_tensor *k_cache_view =
+                ggml_view_3d(ctx.get(), attn.k_cache, head_size, config.num_virtual_tokens, config.num_kv_heads,
+                             attn.k_cache->nb[1], attn.k_cache->nb[2], 0); // [#h, v, d]
+            ggml_build_forward_expand(&gf, ggml_cpy(ctx.get(), virtual_key, k_cache_view));
+
+            ggml_tensor *virtual_value = ggml_view_3d(
+                ctx.get(), past_key_values, head_size, config.num_virtual_tokens, config.num_kv_heads,
+                past_key_values->nb[1], past_key_values->nb[2], (i * 2 + 1) * past_key_values->nb[3]); // [#h, v, d]
+            virtual_value = ggml_permute(ctx.get(), virtual_value, 1, 0, 2, 3);                        // [#h, d, v]
+            ggml_tensor *v_cache_view =
+                ggml_view_3d(ctx.get(), attn.v_cache, config.num_virtual_tokens, head_size, config.num_kv_heads,
+                             attn.v_cache->nb[1], attn.v_cache->nb[2], 0); // [#h, d, v]
+            ggml_build_forward_expand(&gf, ggml_cpy(ctx.get(), virtual_value, v_cache_view));
+        }
+        CHATGLM_CHECK(ggml_used_mem(ctx.get()) == ggml_get_mem_size(ctx.get())) << "corrupted prefix cache context";
+        std::vector<uninitialized_char> compute_buffer;
+        ggml_graph_compute_helper(compute_buffer, &gf, 0);
+    }
+
   private:
     std::vector<Block> build_layers(ModelContext *ctx, const ModelConfig &config) {
         std::vector<Block> layers;
@@ -747,6 +802,8 @@ class BasicModelForCausalLM : public BaseModelForCausalLM {
         ggml_tensor *lm_logits = lm_head.forward(ctx, transformer_outputs);
         return lm_logits;
     }
+
+    void load_prefix_cache(ggml_tensor *past_key_values) { transformer.load_prefix_cache(config, past_key_values); }
 
   protected:
     void to_cpu() {

@@ -3,7 +3,14 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from chatglm_cpp.convert import quantize_q4_0, quantize_q4_1, quantize_q5_0, quantize_q5_1, quantize_q8_0
+from chatglm_cpp.convert import (
+    get_prefix_cache,
+    quantize_q4_0,
+    quantize_q4_1,
+    quantize_q5_0,
+    quantize_q5_1,
+    quantize_q8_0,
+)
 
 HERE = Path(__file__).resolve().parent
 
@@ -332,8 +339,16 @@ def make_data_glm_model():
 
     print(m)
 
+    past_key_values = get_prefix_cache(
+        m.prefix_encoder,
+        config.pre_seq_len,
+        config.num_layers,
+        config.num_attention_heads,
+        config.hidden_size // config.num_attention_heads,
+    )
+
     with open(HERE / "data/glm_ptuning_v2_model.data", "wb") as f:
-        m.prefix_encoder.embedding.weight.data.numpy().tofile(f)
+        past_key_values.data.numpy().tofile(f)
         m.word_embeddings.weight.data.numpy().tofile(f)
         m.layers[0].input_layernorm.weight.data.numpy().tofile(f)
         m.layers[0].input_layernorm.bias.data.numpy().tofile(f)
@@ -465,7 +480,7 @@ def make_data_glm3_model():
         return x1, y1, x2, y2, x3, y3
 
     CHATGLM3_MODEL_PATH = Path(
-        "~/.cache/huggingface/hub/models--THUDM--chatglm3-6b/snapshots/9addbe01105ca1939dd60a0e5866a1812be9daea"
+        "~/.cache/huggingface/hub/models--THUDM--chatglm3-6b/snapshots/a5ba5501eb873d40d48bd0983bd2a8dd006bb838"
     ).expanduser()
 
     sys.path.append(str(CHATGLM3_MODEL_PATH))
@@ -520,8 +535,12 @@ def make_data_glm3_model():
 
     print(m)
 
+    past_key_values = get_prefix_cache(
+        m.prefix_encoder, config.pre_seq_len, config.num_layers, config.multi_query_group_num, config.kv_channels
+    )
+
     with open(HERE / "data/glm3_ptuning_v2_model.data", "wb") as f:
-        m.prefix_encoder.embedding.weight.data.numpy().tofile(f)
+        past_key_values.data.numpy().tofile(f)
         m.embedding.word_embeddings.weight.data.numpy().tofile(f)
         m.encoder.layers[0].input_layernorm.weight.data.numpy().tofile(f)
         m.encoder.layers[0].self_attention.query_key_value.weight.data.numpy().tofile(f)

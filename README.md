@@ -15,6 +15,7 @@ C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGL
 Highlights:
 * Pure C++ implementation based on [ggml](https://github.com/ggerganov/ggml), working in the same way as [llama.cpp](https://github.com/ggerganov/llama.cpp).
 * Accelerated memory-efficient CPU inference with int4/int8 quantization, optimized KV cache and parallel computing.
+* P-Tuning v2 and LoRA finetuned models support.
 * Streaming generation with typewriter effect.
 * Python binding, web demo, api servers and more possibilities.
 
@@ -68,7 +69,9 @@ You are free to try any of the below quantization types by specifying `-t <type>
 * `f16`: half precision floating point weights without quantization.
 * `f32`: single precision floating point weights without quantization.
 
-For LoRA model, add `-l <lora_model_name_or_path>` flag to merge your LoRA weights into the base model.
+For LoRA models, add `-l <lora_model_name_or_path>` flag to merge your LoRA weights into the base model. For example, run `python3 chatglm_cpp/convert.py -i THUDM/chatglm3-6b -t q4_0 -o chatglm3-ggml-lora.bin -l shibing624/chatglm3-6b-csc-chinese-lora` to merge public LoRA weights from Hugging Face.
+
+For P-Tuning v2 models using the [official finetuning script](https://github.com/THUDM/ChatGLM3/tree/main/finetune_demo), additional weights are automatically detected by `convert.py`. If `past_key_values` is on the output weight list, the P-Tuning checkpoint is successfully converted.
 
 **Build & Run**
 

@@ -567,6 +567,33 @@ static ggml_tensor *apply_rotary_emb_glm(ModelContext *ctx, ggml_tensor *layer, 
     return layer;
 }
 
+[[maybe_unused]] static ggml_tensor *apply_rotary_emb_glm2(ModelContext *ctx, ggml_tensor *layer,
+                                                           ggml_tensor *position_ids) {
+    // layer: [s, #h, d], position_ids: [s]
+    ggml_context *gctx = ctx->ctx_b.get();
+#ifdef GGML_USE_CUBLAS
+    if (!ggml_is_contiguous(layer)) {
+        layer = tensor_assign_buffers(ggml_cont(gctx, layer));
+    }
+#endif
+    const int head_size = layer->ne[0];
+    const int rope_dim = head_size / 2;
+    ggml_tensor *roped_layer =
+        tensor_assign_buffers(ggml_rope(gctx, layer, position_ids, rope_dim, (int)RopeType::GPTJ, 0)); // [s, #h, d]
+
+    ggml_tensor *roped_layer_view = tensor_assign_buffers(
+        ggml_view_3d(gctx, roped_layer, rope_dim, roped_layer->ne[1], roped_layer->ne[2], roped_layer->nb[1],
+                     roped_layer->nb[2], rope_dim * roped_layer->nb[0])); // [s, #h, d/2]
+
+    ggml_tensor *layer_view =
+        tensor_assign_buffers(ggml_view_3d(gctx, layer, rope_dim, layer->ne[1], layer->ne[2], layer->nb[1],
+                                           layer->nb[2], rope_dim * layer->nb[0])); // [s, #h, d/2]
+
+    ggml_build_forward_expand(&ctx->gf, ggml_cpy(gctx, layer_view, roped_layer_view));
+
+    return roped_layer;
+}
+
 static ggml_tensor *apply_rotary_emb(ModelContext *ctx, ggml_tensor *layer, ggml_tensor *position_ids, int n_ctx,
                                      RopeType rope_type, int dim_scale) {
     switch (rope_type) {
@@ -575,6 +602,8 @@ static ggml_tensor *apply_rotary_emb(ModelContext *ctx, ggml_tensor *layer, ggml
         return apply_rotary_emb_basic(ctx, layer, position_ids, n_ctx, rope_type, dim_scale);
     case RopeType::CHATGLM:
         return apply_rotary_emb_glm(ctx, layer, position_ids, n_ctx);
+    // case RopeType::CHATGLM2:
+    //     return apply_rotary_emb_glm2(ctx, layer, position_ids);
     case RopeType::DISABLED:
         return layer;
     default:
@@ -723,8 +752,8 @@ BaseModelForCausalLM::BaseModelForCausalLM(ModelConfig config, size_t mem_size, 
     ctx_.dtype = config.dtype;
     const size_t ctx_w_size = num_weights * ggml_tensor_overhead();
     const size_t ctx_kv_size = 2 * config.num_hidden_layers *
-                               (config.max_length * config.hidden_size / config.num_attention_heads *
-                                    config.num_kv_heads * ggml_type_size(GGML_TYPE_F16) +
+                               ((config.max_length + config.num_virtual_tokens) * config.hidden_size /
+                                    config.num_attention_heads * config.num_kv_heads * ggml_type_size(GGML_TYPE_F16) +
                                 ggml_tensor_overhead());
     ctx_.ctx_w = make_unique_ggml_context(ctx_w_size, nullptr, true);
     ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size + 1 * MB, nullptr, false); // 1MB extra for MPS
@@ -1216,6 +1245,21 @@ ChatGLM2ForCausalLM::ChatGLM2ForCausalLM(const ModelConfig &config)
 }
 
 void ChatGLM2ForCausalLM::load(ModelLoader &loader) {
+    if (config.num_virtual_tokens > 0) {
+        const int head_size = config.hidden_size / config.num_attention_heads;
+        auto prefix_cache_ctx = make_unique_ggml_context(
+            ggml_tensor_overhead() + config.num_hidden_layers * 2 * config.num_kv_heads * config.num_virtual_tokens *
+                                         head_size * ggml_type_size(GGML_TYPE_F16),
+            nullptr, false);
+        ggml_tensor *past_key_values =
+            ggml_new_tensor_4d(prefix_cache_ctx.get(), GGML_TYPE_F16, head_size, config.num_virtual_tokens,
+                               config.num_kv_heads, config.num_hidden_layers * 2);
+        CHATGLM_CHECK(ggml_used_mem(prefix_cache_ctx.get()) == ggml_get_mem_size(prefix_cache_ctx.get()))
+            << "corrupted prefix cache";
+        loader.read_tensor("past_key_values", past_key_values);
+        load_prefix_cache(past_key_values);
+    }
+
     std::unordered_map<std::string, std::string> glu_name_map;
     for (int i = 0; i < config.num_hidden_layers; i++) {
         std::string layer_prefix = "transformer.encoder.layers." + std::to_string(i) + '.';
@@ -1715,11 +1759,17 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
     // load version
     int version = loader.read_basic<int>();
     if (model_type == ModelType::CHATGLM) {
-        CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
-
         // load config
-        ModelConfig config(model_type, loader.read_basic<ConfigRecordV1>(), 1e-5f, ActivationType::GELU, true, true,
-                           true, false, RopeType::CHATGLM, -1, AttentionMaskType::CHATGLM, 0);
+        ModelConfig config;
+        if (version == 1) {
+            config = ModelConfig(model_type, loader.read_basic<ConfigRecordV1>(), 1e-5f, ActivationType::GELU, true,
+                                 true, true, false, RopeType::CHATGLM, -1, AttentionMaskType::CHATGLM, 0);
+        } else if (version == 2) {
+            config = ModelConfig(model_type, loader.read_basic<ConfigRecordV2>(), ActivationType::GELU, true, true,
+                                 true, false, RopeType::CHATGLM, -1, AttentionMaskType::CHATGLM);
+        } else {
+            CHATGLM_THROW << "only support version 1 or 2 for now but got " << version;
+        }
         _update_config_max_length(config, max_length);
 
         // load tokenizer
@@ -1732,11 +1782,17 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
         model = std::make_unique<ChatGLMForCausalLM>(config);
         model->load(loader);
     } else if (model_type == ModelType::CHATGLM2 || model_type == ModelType::CHATGLM3) {
-        CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
-
         // load config
-        ModelConfig config(model_type, loader.read_basic<ConfigRecordV1GQA>(), 1e-5f, ActivationType::SILU, true, false,
-                           false, false, RopeType::GPTJ, 2, AttentionMaskType::CAUSAL, 0);
+        ModelConfig config;
+        if (version == 1) {
+            config = ModelConfig(model_type, loader.read_basic<ConfigRecordV1GQA>(), 1e-5f, ActivationType::SILU, true,
+                                 false, false, false, RopeType::GPTJ, 2, AttentionMaskType::CAUSAL, 0);
+        } else if (version == 2) {
+            config = ModelConfig(model_type, loader.read_basic<ConfigRecordV2>(), ActivationType::SILU, true, false,
+                                 false, false, RopeType::GPTJ, 2, AttentionMaskType::CAUSAL);
+        } else {
+            CHATGLM_THROW << "only support version 1 or 2 for now but got " << version;
+        }
         _update_config_max_length(config, max_length);
 
         // load tokenizer

@@ -288,7 +288,7 @@ class ChatGLMTest : public ::testing::Test {
     float perf_device_graph_compute() { return _perf_graph_compute_impl<false>(); }
 
     template <typename Model>
-    void test_model(const Model &model, const ModelConfig &config, const fs::path &data_path, int seq_len,
+    void test_model(Model &model, const ModelConfig &config, const fs::path &data_path, int seq_len,
                     const std::vector<ggml_tensor *> &all_weights) {
         ASSERT_EQ(config.num_hidden_layers, 1);
 
@@ -308,35 +308,12 @@ class ChatGLMTest : public ::testing::Test {
         std::vector<ggml_tensor *> cpu_tensors{model.word_embeddings.weight, x1, x2, x3};
 
         if (config.num_virtual_tokens > 0) {
-            reset_cgraph();
             const int head_size = config.hidden_size / config.num_attention_heads;
             ggml_tensor *past_key_values =
-                ggml_new_tensor_4d(ctx.ctx_b.get(), GGML_TYPE_F32, head_size, config.num_kv_heads,
-                                   config.num_hidden_layers * 2, config.num_virtual_tokens); // [v, l * 2, #h, d]
+                ggml_new_tensor_4d(ctx.ctx_b.get(), GGML_TYPE_F16, head_size, config.num_virtual_tokens,
+                                   config.num_kv_heads, config.num_hidden_layers * 2); // [l * 2, #h, v, d]
             ptr = read_tensor_data(ptr, past_key_values);
-            for (size_t i = 0; i < model.layers.size(); i++) {
-                auto &attn = model.layers[i].attention;
-                ggml_tensor *virtual_key = ggml_view_3d(
-                    ctx.ctx_b.get(), past_key_values, head_size, config.num_kv_heads, config.num_virtual_tokens,
-                    past_key_values->nb[1], past_key_values->nb[3], i * 2 * past_key_values->nb[2]); // [v, #h, d]
-                virtual_key = ggml_permute(ctx.ctx_b.get(), virtual_key, 0, 2, 1, 3);                // [#h, v, d]
-                ggml_tensor *k_cache_view =
-                    ggml_view_3d(ctx.ctx_b.get(), attn.k_cache, head_size, config.num_virtual_tokens,
-                                 config.num_kv_heads, attn.k_cache->nb[1], attn.k_cache->nb[2], 0); // [#h, v, d]
-                ggml_build_forward_expand(
-                    &ctx.gf, ggml_cpy(ctx.ctx_b.get(), (ggml_cont(ctx.ctx_b.get(), virtual_key)), k_cache_view));
-
-                ggml_tensor *virtual_value = ggml_view_3d(
-                    ctx.ctx_b.get(), past_key_values, head_size, config.num_kv_heads, config.num_virtual_tokens,
-                    past_key_values->nb[1], past_key_values->nb[3], (i * 2 + 1) * past_key_values->nb[2]); // [v, #h, d]
-                virtual_value = ggml_permute(ctx.ctx_b.get(), virtual_value, 1, 2, 0, 3);                  // [#h, d, v]
-                ggml_tensor *v_cache_view =
-                    ggml_view_3d(ctx.ctx_b.get(), attn.v_cache, config.num_virtual_tokens, head_size,
-                                 config.num_kv_heads, attn.v_cache->nb[1], attn.v_cache->nb[2], 0); // [#h, d, v]
-                ggml_build_forward_expand(
-                    &ctx.gf, ggml_cpy(ctx.ctx_b.get(), (ggml_cont(ctx.ctx_b.get(), virtual_value)), v_cache_view));
-            }
-            device_graph_compute(1);
+            model.load_prefix_cache(config, past_key_values);
         }
 
         tensor_to_device(model.layers[0].attention.k_cache);
