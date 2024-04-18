@@ -1216,7 +1216,8 @@ TEST(Pipeline, ChatGLM3) {
         {
             ChatMessage output = pipeline.chat(messages, gen_config);
             EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
-            EXPECT_EQ(output.content, "根据您的要求，我使用随机数生成器API生成了一个在0和100之间的随机数，结果为22。");
+            EXPECT_EQ(output.content,
+                      "根据API调用结果，我为您生成了一个随机数，随机数的范围在0到100之间。这个随机数是22。");
         }
     }
 
@@ -1231,11 +1232,14 @@ TEST(Pipeline, ChatGLM3) {
         {
             ChatMessage output = pipeline.chat(messages, gen_config);
             EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
-            EXPECT_EQ(output.content, "好的，我会为您列出100以内的所有质数。\n\n质数是指只能被1和它本身整除的大于1"
-                                      "的整数。例如，2、3、5、7等都是质数。\n\n让我们开始吧！");
+            EXPECT_EQ(output.content, R"(好的，我会为您列出100以内的所有质数。
+
+质数是指只能被1和它本身整除的正整数。例如，2、3、5、7等都是质数。
+
+让我们开始吧！)");
             EXPECT_EQ(output.tool_calls.front().code.input, R"(```python
+# Function to check if a number is prime
 def is_prime(n):
-    """Check if a number is prime."""
     if n <= 1:
         return False
     if n <= 3:
@@ -1250,8 +1254,8 @@ def is_prime(n):
     return True
 
 # Get all prime numbers up to 100
-primes_upto_100 = [i for i in range(2, 101) if is_prime(i)]
-primes_upto_100
+primes_up_to_100 = [i for i in range(2, 101) if is_prime(i)]
+primes_up_to_100
 ```)");
             messages.emplace_back(std::move(output));
         }
