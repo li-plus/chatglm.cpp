@@ -128,8 +128,6 @@ def quantize_q5_1(tensor: torch.Tensor) -> torch.Tensor:
 
 
 def dump_tensor(f, name: str, tensor: torch.Tensor, ggml_type: GGMLType):
-    assert tensor.dtype == torch.float32
-
     # tensor name
     f.write(struct.pack("i", len(name.encode())))
     f.write(name.encode())
@@ -165,7 +163,9 @@ def dump_state_dict(f, weight_names, state_dict, quantization_bit, ggml_type):
     tensor_info = []
     for name in tqdm(weight_names, desc="Processing model states"):
         tensor = state_dict[name]
-        if tensor.ndim == 2:
+        if name == "past_key_values":
+            tensor_ggml_type = GGMLType.F16
+        elif tensor.ndim == 2:
             # 2d weight: should quantize it if needed
 
             # step 1: de-quantize it back to float32
@@ -191,7 +191,7 @@ def dump_state_dict(f, weight_names, state_dict, quantization_bit, ggml_type):
             tensor_ggml_type = GGMLType.F32
 
         dump_tensor(f, name, tensor, tensor_ggml_type)
-        tensor_info.append((name, tensor.shape, tensor_ggml_type.name))
+        tensor_info.append((name, tuple(tensor.shape), tensor_ggml_type.name))
 
     print(tabulate(tensor_info, headers=["name", "shape", "dtype"], tablefmt="psql"))
 
@@ -200,10 +200,23 @@ class BaseConverter:
     @classmethod
     def convert(cls, f, model, tokenizer, ggml_type):
         f.write(b"ggml")  # magic
-        f.write(struct.pack("ii", cls.MODEL_TYPE.value, 1))  # model type & version
+        f.write(struct.pack("i", cls.MODEL_TYPE.value))  # model type
         cls.dump_config(f, model.config, ggml_type)
         cls.dump_tokenizer(f, tokenizer)
         cls.dump_model(f, model, ggml_type)
+
+
+def get_prefix_cache(prefix_encoder, pre_seq_len, num_layers, num_kv_heads, head_size):
+    prefix_tokens = torch.arange(pre_seq_len, dtype=torch.long)
+    with torch.no_grad():
+        past_key_values = prefix_encoder(prefix_tokens)
+    past_key_values = (
+        past_key_values.to(torch.half)
+        .view(pre_seq_len, num_layers * 2, num_kv_heads, head_size)
+        .permute(1, 2, 0, 3)
+        .contiguous()
+    )
+    return past_key_values
 
 
 class ChatGLMConverter(BaseConverter):
@@ -215,20 +228,24 @@ class ChatGLMConverter(BaseConverter):
         assert (
             config.inner_hidden_size == 4 * config.hidden_size
         ), "unimplemented: inner_hidden_size should be 4 times hidden_size"
+
+        config_version = 2
         config_values = [
             ggml_type.value,
             config.vocab_size,
             config.hidden_size,
             config.num_attention_heads,
+            config.num_attention_heads,
             config.num_layers,
             config.inner_hidden_size,
+            config.layernorm_epsilon,
+            config.pre_seq_len if config.pre_seq_len is not None else 0,
+            10000.0,  # rope_theta
             config.max_sequence_length,
-            config.bos_token_id if config.bos_token_id is not None else -1,
             config.eos_token_id if config.eos_token_id is not None else -1,
             config.pad_token_id if config.pad_token_id is not None else -1,
-            config.sep_token_id if config.sep_token_id is not None else -1,
         ]
-        f.write(struct.pack("i" * len(config_values), *config_values))
+        f.write(struct.pack("iiiiiiiififiii", config_version, *config_values))
 
     @staticmethod
     def dump_tokenizer(f, tokenizer):
@@ -268,8 +285,8 @@ class ChatGLMConverter(BaseConverter):
 class ChatGLM2Converter(BaseConverter):
     MODEL_TYPE = ModelType.CHATGLM2
 
-    @staticmethod
-    def dump_config(f, config, ggml_type):
+    @classmethod
+    def dump_config(cls, f, config, ggml_type):
         assert config.add_bias_linear is False, "unimplemented: add_bias_linear must be false"
         assert config.add_qkv_bias is True, "unimplemented: add_qkv_bias must be true"
         assert (
@@ -283,22 +300,24 @@ class ChatGLM2Converter(BaseConverter):
         assert config.post_layer_norm is True, "unimplemented: post_layer_norm must be true"
         assert config.rmsnorm is True, "unimplemented: rmsnorm must be true"
 
+        config_version = 2
         config_values = [
             ggml_type.value,
             config.padded_vocab_size,
             config.hidden_size,
             config.num_attention_heads,
+            config.multi_query_group_num,
             config.num_layers,
             config.ffn_hidden_size,
+            config.layernorm_epsilon,
+            config.pre_seq_len if config.pre_seq_len is not None else 0,
+            10000.0 * getattr(config, "rope_ratio", 1),  # rope_theta
             config.seq_length,
-            config.bos_token_id if config.bos_token_id is not None else -1,
             config.eos_token_id if config.eos_token_id is not None else -1,
             config.pad_token_id if config.pad_token_id is not None else -1,
-            config.sep_token_id if config.sep_token_id is not None else -1,
-            config.multi_query_group_num,
         ]
 
-        f.write(struct.pack("i" * len(config_values), *config_values))
+        f.write(struct.pack("iiiiiiiififiii", config_version, *config_values))
 
     @staticmethod
     def dump_tokenizer(f, tokenizer):
@@ -308,8 +327,24 @@ class ChatGLM2Converter(BaseConverter):
 
     @staticmethod
     def dump_model(f, model, ggml_type):
-        weight_names = ["transformer.embedding.word_embeddings.weight"]
-        for i in range(model.config.num_layers):
+        config = model.config
+
+        state_dict = model.state_dict()
+
+        weight_names = []
+        if config.pre_seq_len is not None and config.pre_seq_len > 0:
+            past_key_values = get_prefix_cache(
+                model.transformer.prefix_encoder,
+                config.pre_seq_len,
+                config.num_layers,
+                config.multi_query_group_num,
+                config.kv_channels,
+            )
+            state_dict["past_key_values"] = past_key_values
+            weight_names.append("past_key_values")
+
+        weight_names.append("transformer.embedding.word_embeddings.weight")
+        for i in range(config.num_layers):
             weight_names += [
                 f"transformer.encoder.layers.{i}.input_layernorm.weight",
                 f"transformer.encoder.layers.{i}.self_attention.query_key_value.weight",
@@ -323,7 +358,7 @@ class ChatGLM2Converter(BaseConverter):
             "transformer.encoder.final_layernorm.weight",
             "transformer.output_layer.weight",
         ]
-        dump_state_dict(f, weight_names, model.state_dict(), model.config.quantization_bit, ggml_type)
+        dump_state_dict(f, weight_names, state_dict, config.quantization_bit, ggml_type)
 
 
 class ChatGLM3Converter(ChatGLM2Converter):
@@ -331,10 +366,11 @@ class ChatGLM3Converter(ChatGLM2Converter):
 
 
 class BaichuanConverter(BaseConverter):
-    @staticmethod
-    def dump_config(f, config, ggml_type):
+    @classmethod
+    def dump_config(cls, f, config, ggml_type):
         assert config.hidden_act == "silu", "unimplemented: hidden_act must be silu"
 
+        config_version = 1
         config_values = [
             ggml_type.value,
             config.vocab_size,
@@ -349,7 +385,7 @@ class BaichuanConverter(BaseConverter):
             config.sep_token_id if config.sep_token_id is not None else -1,
         ]
 
-        f.write(struct.pack("i" * len(config_values), *config_values))
+        f.write(struct.pack("i" * (1 + len(config_values)), config_version, *config_values))
 
     @staticmethod
     def dump_tokenizer(f, tokenizer):
@@ -397,6 +433,7 @@ class InternLMConverter(BaseConverter):
     def dump_config(f, config, ggml_type):
         assert config.hidden_act == "silu", "unimplemented: hidden_act must be silu"
 
+        config_version = 1
         config_values = [
             ggml_type.value,
             config.vocab_size,
@@ -411,7 +448,7 @@ class InternLMConverter(BaseConverter):
             config.sep_token_id if config.sep_token_id is not None else -1,
         ]
 
-        f.write(struct.pack("i" * len(config_values), *config_values))
+        f.write(struct.pack("i" * (1 + len(config_values)), config_version, *config_values))
 
     @staticmethod
     def dump_tokenizer(f, tokenizer):
@@ -484,6 +521,8 @@ def convert(f: BinaryIO, model_name_or_path: str, lora_model_name_or_path: Optio
 
         model = PeftModel.from_pretrained(model, lora_model_name_or_path)
         model = model.merge_and_unload()
+
+    model = model.eval()
 
     if model.config.model_type == "chatglm":
         if hasattr(model.config, "multi_query_attention"):

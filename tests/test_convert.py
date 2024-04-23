@@ -3,7 +3,14 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from chatglm_cpp.convert import quantize_q4_0, quantize_q4_1, quantize_q5_0, quantize_q5_1, quantize_q8_0
+from chatglm_cpp.convert import (
+    get_prefix_cache,
+    quantize_q4_0,
+    quantize_q4_1,
+    quantize_q5_0,
+    quantize_q5_1,
+    quantize_q8_0,
+)
 
 HERE = Path(__file__).resolve().parent
 
@@ -168,10 +175,6 @@ def test_quantize_q5_1():
     assert (q_tensor == ggml_q_tensor).all()
 
 
-CHATGLM_MODEL_PATH = Path(
-    "~/.cache/huggingface/hub/models--THUDM--chatglm-6b/snapshots/619e736c6d4cd139840579c5482063b75bed5666"
-).expanduser()
-
 CHATGLM2_MODEL_PATH = Path(
     "~/.cache/huggingface/hub/models--THUDM--chatglm2-6b/snapshots/b1502f4f75c71499a3d566b14463edd62620ce9f"
 ).expanduser()
@@ -242,6 +245,44 @@ def make_data_rms_norm():
 
 
 def make_data_glm_model():
+    def _forward_steps(model, seq_len):
+        # self attention
+        x1 = torch.arange(seq_len, dtype=torch.int64)[None, :]
+        position_ids = torch.tensor([[[0, 1, 1], [0, 0, 1]]])
+        attn_mask = torch.tensor([[0, 0, 1], [0, 0, 1], [0, 0, 0]], dtype=torch.bool)[None, None, :]
+        with torch.no_grad():
+            out = model(x1, position_ids=position_ids, attention_mask=attn_mask, use_cache=True)
+            y1 = out.last_hidden_state
+            kv_cache = out.past_key_values
+
+        # cross attention
+        x2 = torch.tensor([[seq_len]], dtype=torch.int64)
+        position_ids = torch.tensor([[[1], [2]]])
+        attn_mask = None
+        with torch.no_grad():
+            out = model(
+                x2, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True
+            )
+            y2 = out.last_hidden_state
+            kv_cache = out.past_key_values
+
+        # cross attention
+        x3 = torch.tensor([[seq_len + 1]], dtype=torch.int64)
+        position_ids = torch.tensor([[[1], [3]]])
+        attn_mask = None
+        with torch.no_grad():
+            out = model(
+                x3, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True
+            )
+            y3 = out.last_hidden_state
+            kv_cache = out.past_key_values
+
+        return x1, y1, x2, y2, x3, y3
+
+    CHATGLM_MODEL_PATH = Path(
+        "~/.cache/huggingface/hub/models--THUDM--chatglm-6b/snapshots/8b7d33596d18c5e83e2da052d05ca4db02e60620"
+    ).expanduser()
+
     sys.path.append(str(CHATGLM_MODEL_PATH))
     from modeling_chatglm import ChatGLMModel
     from transformers import AutoConfig
@@ -260,36 +301,54 @@ def make_data_glm_model():
 
     seq_len = 3
 
-    # self attention
-    x1 = torch.arange(seq_len, dtype=torch.int64)[None, :]
-    position_ids = torch.tensor([[[0, 1, 1], [0, 0, 1]]])
-    attn_mask = torch.tensor([[0, 0, 1], [0, 0, 1], [0, 0, 0]], dtype=torch.bool)[None, None, :]
-    with torch.no_grad():
-        out = m(x1, position_ids=position_ids, attention_mask=attn_mask, use_cache=True)
-        y1 = out.last_hidden_state
-        kv_cache = out.past_key_values
-
-    # cross attention
-    x2 = torch.tensor([[seq_len]], dtype=torch.int64)
-    position_ids = torch.tensor([[[1], [2]]])
-    attn_mask = None
-    with torch.no_grad():
-        out = m(x2, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True)
-        y2 = out.last_hidden_state
-        kv_cache = out.past_key_values
-
-    # cross attention
-    x3 = torch.tensor([[seq_len + 1]], dtype=torch.int64)
-    position_ids = torch.tensor([[[1], [3]]])
-    attn_mask = None
-    with torch.no_grad():
-        out = m(x3, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True)
-        y3 = out.last_hidden_state
-        kv_cache = out.past_key_values
+    x1, y1, x2, y2, x3, y3 = _forward_steps(m, seq_len)
 
     print(m)
 
     with open(HERE / "data/glm_model.data", "wb") as f:
+        m.word_embeddings.weight.data.numpy().tofile(f)
+        m.layers[0].input_layernorm.weight.data.numpy().tofile(f)
+        m.layers[0].input_layernorm.bias.data.numpy().tofile(f)
+        m.layers[0].attention.query_key_value.weight.data.numpy().tofile(f)
+        m.layers[0].attention.query_key_value.bias.data.numpy().tofile(f)
+        m.layers[0].attention.dense.weight.data.numpy().tofile(f)
+        m.layers[0].attention.dense.bias.data.numpy().tofile(f)
+        m.layers[0].post_attention_layernorm.weight.data.numpy().tofile(f)
+        m.layers[0].post_attention_layernorm.bias.data.numpy().tofile(f)
+        m.layers[0].mlp.dense_h_to_4h.weight.data.numpy().tofile(f)
+        m.layers[0].mlp.dense_h_to_4h.bias.data.numpy().tofile(f)
+        m.layers[0].mlp.dense_4h_to_h.weight.data.numpy().tofile(f)
+        m.layers[0].mlp.dense_4h_to_h.bias.data.numpy().tofile(f)
+        m.final_layernorm.weight.data.numpy().tofile(f)
+        m.final_layernorm.bias.data.numpy().tofile(f)
+
+        x1.int().numpy().tofile(f)
+        y1.data.numpy().tofile(f)
+        x2.int().numpy().tofile(f)
+        y2.data.numpy().tofile(f)
+        x3.int().numpy().tofile(f)
+        y3.data.numpy().tofile(f)
+
+    # p-tuning v2
+    config.pre_seq_len = 5
+    m = ChatGLMModel(config).float().eval()
+    for param in m.parameters():
+        param.data.uniform_(-0.5, 0.5)
+
+    x1, y1, x2, y2, x3, y3 = _forward_steps(m, seq_len)
+
+    print(m)
+
+    past_key_values = get_prefix_cache(
+        m.prefix_encoder,
+        config.pre_seq_len,
+        config.num_layers,
+        config.num_attention_heads,
+        config.hidden_size // config.num_attention_heads,
+    )
+
+    with open(HERE / "data/glm_ptuning_v2_model.data", "wb") as f:
+        past_key_values.data.numpy().tofile(f)
         m.word_embeddings.weight.data.numpy().tofile(f)
         m.layers[0].input_layernorm.weight.data.numpy().tofile(f)
         m.layers[0].input_layernorm.bias.data.numpy().tofile(f)
@@ -385,7 +444,44 @@ def make_data_glm2_model():
 
 
 def make_data_glm3_model():
-    CHATGLM3_MODEL_PATH = Path("./chatglm3-6b").expanduser()
+
+    def _forward_steps(model, seq_len):
+        # self attention
+        x1 = torch.arange(seq_len, dtype=torch.int64)[None, :]
+        position_ids = torch.arange(seq_len, dtype=torch.int64)[None, :]
+        attn_mask = torch.ones(1, seq_len, dtype=torch.int64)
+        with torch.no_grad():
+            out = model(x1, position_ids=position_ids, attention_mask=attn_mask, use_cache=True)
+            y1 = out.last_hidden_state
+            kv_cache = out.past_key_values
+
+        # cross attention
+        x2 = torch.tensor([[seq_len]], dtype=torch.int64)
+        position_ids = torch.tensor([[seq_len]], dtype=torch.int64)
+        attn_mask = torch.ones(1, seq_len + 1, dtype=torch.int64)
+        with torch.no_grad():
+            out = model(
+                x2, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True
+            )
+            y2 = out.last_hidden_state
+            kv_cache = out.past_key_values
+
+        # cross attention
+        x3 = torch.tensor([[seq_len + 1]], dtype=torch.int64)
+        position_ids = torch.tensor([[seq_len + 1]], dtype=torch.int64)
+        attn_mask = torch.ones(1, seq_len + 2, dtype=torch.int64)
+        with torch.no_grad():
+            out = model(
+                x3, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True
+            )
+            y3 = out.last_hidden_state
+            kv_cache = out.past_key_values
+
+        return x1, y1, x2, y2, x3, y3
+
+    CHATGLM3_MODEL_PATH = Path(
+        "~/.cache/huggingface/hub/models--THUDM--chatglm3-6b/snapshots/a5ba5501eb873d40d48bd0983bd2a8dd006bb838"
+    ).expanduser()
 
     sys.path.append(str(CHATGLM3_MODEL_PATH))
     from modeling_chatglm import ChatGLMModel
@@ -407,36 +503,44 @@ def make_data_glm3_model():
 
     seq_len = 3
 
-    # self attention
-    x1 = torch.arange(seq_len, dtype=torch.int64)[None, :]
-    position_ids = torch.arange(seq_len, dtype=torch.int64)[None, :]
-    attn_mask = torch.ones(1, seq_len, dtype=torch.int64)
-    with torch.no_grad():
-        out = m(x1, position_ids=position_ids, attention_mask=attn_mask, use_cache=True)
-        y1 = out.last_hidden_state
-        kv_cache = out.past_key_values
-
-    # cross attention
-    x2 = torch.tensor([[seq_len]], dtype=torch.int64)
-    position_ids = torch.tensor([[seq_len]], dtype=torch.int64)
-    attn_mask = torch.ones(1, seq_len + 1, dtype=torch.int64)
-    with torch.no_grad():
-        out = m(x2, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True)
-        y2 = out.last_hidden_state
-        kv_cache = out.past_key_values
-
-    # cross attention
-    x3 = torch.tensor([[seq_len + 1]], dtype=torch.int64)
-    position_ids = torch.tensor([[seq_len + 1]], dtype=torch.int64)
-    attn_mask = torch.ones(1, seq_len + 2, dtype=torch.int64)
-    with torch.no_grad():
-        out = m(x3, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True)
-        y3 = out.last_hidden_state
-        kv_cache = out.past_key_values
+    x1, y1, x2, y2, x3, y3 = _forward_steps(m, seq_len)
 
     print(m)
 
     with open(HERE / "data/glm3_model.data", "wb") as f:
+        m.embedding.word_embeddings.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].input_layernorm.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].self_attention.query_key_value.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].self_attention.query_key_value.bias.data.numpy().tofile(f)
+        m.encoder.layers[0].self_attention.dense.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].post_attention_layernorm.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].mlp.dense_h_to_4h.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].mlp.dense_4h_to_h.weight.data.numpy().tofile(f)
+        m.encoder.final_layernorm.weight.data.numpy().tofile(f)
+
+        x1.int().numpy().tofile(f)
+        y1.numpy().tofile(f)
+        x2.int().numpy().tofile(f)
+        y2.numpy().tofile(f)
+        x3.int().numpy().tofile(f)
+        y3.numpy().tofile(f)
+
+    # p-tuning v2
+    config.pre_seq_len = 5
+    m = ChatGLMModel(config).float().eval()
+    for param in m.parameters():
+        param.data.uniform_(-0.5, 0.5)
+
+    x1, y1, x2, y2, x3, y3 = _forward_steps(m, seq_len)
+
+    print(m)
+
+    past_key_values = get_prefix_cache(
+        m.prefix_encoder, config.pre_seq_len, config.num_layers, config.multi_query_group_num, config.kv_channels
+    )
+
+    with open(HERE / "data/glm3_ptuning_v2_model.data", "wb") as f:
+        past_key_values.data.numpy().tofile(f)
         m.embedding.word_embeddings.weight.data.numpy().tofile(f)
         m.encoder.layers[0].input_layernorm.weight.data.numpy().tofile(f)
         m.encoder.layers[0].self_attention.query_key_value.weight.data.numpy().tofile(f)
