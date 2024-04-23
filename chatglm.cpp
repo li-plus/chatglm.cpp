@@ -149,12 +149,16 @@ const std::string ChatMessage::ROLE_SYSTEM = "system";
 const std::string ChatMessage::ROLE_OBSERVATION = "observation";
 
 void BaseTokenizer::check_chat_messages(const std::vector<ChatMessage> &messages) {
-    CHATGLM_CHECK(messages.size() % 2 == 1) << "invalid chat messages size " << messages.size();
+    size_t n = 0;
     for (size_t i = 0; i < messages.size(); i++) {
-        const std::string &target_role = (i % 2 == 0) ? ChatMessage::ROLE_USER : ChatMessage::ROLE_ASSISTANT;
+        if(messages[i].role != ChatMessage::ROLE_USER && messages[i].role != ChatMessage::ROLE_ASSISTANT)
+            continue;
+        const std::string &target_role = (n % 2 == 0) ? ChatMessage::ROLE_USER : ChatMessage::ROLE_ASSISTANT;
         CHATGLM_CHECK(messages[i].role == target_role)
             << "expect messages[" << i << "].role to be " << target_role << ", but got " << messages[i].role;
+        n++;
     }
+    CHATGLM_CHECK(n % 2 == 1) << "invalid user/assistant messages size " << n;
 }
 
 // Adapted from https://github.com/ggerganov/llama.cpp/blob/master/llama.cpp
