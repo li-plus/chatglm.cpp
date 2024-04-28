@@ -149,12 +149,28 @@ const std::string ChatMessage::ROLE_SYSTEM = "system";
 const std::string ChatMessage::ROLE_OBSERVATION = "observation";
 
 void BaseTokenizer::check_chat_messages(const std::vector<ChatMessage> &messages) {
-    CHATGLM_CHECK(messages.size() % 2 == 1) << "invalid chat messages size " << messages.size();
+    std::string target_role = ChatMessage::ROLE_USER;
     for (size_t i = 0; i < messages.size(); i++) {
-        const std::string &target_role = (i % 2 == 0) ? ChatMessage::ROLE_USER : ChatMessage::ROLE_ASSISTANT;
+        if (messages[i].role != ChatMessage::ROLE_USER && messages[i].role != ChatMessage::ROLE_ASSISTANT) {
+            continue;
+        }
         CHATGLM_CHECK(messages[i].role == target_role)
             << "expect messages[" << i << "].role to be " << target_role << ", but got " << messages[i].role;
+        target_role = (target_role == ChatMessage::ROLE_USER) ? ChatMessage::ROLE_ASSISTANT : ChatMessage::ROLE_USER;
     }
+    CHATGLM_CHECK(target_role == ChatMessage::ROLE_ASSISTANT)
+        << "expect last message role to be " << ChatMessage::ROLE_USER << ", but got " << ChatMessage::ROLE_ASSISTANT;
+}
+
+std::vector<ChatMessage> BaseTokenizer::filter_user_assistant_messages(const std::vector<ChatMessage> &messages) {
+    std::vector<ChatMessage> user_assistant_messages;
+    user_assistant_messages.reserve(messages.size());
+    for (const auto &msg : messages) {
+        if (msg.role == ChatMessage::ROLE_USER || msg.role == ChatMessage::ROLE_ASSISTANT) {
+            user_assistant_messages.emplace_back(msg);
+        }
+    }
+    return user_assistant_messages;
 }
 
 // Adapted from https://github.com/ggerganov/llama.cpp/blob/master/llama.cpp
@@ -998,15 +1014,16 @@ std::vector<int> ChatGLMTokenizer::encode_messages(const std::vector<ChatMessage
 
 std::string ChatGLMTokenizer::build_prompt(const std::vector<ChatMessage> &messages) {
     check_chat_messages(messages);
+    std::vector<ChatMessage> user_assistant_messages = filter_user_assistant_messages(messages);
 
     std::ostringstream oss_prompt;
-    if (messages.size() == 1) {
-        oss_prompt << messages.front().content;
+    if (user_assistant_messages.size() == 1) {
+        oss_prompt << user_assistant_messages.front().content;
     } else {
-        for (size_t i = 0; i < messages.size(); i += 2) {
-            oss_prompt << "[Round " << i / 2 << "]\n问：" << messages[i].content << "\n答：";
-            if (i + 1 < messages.size()) {
-                oss_prompt << messages[i + 1].content << "\n";
+        for (size_t i = 0; i < user_assistant_messages.size(); i += 2) {
+            oss_prompt << "[Round " << i / 2 << "]\n问：" << user_assistant_messages[i].content << "\n答：";
+            if (i + 1 < user_assistant_messages.size()) {
+                oss_prompt << user_assistant_messages[i + 1].content << "\n";
             }
         }
     }
@@ -1223,12 +1240,13 @@ std::vector<int> ChatGLM2Tokenizer::encode_messages(const std::vector<ChatMessag
 
 std::string ChatGLM2Tokenizer::build_prompt(const std::vector<ChatMessage> &messages) {
     check_chat_messages(messages);
+    std::vector<ChatMessage> user_assistant_messages = filter_user_assistant_messages(messages);
 
     std::ostringstream oss_prompt;
-    for (size_t i = 0; i < messages.size(); i += 2) {
-        oss_prompt << "[Round " << i / 2 + 1 << "]\n\n问：" << messages[i].content << "\n\n答：";
-        if (i < messages.size() - 1) {
-            oss_prompt << messages[i + 1].content << "\n\n";
+    for (size_t i = 0; i < user_assistant_messages.size(); i += 2) {
+        oss_prompt << "[Round " << i / 2 + 1 << "]\n\n问：" << user_assistant_messages[i].content << "\n\n答：";
+        if (i < user_assistant_messages.size() - 1) {
+            oss_prompt << user_assistant_messages[i + 1].content << "\n\n";
         }
     }
     return oss_prompt.str();
@@ -1528,10 +1546,11 @@ std::string BaichuanTokenizer::decode(const std::vector<int> &ids) const {
 
 std::vector<int> BaichuanTokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
     check_chat_messages(messages);
+    std::vector<ChatMessage> user_assistant_messages = filter_user_assistant_messages(messages);
 
     std::vector<int> ids;
     ids.reserve(max_length);
-    for (const auto &msg : messages) {
+    for (const auto &msg : user_assistant_messages) {
         ids.push_back((msg.role == ChatMessage::ROLE_USER) ? USER_TOKEN_ID : ASSISTANT_TOKEN_ID);
         std::vector<int> content_ids = encode(msg.content, max_length);
         ids.insert(ids.end(), content_ids.begin(), content_ids.end());
@@ -1677,9 +1696,10 @@ std::vector<int> InternLMTokenizer::encode_messages(const std::vector<ChatMessag
 
 std::string InternLMTokenizer::build_prompt(const std::vector<ChatMessage> &messages) {
     check_chat_messages(messages);
+    std::vector<ChatMessage> user_assistant_messages = filter_user_assistant_messages(messages);
 
     std::ostringstream oss_prompt;
-    for (const auto &msg : messages) {
+    for (const auto &msg : user_assistant_messages) {
         if (msg.role == ChatMessage::ROLE_USER) {
             oss_prompt << "<|User|>:" << msg.content << "<eoh>\n<|Bot|>:";
         } else {

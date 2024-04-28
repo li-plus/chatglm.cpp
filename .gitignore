@@ -12,6 +12,7 @@ dist/
 *.so
 *.whl
 .hypothesis/
+.venv
 
 # cpp
 build/
