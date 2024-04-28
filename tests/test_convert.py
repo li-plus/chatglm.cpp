@@ -444,7 +444,6 @@ def make_data_glm2_model():
 
 
 def make_data_glm3_model():
-
     def _forward_steps(model, seq_len):
         # self attention
         x1 = torch.arange(seq_len, dtype=torch.int64)[None, :]

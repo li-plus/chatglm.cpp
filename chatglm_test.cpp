@@ -976,6 +976,24 @@ static void check_tokenizer(const BaseTokenizer *tokenizer, const std::vector<To
     }
 }
 
+static void check_chat_format(const Pipeline &pipeline) {
+    GenerationConfig gen_config;
+    gen_config.max_new_tokens = 1;
+    EXPECT_THROW(
+        {
+            pipeline.chat({{ChatMessage::ROLE_USER, "user"}, {ChatMessage::ROLE_USER, "user"}}, gen_config);
+        },
+        std::runtime_error);
+    EXPECT_THROW({ pipeline.chat({{ChatMessage::ROLE_ASSISTANT, "assistant"}}, gen_config); }, std::runtime_error);
+    EXPECT_THROW(
+        {
+            pipeline.chat({{ChatMessage::ROLE_USER, "user"}, {ChatMessage::ROLE_ASSISTANT, "assistant"}}, gen_config);
+        },
+        std::runtime_error);
+    // never throw with system prompt
+    pipeline.chat({{ChatMessage::ROLE_SYSTEM, "system"}, {ChatMessage::ROLE_USER, "user"}}, gen_config);
+}
+
 TEST(Pipeline, ChatGLM) {
     fs::path model_path = fs::path(__FILE__).parent_path() / "chatglm-ggml.bin";
     if (!fs::exists(model_path)) {
@@ -1029,6 +1047,7 @@ TEST(Pipeline, ChatGLM) {
 
     // chat
     {
+        check_chat_format(pipeline);
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
@@ -1093,6 +1112,7 @@ TEST(Pipeline, ChatGLM2) {
 
     // chat
     {
+        check_chat_format(pipeline);
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
@@ -1189,6 +1209,7 @@ TEST(Pipeline, ChatGLM3) {
 
     // chat
     {
+        // check_chat_format(pipeline);
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
@@ -1359,6 +1380,7 @@ TEST(Pipeline, Baichuan13B) {
 
     // chat
     {
+        check_chat_format(pipeline);
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         gen_config.repetition_penalty = 1.1;
@@ -1413,6 +1435,7 @@ TEST(Pipeline, Baichuan2_7B) {
 
     // chat
     {
+        check_chat_format(pipeline);
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         gen_config.repetition_penalty = 1.05;
@@ -1455,6 +1478,7 @@ TEST(Pipeline, Baichuan2_13B) {
 
     // chat
     {
+        check_chat_format(pipeline);
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         gen_config.repetition_penalty = 1.05;
@@ -1510,6 +1534,7 @@ TEST(Pipeline, InternLM) {
 
     // chat
     {
+        check_chat_format(pipeline);
         GenerationConfig gen_config;
         gen_config.do_sample = false;
         std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};

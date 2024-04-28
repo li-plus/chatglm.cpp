@@ -274,6 +274,8 @@ class BaseTokenizer {
 
   protected:
     static void check_chat_messages(const std::vector<ChatMessage> &messages);
+
+    static std::vector<ChatMessage> filter_user_assistant_messages(const std::vector<ChatMessage> &messages);
 };
 
 struct ggml_context_deleter_t {
