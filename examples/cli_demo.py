@@ -4,7 +4,7 @@ from typing import List
 
 import chatglm_cpp
 
-DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "chatglm-ggml.bin"
+DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "models/chatglm-ggml.bin"
 
 BANNER = """
     ________          __  ________    __  ___                 

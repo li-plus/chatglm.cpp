@@ -5,15 +5,15 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-CHATGLM_MODEL_PATH = PROJECT_ROOT / "chatglm-ggml.bin"
-CHATGLM2_MODEL_PATH = PROJECT_ROOT / "chatglm2-ggml.bin"
-CHATGLM3_MODEL_PATH = PROJECT_ROOT / "chatglm3-ggml.bin"
-CODEGEEX2_MODEL_PATH = PROJECT_ROOT / "codegeex2-ggml.bin"
-BAICHUAN13B_MODEL_PATH = PROJECT_ROOT / "baichuan-13b-chat-ggml.bin"
-BAICHUAN2_7B_MODEL_PATH = PROJECT_ROOT / "baichuan2-7b-chat-ggml.bin"
-BAICHUAN2_13B_MODEL_PATH = PROJECT_ROOT / "baichuan2-13b-chat-ggml.bin"
-INTERNLM7B_MODEL_PATH = PROJECT_ROOT / "internlm-chat-7b-ggml.bin"
-INTERNLM20B_MODEL_PATH = PROJECT_ROOT / "internlm-chat-20b-ggml.bin"
+CHATGLM_MODEL_PATH = PROJECT_ROOT / "models/chatglm-ggml.bin"
+CHATGLM2_MODEL_PATH = PROJECT_ROOT / "models/chatglm2-ggml.bin"
+CHATGLM3_MODEL_PATH = PROJECT_ROOT / "models/chatglm3-ggml.bin"
+CODEGEEX2_MODEL_PATH = PROJECT_ROOT / "models/codegeex2-ggml.bin"
+BAICHUAN13B_MODEL_PATH = PROJECT_ROOT / "models/baichuan-13b-chat-ggml.bin"
+BAICHUAN2_7B_MODEL_PATH = PROJECT_ROOT / "models/baichuan2-7b-chat-ggml.bin"
+BAICHUAN2_13B_MODEL_PATH = PROJECT_ROOT / "models/baichuan2-13b-chat-ggml.bin"
+INTERNLM7B_MODEL_PATH = PROJECT_ROOT / "models/internlm-chat-7b-ggml.bin"
+INTERNLM20B_MODEL_PATH = PROJECT_ROOT / "models/internlm-chat-20b-ggml.bin"
 
 
 def test_chatglm_version():

@@ -6,7 +6,7 @@ from pathlib import Path
 import chatglm_cpp
 import gradio as gr
 
-DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "chatglm-ggml.bin"
+DEFAULT_MODEL_PATH = Path(__file__).resolve().parent.parent / "models/chatglm-ggml.bin"
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-m", "--model", default=DEFAULT_MODEL_PATH, type=Path, help="model path")

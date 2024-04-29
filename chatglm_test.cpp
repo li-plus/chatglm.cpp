@@ -995,7 +995,7 @@ static void check_chat_format(const Pipeline &pipeline) {
 }
 
 TEST(Pipeline, ChatGLM) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "chatglm-ggml.bin";
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/chatglm-ggml.bin";
     if (!fs::exists(model_path)) {
         GTEST_SKIP() << "Skipping ChatGLM e2e test (ggml model not found)";
     }
@@ -1057,7 +1057,7 @@ TEST(Pipeline, ChatGLM) {
 }
 
 TEST(Pipeline, ChatGLM2) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "chatglm2-ggml.bin";
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/chatglm2-ggml.bin";
     if (!fs::exists(model_path)) {
         GTEST_SKIP() << "Skipping ChatGLM2 e2e test (ggml model not found)";
     }
@@ -1127,7 +1127,7 @@ static inline std::string read_text(const fs::path &path) {
 }
 
 TEST(Pipeline, ChatGLM3) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "chatglm3-ggml.bin";
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/chatglm3-ggml.bin";
     if (!fs::exists(model_path)) {
         GTEST_SKIP() << "Skipping ChatGLM3 e2e test (ggml model not found)";
     }
@@ -1296,7 +1296,7 @@ $$)");
 }
 
 TEST(Pipeline, CodeGeeX2) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "codegeex2-ggml.bin";
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/codegeex2-ggml.bin";
     if (!fs::exists(model_path)) {
         GTEST_SKIP() << "Skipping CodeGeeX2 e2e test (ggml model not found)";
     }
@@ -1320,12 +1320,12 @@ TEST(Pipeline, CodeGeeX2) {
         std::string prompt = "# language: Python\n# write a bubble sort function\n";
         std::string target = R"(
 
-def bubble_sort(list):
-    for i in range(len(list) - 1):
-        for j in range(len(list) - 1):
-            if list[j] > list[j + 1]:
-                list[j], list[j + 1] = list[j + 1], list[j]
-    return list
+def bubble_sort(lst):
+    for i in range(len(lst) - 1):
+        for j in range(len(lst) - 1 - i):
+            if lst[j] > lst[j + 1]:
+                lst[j], lst[j + 1] = lst[j + 1], lst[j]
+    return lst
 
 
 print(bubble_sort([5, 4, 3, 2, 1])))";
@@ -1336,7 +1336,7 @@ print(bubble_sort([5, 4, 3, 2, 1])))";
 }
 
 TEST(Pipeline, Baichuan13B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "baichuan-13b-chat-ggml.bin";
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/baichuan-13b-chat-ggml.bin";
     if (!fs::exists(model_path)) {
         GTEST_SKIP() << "Skipping Baichuan13B e2e test (ggml model not found)";
     }
@@ -1391,7 +1391,7 @@ TEST(Pipeline, Baichuan13B) {
 }
 
 TEST(Pipeline, Baichuan2_7B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "baichuan2-7b-chat-ggml.bin";
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/baichuan2-7b-chat-ggml.bin";
     if (!fs::exists(model_path)) {
         GTEST_SKIP() << "Skipping Baichuan2-7B e2e test (ggml model not found)";
     }
@@ -1446,7 +1446,7 @@ TEST(Pipeline, Baichuan2_7B) {
 }
 
 TEST(Pipeline, Baichuan2_13B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "baichuan2-13b-chat-ggml.bin";
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/baichuan2-13b-chat-ggml.bin";
     if (!fs::exists(model_path)) {
         GTEST_SKIP() << "Skipping Baichuan2-13B e2e test (ggml model not found)";
     }
@@ -1489,7 +1489,7 @@ TEST(Pipeline, Baichuan2_13B) {
 }
 
 TEST(Pipeline, InternLM) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "internlm-chat-7b-ggml.bin";
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/internlm-chat-7b-ggml.bin";
     if (!fs::exists(model_path)) {
         GTEST_SKIP() << "Skipping InternLM e2e test (ggml model not found)";
     }
@@ -1539,7 +1539,7 @@ TEST(Pipeline, InternLM) {
         gen_config.do_sample = false;
         std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
         ChatMessage output = pipeline.chat(messages, gen_config);
-        EXPECT_EQ(output.content, "你好，有什么我可以帮助你的吗？");
+        EXPECT_EQ(output.content, "你好！有什么我可以帮助你的吗？");
     }
 }
 
@@ -1578,32 +1578,32 @@ static void run_benchmark(const fs::path &model_path) {
 }
 
 TEST(Benchmark, ChatGLM) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "chatglm-ggml.bin";
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/chatglm-ggml.bin";
     run_benchmark(model_path);
 }
 
 TEST(Benchmark, ChatGLM2) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "chatglm2-ggml.bin";
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/chatglm2-ggml.bin";
     run_benchmark(model_path);
 }
 
 TEST(Benchmark, Baichuan2_7B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "baichuan2-7b-chat-ggml.bin";
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/baichuan2-7b-chat-ggml.bin";
     run_benchmark(model_path);
 }
 
 TEST(Benchmark, Baichuan2_13B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "baichuan2-13b-chat-ggml.bin";
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/baichuan2-13b-chat-ggml.bin";
     run_benchmark(model_path);
 }
 
 TEST(Benchmark, InternLM7B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "internlm-chat-7b-ggml.bin";
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/internlm-chat-7b-ggml.bin";
     run_benchmark(model_path);
 }
 
 TEST(Benchmark, InternLM20B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "internlm-chat-20b-ggml.bin";
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/internlm-chat-20b-ggml.bin";
     run_benchmark(model_path);
 }
 

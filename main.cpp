@@ -22,7 +22,7 @@ static inline InferenceMode to_inference_mode(const std::string &s) {
 }
 
 struct Args {
-    std::string model_path = "chatglm-ggml.bin";
+    std::string model_path = "models/chatglm-ggml.bin";
     InferenceMode mode = INFERENCE_MODE_CHAT;
     bool sync = false;
     std::string prompt = "你好";
@@ -44,7 +44,7 @@ static void usage(const std::string &prog) {
 
 options:
   -h, --help            show this help message and exit
-  -m, --model PATH      model path (default: chatglm-ggml.bin)
+  -m, --model PATH      model path (default: models/chatglm-ggml.bin)
   --mode                inference mode chosen from {chat, generate} (default: chat)
   --sync                synchronized generation without streaming
   -p, --prompt PROMPT   prompt to start generation with (default: 你好)
