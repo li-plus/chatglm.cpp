@@ -562,7 +562,7 @@ def main():
         help="Lora model name or path used in PeftModel.from_pretrained",
     )
     parser.add_argument(
-        "-o", "--save_path", default="chatglm-ggml.bin", type=Path, help="Path to save the generated GGML model"
+        "-o", "--save_path", default="models/chatglm-ggml.bin", type=Path, help="Path to save the generated GGML model"
     )
     parser.add_argument(
         "-t",

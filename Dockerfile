@@ -47,6 +47,7 @@ RUN \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /chatglm.cpp/build/bin/main /chatglm.cpp/build/bin/main
+COPY --from=build /chatglm.cpp/build/lib/*.so /chatglm.cpp/build/lib/
 COPY --from=build /chatglm.cpp/dist/ /chatglm.cpp/dist/
 
 ADD examples examples

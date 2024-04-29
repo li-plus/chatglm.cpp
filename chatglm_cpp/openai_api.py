@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO, format=r"%(asctime)s - %(module)s - %(le
 
 
 class Settings(BaseSettings):
-    model: str = "chatglm3-ggml.bin"
+    model: str = "models/chatglm3-ggml.bin"
     num_threads: int = 0
 
 

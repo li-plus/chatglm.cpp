@@ -3,13 +3,13 @@
 export CUDA_VISIBLE_DEVICES=0
 
 # InternLM-7B
-hf_model=internlm/internlm-chat-7b-v1_1
-ggml_model=internlm-chat-7b-ggml.bin
+hf_model=internlm/internlm-chat-7b
+ggml_model=models/internlm-chat-7b-ggml.bin
 benchmark=Benchmark.InternLM7B
 
 # InternLM-20B
 # hf_model=internlm/internlm-chat-20b
-# ggml_model=internlm-chat-20b-ggml.bin
+# ggml_model=models/internlm-chat-20b-ggml.bin
 # benchmark=Benchmark.InternLM20B
 
 for dtype in q4_0 q4_1 q5_0 q5_1 q8_0 f16; do

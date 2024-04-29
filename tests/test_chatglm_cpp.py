@@ -5,15 +5,15 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-CHATGLM_MODEL_PATH = PROJECT_ROOT / "chatglm-ggml.bin"
-CHATGLM2_MODEL_PATH = PROJECT_ROOT / "chatglm2-ggml.bin"
-CHATGLM3_MODEL_PATH = PROJECT_ROOT / "chatglm3-ggml.bin"
-CODEGEEX2_MODEL_PATH = PROJECT_ROOT / "codegeex2-ggml.bin"
-BAICHUAN13B_MODEL_PATH = PROJECT_ROOT / "baichuan-13b-chat-ggml.bin"
-BAICHUAN2_7B_MODEL_PATH = PROJECT_ROOT / "baichuan2-7b-chat-ggml.bin"
-BAICHUAN2_13B_MODEL_PATH = PROJECT_ROOT / "baichuan2-13b-chat-ggml.bin"
-INTERNLM7B_MODEL_PATH = PROJECT_ROOT / "internlm-chat-7b-ggml.bin"
-INTERNLM20B_MODEL_PATH = PROJECT_ROOT / "internlm-chat-20b-ggml.bin"
+CHATGLM_MODEL_PATH = PROJECT_ROOT / "models/chatglm-ggml.bin"
+CHATGLM2_MODEL_PATH = PROJECT_ROOT / "models/chatglm2-ggml.bin"
+CHATGLM3_MODEL_PATH = PROJECT_ROOT / "models/chatglm3-ggml.bin"
+CODEGEEX2_MODEL_PATH = PROJECT_ROOT / "models/codegeex2-ggml.bin"
+BAICHUAN13B_MODEL_PATH = PROJECT_ROOT / "models/baichuan-13b-chat-ggml.bin"
+BAICHUAN2_7B_MODEL_PATH = PROJECT_ROOT / "models/baichuan2-7b-chat-ggml.bin"
+BAICHUAN2_13B_MODEL_PATH = PROJECT_ROOT / "models/baichuan2-13b-chat-ggml.bin"
+INTERNLM7B_MODEL_PATH = PROJECT_ROOT / "models/internlm-chat-7b-ggml.bin"
+INTERNLM20B_MODEL_PATH = PROJECT_ROOT / "models/internlm-chat-20b-ggml.bin"
 
 
 def test_chatglm_version():
@@ -80,12 +80,12 @@ def test_codegeex2_pipeline():
     prompt = "# language: Python\n# write a bubble sort function\n"
     target = """
 
-def bubble_sort(list):
-    for i in range(len(list) - 1):
-        for j in range(len(list) - 1):
-            if list[j] > list[j + 1]:
-                list[j], list[j + 1] = list[j + 1], list[j]
-    return list
+def bubble_sort(lst):
+    for i in range(len(lst) - 1):
+        for j in range(len(lst) - 1 - i):
+            if lst[j] > lst[j + 1]:
+                lst[j], lst[j + 1] = lst[j + 1], lst[j]
+    return lst
 
 
 print(bubble_sort([5, 4, 3, 2, 1]))"""
@@ -131,7 +131,7 @@ def test_baichuan2_13b_pipeline():
 
 @pytest.mark.skipif(not INTERNLM7B_MODEL_PATH.exists(), reason="model file not found")
 def test_internlm7b_pipeline():
-    check_pipeline(model_path=INTERNLM7B_MODEL_PATH, prompt="你好", target="你好，有什么我可以帮助你的吗？")
+    check_pipeline(model_path=INTERNLM7B_MODEL_PATH, prompt="你好", target="你好！有什么我可以帮助你的吗？")
 
 
 @pytest.mark.skipif(not INTERNLM20B_MODEL_PATH.exists(), reason="model file not found")

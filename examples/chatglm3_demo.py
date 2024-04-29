@@ -17,7 +17,7 @@ import streamlit as st
 from PIL import Image
 
 IPYKERNEL = "chatglm3-demo"
-MODEL_PATH = Path(__file__).resolve().parent.parent / "chatglm3-ggml.bin"
+MODEL_PATH = Path(__file__).resolve().parent.parent / "models/chatglm3-ggml.bin"
 
 CHAT_SYSTEM_PROMPT = "You are ChatGLM3, a large language model trained by Zhipu.AI. Follow the user's instructions carefully. Respond using markdown."
 

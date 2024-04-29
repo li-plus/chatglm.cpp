@@ -5,7 +5,7 @@
 #include <iostream>
 
 struct Args {
-    std::string model_path = "chatglm-ggml.bin";
+    std::string model_path = "models/chatglm-ggml.bin";
     std::string corpus_path = "data/wikitext-2-raw/wiki.test.raw";
     int max_length = 1024;
     int stride = 512;

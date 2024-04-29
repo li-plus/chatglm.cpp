@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO, format=r"%(asctime)s - %(module)s - %(le
 
 
 class Settings(BaseSettings):
-    model: str = "chatglm-ggml.bin"
+    model: str = "models/chatglm-ggml.bin"
 
 
 class ChatRequest(BaseModel):
