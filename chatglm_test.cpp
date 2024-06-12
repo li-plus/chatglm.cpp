@@ -1745,6 +1745,11 @@ TEST(Benchmark, ChatGLM2) {
     run_benchmark(model_path);
 }
 
+TEST(Benchmark, ChatGLM4) {
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/chatglm4-ggml.bin";
+    run_benchmark(model_path);
+}
+
 TEST(Benchmark, Baichuan2_7B) {
     fs::path model_path = fs::path(__FILE__).parent_path() / "models/baichuan2-7b-chat-ggml.bin";
     run_benchmark(model_path);

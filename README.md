@@ -6,7 +6,7 @@
 ![Python](https://img.shields.io/pypi/pyversions/chatglm-cpp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [ChatGLM3-6B](https://github.com/THUDM/ChatGLM3) and more LLMs for real-time chatting on your MacBook.
+C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [ChatGLM3](https://github.com/THUDM/ChatGLM3), [GLM-4](https://github.com/THUDM/GLM-4) and more LLMs for real-time chatting on your MacBook.
 
 ![demo](docs/demo.gif)
 
@@ -22,7 +22,7 @@ Highlights:
 Support Matrix:
 * Hardwares: x86/arm CPU, NVIDIA GPU, Apple Silicon GPU
 * Platforms: Linux, MacOS, Windows
-* Models: [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [ChatGLM3-6B](https://github.com/THUDM/ChatGLM3), [CodeGeeX2](https://github.com/THUDM/CodeGeeX2), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan-7B](https://github.com/baichuan-inc/Baichuan-7B), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan2](https://github.com/baichuan-inc/Baichuan2), [InternLM](https://github.com/InternLM/InternLM)
+* Models: [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [ChatGLM3](https://github.com/THUDM/ChatGLM3), [GLM-4](https://github.com/THUDM/GLM-4), [CodeGeeX2](https://github.com/THUDM/CodeGeeX2), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan-7B](https://github.com/baichuan-inc/Baichuan-7B), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan2](https://github.com/baichuan-inc/Baichuan2), [InternLM](https://github.com/InternLM/InternLM)
 
 **NOTE**: Baichuan & InternLM model series are deprecated in favor of [llama.cpp](https://github.com/ggerganov/llama.cpp).
 
@@ -57,6 +57,7 @@ The original model (`-i <model_name_or_path>`) can be a Hugging Face model name 
 * ChatGLM-6B: `THUDM/chatglm-6b`, `THUDM/chatglm-6b-int8`, `THUDM/chatglm-6b-int4`
 * ChatGLM2-6B: `THUDM/chatglm2-6b`, `THUDM/chatglm2-6b-int4`
 * ChatGLM3-6B: `THUDM/chatglm3-6b`
+* ChatGLM4-9B: `THUDM/glm-4-9b-chat`
 * CodeGeeX2: `THUDM/codegeex2-6b`, `THUDM/codegeex2-6b-int4`
 * Baichuan & Baichuan2: `baichuan-inc/Baichuan-13B-Chat`, `baichuan-inc/Baichuan2-7B-Chat`, `baichuan-inc/Baichuan2-13B-Chat`
 
@@ -402,6 +403,15 @@ streamlit run chatglm3_demo.py
 
 </details>
 
+<details open>
+<summary>ChatGLM4-9B</summary>
+
+Chat mode:
+```sh
+python3 cli_demo.py -m ../models/chatglm4-ggml.bin -p 你好 --temp 0.8 --top_p 0.8
+```
+</details>
+
 <details>
 <summary>CodeGeeX2</summary>
 
@@ -619,6 +629,14 @@ ChatGLM2-6B / ChatGLM3-6B / CodeGeeX2:
 | file size                      | 3.3G  | 3.7G  | 4.0G  | 4.4G  | 6.2G  | 12G   |
 | mem usage                      | 3.4G  | 3.8G  | 4.1G  | 4.5G  | 6.2G  | 12G   |
 
+ChatGLM4-9B:
+
+|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
+|--------------------------------|-------|-------|-------|-------|-------|-------|
+| ms/token (CPU @ Platinum 8260) | 105   | 105   | 122   | 134   | 158   | 279   |
+| ms/token (CUDA @ V100 SXM2)    | 12.1  | 12.5  | 13.8  | 13.9  | 17.7  | 27.7  |
+| file size                      | 5.0G  | 5.5G  | 6.1G  | 6.6G  | 9.4G  | 18G   |
+
 Baichuan-7B / Baichuan2-7B:
 
 |                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
@@ -665,8 +683,10 @@ Download and unzip the dataset from [link](https://s3.amazonaws.com/research.met
 |                         | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
 |-------------------------|-------|-------|-------|-------|-------|-------|
 | [ChatGLM3-6B-Base][1]   | 6.215 | 6.184 | 5.997 | 6.015 | 5.965 | 5.971 |
+| [ChatGLM4-9B-Base][2]   | 6.851 | 6.793 | 6.652 | 6.635 | 6.582 | 6.586 |
 
 [1]: https://huggingface.co/THUDM/chatglm3-6b-base
+[2]: https://huggingface.co/THUDM/glm-4-9b
 
 ## Development
 
