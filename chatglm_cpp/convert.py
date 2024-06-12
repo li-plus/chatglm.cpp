@@ -1,5 +1,5 @@
 """
-Convert Hugging Face ChatGLM/ChatGLM2 models to GGML format
+Convert Hugging Face ChatGLM family models to GGML format
 """
 
 import argparse
@@ -15,6 +15,11 @@ import torch.nn.functional as F
 from tabulate import tabulate
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoTokenizer
+
+try:
+    import tiktoken
+except ImportError:
+    tiktoken = None
 
 GGML_QK8_0 = 32
 GGML_QK4_0 = 32
@@ -43,6 +48,7 @@ class ModelType(Enum):
     CHATGLM = 1
     CHATGLM2 = 2
     CHATGLM3 = 3
+    CHATGLM4 = 4
     BAICHUAN7B = 1024
     BAICHUAN13B = 1025
     INTERNLM = 1280
@@ -310,7 +316,7 @@ class ChatGLM2Converter(BaseConverter):
             config.num_layers,
             config.ffn_hidden_size,
             config.layernorm_epsilon,
-            config.pre_seq_len if config.pre_seq_len is not None else 0,
+            config.pre_seq_len if getattr(config, "pre_seq_len", None) is not None else 0,
             10000.0 * getattr(config, "rope_ratio", 1),  # rope_theta
             config.seq_length,
             config.eos_token_id if config.eos_token_id is not None else -1,
@@ -332,7 +338,7 @@ class ChatGLM2Converter(BaseConverter):
         state_dict = model.state_dict()
 
         weight_names = []
-        if config.pre_seq_len is not None and config.pre_seq_len > 0:
+        if getattr(config, "pre_seq_len", None) is not None and config.pre_seq_len > 0:
             past_key_values = get_prefix_cache(
                 model.transformer.prefix_encoder,
                 config.pre_seq_len,
@@ -358,11 +364,27 @@ class ChatGLM2Converter(BaseConverter):
             "transformer.encoder.final_layernorm.weight",
             "transformer.output_layer.weight",
         ]
-        dump_state_dict(f, weight_names, state_dict, config.quantization_bit, ggml_type)
+        dump_state_dict(
+            f,
+            weight_names=weight_names,
+            state_dict=state_dict,
+            quantization_bit=getattr(config, "quantization_bit", None),
+            ggml_type=ggml_type,
+        )
 
 
 class ChatGLM3Converter(ChatGLM2Converter):
     MODEL_TYPE = ModelType.CHATGLM3
+
+
+class ChatGLM4Converter(ChatGLM2Converter):
+    MODEL_TYPE = ModelType.CHATGLM4
+
+    @staticmethod
+    def dump_tokenizer(f, tokenizer):
+        vocab_text = Path(tokenizer.vocab_file).read_bytes()
+        f.write(struct.pack("i", len(vocab_text)))
+        f.write(vocab_text)
 
 
 class BaichuanConverter(BaseConverter):
@@ -526,12 +548,17 @@ def convert(f: BinaryIO, model_name_or_path: str, lora_model_name_or_path: Optio
 
     if model.config.model_type == "chatglm":
         if hasattr(model.config, "multi_query_attention"):
-            # ChatGLM3 shares the same architecture and model config with ChatGLM2, but its tokenizer further supports system prompts,
-            # so we can check system token to discriminate ChatGLM3 from ChatGLM2.
-            if "<|system|>" not in tokenizer.tokenizer.special_tokens:
-                ChatGLM2Converter.convert(f, model, tokenizer, ggml_type)
-            else:
+            # ChatGLM 2,3,4 share the same architecture and model config but their tokenizers are different.
+            # ChatGLM4 uses tiktoken tokenizer, while ChatGLM 2,3 uses sentencepiece.
+            # ChatGLM3 has system token to support system prompt, while ChatGLM2 does not.
+            if tiktoken is not None and isinstance(tokenizer.tokenizer, tiktoken.Encoding):
+                # TODO: store all eos token ids
+                model.config.eos_token_id = tokenizer.eos_token_id
+                ChatGLM4Converter.convert(f, model, tokenizer, ggml_type)
+            elif "<|system|>" in tokenizer.tokenizer.special_tokens:
                 ChatGLM3Converter.convert(f, model, tokenizer, ggml_type)
+            else:
+                ChatGLM2Converter.convert(f, model, tokenizer, ggml_type)
         else:
             ChatGLMConverter.convert(f, model, tokenizer, ggml_type)
     elif model.config.model_type == "baichuan":
