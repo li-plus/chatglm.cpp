@@ -13,8 +13,17 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif ()
 
+option(CHATGLM_ENABLE_EXAMPLES "chatglm: enable c++ examples" ON)
+option(CHATGLM_ENABLE_PYBIND "chatglm: enable python binding" OFF)
+option(CHATGLM_ENABLE_TESTING "chatglm: enable testing" OFF)
+
+if (CHATGLM_ENABLE_PYBIND)
+    set(BUILD_SHARED_LIBS OFF)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif ()
+
 # third-party libraries
-add_compile_definitions(GGML_CUDA_MMV_Y=2)  # for large vocab
+add_compile_definitions(GGML_CUDA_MMV_Y=4)  # for large vocab
 include_directories(third_party/ggml/include/ggml third_party/ggml/src)
 add_subdirectory(third_party/ggml)
 
@@ -41,6 +50,14 @@ if (GGML_CUBLAS)
     set_property(TARGET ggml PROPERTY CUDA_ARCHITECTURES ${CUDA_ARCHITECTURES})
 endif ()
 
+include_directories(third_party/sentencepiece/third_party/protobuf-lite)
+
+set(ABSL_ENABLE_INSTALL ON CACHE BOOL "" FORCE)
+set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+add_subdirectory(third_party/abseil-cpp)
+
+add_subdirectory(third_party/re2)
+
 if (GGML_METAL)
     add_compile_definitions(GGML_USE_METAL)
     configure_file(third_party/ggml/src/ggml-metal.metal ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/ggml-metal.metal COPYONLY)
@@ -59,10 +76,9 @@ file(GLOB CPP_SOURCES
 set_source_files_properties(${CPP_SOURCES} PROPERTIES COMPILE_FLAGS "-pedantic-errors")
 
 add_library(chatglm STATIC chatglm.cpp)
-target_link_libraries(chatglm PUBLIC ggml sentencepiece-static)
+target_link_libraries(chatglm PUBLIC ggml sentencepiece-static re2)
 
 # c++ examples
-option(CHATGLM_ENABLE_EXAMPLES "chatglm: enable c++ examples" ON)
 if (CHATGLM_ENABLE_EXAMPLES)
     add_executable(main main.cpp)
     target_link_libraries(main PRIVATE chatglm)
@@ -76,7 +92,6 @@ if (CHATGLM_ENABLE_EXAMPLES)
 endif ()
 
 # GoogleTest
-option(CHATGLM_ENABLE_TESTING "chatglm: enable testing" OFF)
 if (CHATGLM_ENABLE_TESTING)
     enable_testing()
 
@@ -98,9 +113,7 @@ if (CHATGLM_ENABLE_TESTING)
     gtest_discover_tests(chatglm_test)
 endif ()
 
-option(CHATGLM_ENABLE_PYBIND "chatglm: enable python binding" OFF)
 if (CHATGLM_ENABLE_PYBIND)
-    set_target_properties(chatglm ggml sentencepiece-static PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
     add_subdirectory(third_party/pybind11)
     pybind11_add_module(_C chatglm_pybind.cpp)
     target_link_libraries(_C PRIVATE chatglm)
@@ -119,7 +132,7 @@ add_custom_target(lint
     COMMAND black ${PY_SOURCES} --verbose)
 
 # check all
-add_custom_target(check
+add_custom_target(check-all
     COMMAND cmake --build build -j
     COMMAND ./build/bin/chatglm_test
     COMMAND python3 setup.py develop

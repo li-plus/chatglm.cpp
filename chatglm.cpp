@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <fstream>
 #include <functional>
+#include <google/protobuf/stubs/strutil.h>
 #include <iomanip>
 #include <iostream>
 #include <locale>
@@ -516,6 +517,8 @@ std::string to_string(ModelType model_type) {
         return "ChatGLM2";
     case ModelType::CHATGLM3:
         return "ChatGLM3";
+    case ModelType::CHATGLM4:
+        return "ChatGLM4";
     case ModelType::BAICHUAN7B:
         return "Baichuan7B";
     case ModelType::BAICHUAN13B:
@@ -1006,13 +1009,13 @@ std::vector<int> ChatGLMTokenizer::encode(const std::string &text, int max_lengt
     return ids;
 }
 
-std::vector<int> ChatGLMTokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
-    std::string prompt = build_prompt(messages);
+std::vector<int> ChatGLMTokenizer::apply_chat_template(const std::vector<ChatMessage> &messages, int max_length) const {
+    std::string prompt = apply_chat_template_text(messages);
     std::vector<int> input_ids = encode(prompt, max_length);
     return input_ids;
 }
 
-std::string ChatGLMTokenizer::build_prompt(const std::vector<ChatMessage> &messages) {
+std::string ChatGLMTokenizer::apply_chat_template_text(const std::vector<ChatMessage> &messages) {
     check_chat_messages(messages);
     std::vector<ChatMessage> user_assistant_messages = filter_user_assistant_messages(messages);
 
@@ -1030,7 +1033,8 @@ std::string ChatGLMTokenizer::build_prompt(const std::vector<ChatMessage> &messa
     return oss_prompt.str();
 }
 
-std::string ChatGLMTokenizer::decode(const std::vector<int> &ids) const {
+std::string ChatGLMTokenizer::decode(const std::vector<int> &ids, bool skip_special_tokens) const {
+    CHATGLM_CHECK(skip_special_tokens) << "unimplemented";
     std::string text;
     sp.Decode(ids, &text);
     text = postprocess(text);
@@ -1220,7 +1224,8 @@ std::vector<int> ChatGLM2Tokenizer::encode(const std::string &text, int max_leng
     return ids;
 }
 
-std::string ChatGLM2Tokenizer::decode(const std::vector<int> &ids) const {
+std::string ChatGLM2Tokenizer::decode(const std::vector<int> &ids, bool skip_special_tokens) const {
+    CHATGLM_CHECK(skip_special_tokens) << "unimplemented";
     // filter out special tokens
     std::vector<int> normal_ids(ids);
     normal_ids.erase(std::remove_if(normal_ids.begin(), normal_ids.end(), [this](int id) { return is_special_id(id); }),
@@ -1232,13 +1237,14 @@ std::string ChatGLM2Tokenizer::decode(const std::vector<int> &ids) const {
     return text;
 }
 
-std::vector<int> ChatGLM2Tokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
-    std::string prompt = build_prompt(messages);
+std::vector<int> ChatGLM2Tokenizer::apply_chat_template(const std::vector<ChatMessage> &messages,
+                                                        int max_length) const {
+    std::string prompt = apply_chat_template_text(messages);
     std::vector<int> input_ids = encode(prompt, max_length);
     return input_ids;
 }
 
-std::string ChatGLM2Tokenizer::build_prompt(const std::vector<ChatMessage> &messages) {
+std::string ChatGLM2Tokenizer::apply_chat_template_text(const std::vector<ChatMessage> &messages) {
     check_chat_messages(messages);
     std::vector<ChatMessage> user_assistant_messages = filter_user_assistant_messages(messages);
 
@@ -1379,13 +1385,7 @@ std::vector<int> ChatGLM3Tokenizer::encode(const std::string &text, int max_leng
     return ids;
 }
 
-std::string ChatGLM3Tokenizer::decode(const std::vector<int> &ids) const {
-    std::string text = decode_with_special_tokens(ids);
-    text = remove_special_tokens(text);
-    return text;
-}
-
-std::string ChatGLM3Tokenizer::decode_with_special_tokens(const std::vector<int> &ids) const {
+std::string ChatGLM3Tokenizer::decode(const std::vector<int> &ids, bool skip_special_tokens) const {
     std::vector<std::string> pieces;
     for (int id : ids) {
         auto pos = index_special_tokens.find(id);
@@ -1399,21 +1399,19 @@ std::string ChatGLM3Tokenizer::decode_with_special_tokens(const std::vector<int>
     }
 
     std::string text = sp.DecodePieces(pieces);
+
+    if (skip_special_tokens) {
+        text = remove_special_tokens(text);
+    }
+
     return text;
 }
 
 std::string ChatGLM3Tokenizer::remove_special_tokens(const std::string &text) {
-    std::string output = text;
-    static const std::vector<std::regex> special_token_regex{
-        // std::regex(R"(<\|assistant\|> interpreter)"),
-        // std::regex(R"(<\|assistant\|> interpre)"),
-        std::regex(R"(<\|assistant\|>)"),
-        std::regex(R"(<\|user\|>)"),
-        std::regex(R"(<\|observation\|>)"),
-    };
-    for (const auto &re : special_token_regex) {
-        output = std::regex_replace(output, re, "");
-    }
+    // R"(<\|assistant\|> interpreter)"
+    // R"(<\|assistant\|> interpre)"
+    static const std::regex re(R"(<\|assistant\|>|<\|user\|>|<\|observation\|>)");
+    std::string output = std::regex_replace(text, re, "");
     return output;
 }
 
@@ -1430,7 +1428,8 @@ std::vector<int> ChatGLM3Tokenizer::encode_single_message(const std::string &rol
     return input_ids;
 }
 
-std::vector<int> ChatGLM3Tokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
+std::vector<int> ChatGLM3Tokenizer::apply_chat_template(const std::vector<ChatMessage> &messages,
+                                                        int max_length) const {
     std::vector<int> input_ids{gmask_token_id, sop_token_id};
     for (const auto &msg : messages) {
         auto msg_ids = encode_single_message(msg.role, msg.content);
@@ -1454,7 +1453,7 @@ ChatMessage ChatGLM3Tokenizer::decode_message(const std::vector<int> &ids) const
         std::vector<int> full_ids{assistant_token_id};
         full_ids.insert(full_ids.end(), ids.begin(), ids.end());
 
-        std::string output = decode_with_special_tokens(full_ids);
+        std::string output = decode(full_ids, false);
         const std::string ci_delim = "<|assistant|> interpreter";
         size_t ci_pos = output.find(ci_delim);
         if (ci_pos != std::string::npos) {
@@ -1534,7 +1533,8 @@ std::vector<int> BaichuanTokenizer::encode(const std::string &text, int max_leng
     return ids;
 }
 
-std::string BaichuanTokenizer::decode(const std::vector<int> &ids) const {
+std::string BaichuanTokenizer::decode(const std::vector<int> &ids, bool skip_special_tokens) const {
+    CHATGLM_CHECK(skip_special_tokens) << "unimplemented";
     std::vector<int> normal_ids(ids);
     normal_ids.erase(std::remove_if(normal_ids.begin(), normal_ids.end(), [this](int id) { return is_special_id(id); }),
                      normal_ids.end());
@@ -1544,7 +1544,8 @@ std::string BaichuanTokenizer::decode(const std::vector<int> &ids) const {
     return text;
 }
 
-std::vector<int> BaichuanTokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
+std::vector<int> BaichuanTokenizer::apply_chat_template(const std::vector<ChatMessage> &messages,
+                                                        int max_length) const {
     check_chat_messages(messages);
     std::vector<ChatMessage> user_assistant_messages = filter_user_assistant_messages(messages);
 
@@ -1672,7 +1673,8 @@ std::vector<int> InternLMTokenizer::encode(const std::string &text, int max_leng
     return ids;
 }
 
-std::string InternLMTokenizer::decode(const std::vector<int> &ids) const {
+std::string InternLMTokenizer::decode(const std::vector<int> &ids, bool skip_special_tokens) const {
+    CHATGLM_CHECK(skip_special_tokens) << "unimplemented";
     // filter out special tokens
     std::vector<int> normal_ids(ids);
     normal_ids.erase(std::remove_if(normal_ids.begin(), normal_ids.end(), [this](int id) { return is_special_id(id); }),
@@ -1688,7 +1690,8 @@ std::string InternLMTokenizer::decode(const std::vector<int> &ids) const {
     return text;
 }
 
-std::vector<int> InternLMTokenizer::encode_messages(const std::vector<ChatMessage> &messages, int max_length) const {
+std::vector<int> InternLMTokenizer::apply_chat_template(const std::vector<ChatMessage> &messages,
+                                                        int max_length) const {
     std::string prompt = build_prompt(messages);
     std::vector<int> input_ids = encode(prompt, max_length);
     return input_ids;
@@ -1753,6 +1756,229 @@ StateDict InternLMForCausalLM::state_dict() const {
     sd.emplace_back("model.norm.weight", transformer.final_layernorm.weight);
     sd.emplace_back("lm_head.weight", lm_head.weight);
     return sd;
+}
+
+// ===== ChatGLM4-9B =====
+
+TiktokenCoreBPE::TiktokenCoreBPE(std::unordered_map<std::string, int> encoder,
+                                 std::unordered_map<std::string, int> special_tokens_encoder,
+                                 const std::string &pattern)
+    : regex(std::make_unique<RE2>("(" + pattern + ")")), encoder(std::move(encoder)),
+      special_tokens_encoder(std::move(special_tokens_encoder)) {
+    CHATGLM_CHECK(regex->ok()) << regex->error();
+
+    decoder.reserve(this->encoder.size());
+    for (const auto &[token, rank] : this->encoder) {
+        decoder.emplace(rank, token);
+    }
+
+    special_tokens_decoder.reserve(this->special_tokens_encoder.size());
+    for (const auto &[token, rank] : this->special_tokens_encoder) {
+        special_tokens_decoder.emplace(rank, token);
+    }
+}
+
+std::vector<std::pair<size_t, int>> TiktokenCoreBPE::_byte_pair_merge(const std::unordered_map<std::string, int> &ranks,
+                                                                      const std::string &piece) {
+    using rank_t = int;
+
+    std::vector<std::pair<size_t, rank_t>> parts; // (start, rank)
+    parts.reserve(piece.length() + 1);
+
+    auto min_rank = std::make_pair<rank_t, size_t>(std::numeric_limits<rank_t>::max(),
+                                                   std::numeric_limits<size_t>::max()); // (rank, start)
+
+    for (size_t i = 0; i < piece.length() - 1; i++) {
+        rank_t rank = std::numeric_limits<rank_t>::max();
+        if (auto it = ranks.find(piece.substr(i, 2)); it != ranks.end()) {
+            rank = it->second;
+        }
+        if (rank < min_rank.first) {
+            min_rank = std::make_pair(rank, i);
+        }
+        parts.emplace_back(std::make_pair(i, rank));
+    }
+    parts.emplace_back(std::make_pair(piece.length() - 1, std::numeric_limits<rank_t>::max()));
+    parts.emplace_back(std::make_pair(piece.length(), std::numeric_limits<rank_t>::max()));
+
+    auto get_rank = [&piece, &ranks](const std::vector<std::pair<size_t, rank_t>> &parts, size_t i) {
+        if (i + 3 < parts.size()) {
+            size_t start = parts[i].first;
+            size_t end = parts[i + 3].first;
+            if (auto it = ranks.find(piece.substr(start, end - start)); it != ranks.end()) {
+                return it->second;
+            }
+        }
+        return std::numeric_limits<rank_t>::max();
+    };
+
+    while (min_rank.first != std::numeric_limits<rank_t>::max()) {
+        size_t i = min_rank.second;
+        if (i > 0) {
+            parts[i - 1].second = get_rank(parts, i - 1);
+        }
+        parts[i].second = get_rank(parts, i);
+        parts.erase(parts.begin() + i + 1);
+
+        min_rank = std::make_pair(std::numeric_limits<rank_t>::max(), std::numeric_limits<size_t>::max());
+        for (size_t i = 0; i < parts.size() - 1; i++) {
+            rank_t rank = parts[i].second;
+            if (rank < min_rank.first) {
+                min_rank = std::make_pair(rank, i);
+            }
+        }
+    }
+
+    return parts;
+}
+
+std::vector<int> TiktokenCoreBPE::byte_pair_encode(const std::string &piece,
+                                                   const std::unordered_map<std::string, int> &ranks) {
+    CHATGLM_CHECK(piece.length() > 1);
+
+    auto parts = _byte_pair_merge(ranks, piece);
+
+    std::vector<int> tokens;
+    tokens.reserve(parts.size() - 1);
+
+    for (size_t i = 1; i < parts.size(); i++) {
+        size_t start = parts[i - 1].first;
+        size_t end = parts[i].first;
+        int rank = ranks.at(piece.substr(start, end - start));
+        tokens.emplace_back(rank);
+    }
+
+    return tokens;
+}
+
+std::vector<int> TiktokenCoreBPE::_encode_ordinary_native(const std::string &text) const {
+    std::vector<int> ret;
+    re2::StringPiece input = text;
+    re2::StringPiece prev_input = input;
+    std::string piece;
+    while (RE2::FindAndConsume(&input, *regex, &piece)) {
+        // recover input in case of negative lookahead
+        if (prev_input.find(piece) == 0) {
+            input = prev_input.substr(piece.size());
+            prev_input = input;
+        } else {
+            std::cerr << "[WARN] chatglm.cpp: encounter unknown token\n";
+        }
+
+        if (auto it = encoder.find(piece); it != encoder.end()) {
+            ret.emplace_back(it->second);
+        } else {
+            std::vector<int> bpe_ids = byte_pair_encode(piece, encoder);
+            ret.insert(ret.end(), bpe_ids.begin(), bpe_ids.end());
+        }
+    }
+    return ret;
+}
+
+std::string TiktokenCoreBPE::_decode_native(const std::vector<int> &tokens) const {
+    std::string ret;
+    ret.reserve(tokens.size() * 2);
+    for (int token : tokens) {
+        if (auto it = decoder.find(token); it != decoder.end()) {
+            ret.append(it->second);
+        } else if (auto it = special_tokens_decoder.find(token); it != special_tokens_decoder.end()) {
+            ret.append(it->second);
+        } else {
+            CHATGLM_THROW << "Unknown token " << token;
+        }
+    }
+    return ret;
+}
+
+ChatGLM4Tokenizer::ChatGLM4Tokenizer(const std::string &vocab_text) {
+    std::istringstream in(vocab_text);
+    std::string base64_token;
+    int rank;
+    std::unordered_map<std::string, int> mergeable_ranks;
+    while (in >> base64_token >> rank) {
+        std::string token;
+        CHATGLM_CHECK(google::protobuf::Base64Unescape(base64_token, &token));
+        mergeable_ranks.emplace(std::move(token), rank);
+    }
+    size_t vocab_size = mergeable_ranks.size();
+
+    const std::vector<std::string> all_special_tokens = {"<|endoftext|>",
+                                                         "[MASK]",
+                                                         "[gMASK]",
+                                                         "[sMASK]",
+                                                         "<sop>",
+                                                         "<eop>",
+                                                         "<|system|>",
+                                                         "<|user|>",
+                                                         "<|assistant|>",
+                                                         "<|observation|>",
+                                                         "<|begin_of_image|>",
+                                                         "<|end_of_image|>",
+                                                         "<|begin_of_video|>",
+                                                         "<|end_of_video|>"};
+
+    std::unordered_map<std::string, int> special_tokens_encoder;
+    special_tokens_encoder.reserve(all_special_tokens.size());
+    for (const auto &token : all_special_tokens) {
+        special_tokens_encoder.emplace(token, vocab_size++);
+    }
+    // common special token ids
+    gmask_token_id = special_tokens_encoder.at("[gMASK]");
+    sop_token_id = special_tokens_encoder.at("<sop>");
+    user_token_id = special_tokens_encoder.at("<|user|>");
+    assistant_token_id = special_tokens_encoder.at("<|assistant|>");
+    observation_token_id = special_tokens_encoder.at("<|observation|>");
+
+    const std::string pattern =
+        R"((?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?:$|\s)|\s+)";
+    core_bpe = TiktokenCoreBPE(std::move(mergeable_ranks), std::move(special_tokens_encoder), pattern);
+}
+
+std::vector<int> ChatGLM4Tokenizer::encode(const std::string &text, int max_length) const {
+    std::vector<int> ids = core_bpe.encode_ordinary(text);
+    ids.insert(ids.begin(), {gmask_token_id, sop_token_id}); // special prefix
+    truncate(ids, max_length);
+    return ids;
+}
+
+std::string ChatGLM4Tokenizer::decode(const std::vector<int> &ids, bool skip_special_tokens) const {
+    std::vector<int> valid_ids = ids;
+    if (skip_special_tokens) {
+        valid_ids.erase(std::remove_if(valid_ids.begin(), valid_ids.end(),
+                                       [this](int id) { return core_bpe.special_tokens_decoder.count(id) > 0; }),
+                        valid_ids.end());
+    }
+    return core_bpe.decode(valid_ids);
+}
+
+ChatMessage ChatGLM4Tokenizer::decode_message(const std::vector<int> &ids) const {
+    // TODO: support tool call
+    ChatMessage message = BaseTokenizer::decode_message(ids);
+    trim(message.content); // strip leading linebreak in conversation mode
+    return message;
+}
+
+std::vector<int> ChatGLM4Tokenizer::apply_chat_template(const std::vector<ChatMessage> &messages,
+                                                        int max_length) const {
+    std::vector<int> input_ids{gmask_token_id, sop_token_id};
+    std::vector<int> newline_ids = core_bpe.encode_ordinary("\n");
+    for (const auto &msg : messages) {
+        input_ids.emplace_back(core_bpe.special_tokens_encoder.at("<|" + msg.role + "|>"));
+        input_ids.insert(input_ids.end(), newline_ids.begin(), newline_ids.end());
+        std::vector<int> content_ids = core_bpe.encode_ordinary(msg.content);
+        input_ids.insert(input_ids.end(), content_ids.begin(), content_ids.end());
+    }
+    input_ids.emplace_back(assistant_token_id);
+    truncate(input_ids, max_length);
+    return input_ids;
+}
+
+void ChatGLM4Tokenizer::truncate(std::vector<int> &ids, int max_length) {
+    if ((int)ids.size() > max_length) {
+        // sliding window: drop the least recent history while keeping the two special prefix tokens
+        int num_drop = (int)ids.size() - max_length;
+        ids.erase(ids.begin() + 2, ids.begin() + 2 + num_drop);
+    }
 }
 
 // ===== pipeline =====
@@ -1825,12 +2051,30 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
             model = std::make_unique<ChatGLM2ForCausalLM>(config);
         } else {
             auto chatglm3_tokenizer = std::make_unique<ChatGLM3Tokenizer>(serialized_model_proto);
+            // TODO: read from checkpoint file
             config.extra_eos_token_ids = {chatglm3_tokenizer->observation_token_id, chatglm3_tokenizer->user_token_id};
             tokenizer = std::move(chatglm3_tokenizer);
             model = std::make_unique<ChatGLM3ForCausalLM>(config);
         }
 
         // load model
+        model->load(loader);
+    } else if (model_type == ModelType::CHATGLM4) {
+        // load config
+        CHATGLM_CHECK(version == 2) << "only support version 2 for now but got " << version;
+        ModelConfig config(model_type, loader.read_basic<ConfigRecordV2>(), ActivationType::SILU, true, false, false,
+                           false, RopeType::GPTJ, 2, AttentionMaskType::CAUSAL);
+        _update_config_max_length(config, max_length);
+
+        // load tokenizer
+        int vocab_text_size = loader.read_basic<int>();
+        std::string vocab_text = loader.read_string(vocab_text_size);
+        auto chatglm4_tokenizer = std::make_unique<ChatGLM4Tokenizer>(vocab_text);
+        config.extra_eos_token_ids = {chatglm4_tokenizer->observation_token_id, chatglm4_tokenizer->user_token_id};
+        tokenizer = std::move(chatglm4_tokenizer);
+
+        // load model
+        model = std::make_unique<ChatGLM4ForCausalLM>(config);
         model->load(loader);
     } else if (model_type == ModelType::BAICHUAN7B) {
         std::cerr << "[WARN] Baichuan models are deprecated in favor of llama.cpp, and will be removed in next major "
@@ -1918,7 +2162,7 @@ std::string Pipeline::generate(const std::string &prompt, const GenerationConfig
 
 ChatMessage Pipeline::chat(const std::vector<ChatMessage> &messages, const GenerationConfig &gen_config,
                            BaseStreamer *streamer) const {
-    std::vector<int> input_ids = tokenizer->encode_messages(messages, gen_config.max_context_length);
+    std::vector<int> input_ids = tokenizer->apply_chat_template(messages, gen_config.max_context_length);
     std::vector<int> new_output_ids = generate(input_ids, gen_config, streamer);
     ChatMessage output = tokenizer->decode_message(new_output_ids);
     return output;

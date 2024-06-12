@@ -176,6 +176,18 @@ $$
 
 </details>
 
+<details open>
+<summary>ChatGLM4-9B</summary>
+
+Chat mode:
+```sh
+python3 chatglm_cpp/convert.py -i THUDM/glm-4-9b-chat -t q4_0 -o models/chatglm4-ggml.bin
+./build/bin/main -m models/chatglm4-ggml.bin -p 你好 --top_p 0.8 --temp 0.8
+# 你好👋！有什么可以帮助你的吗？
+```
+
+</details>
+
 <details>
 <summary>CodeGeeX2</summary>
 
@@ -647,7 +659,7 @@ We measure model quality by evaluating the perplexity over the WikiText-2 test d
 
 Download and unzip the dataset from [link](https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-raw-v1.zip). Measure the perplexity with a stride of 512 and max input length of 2048:
 ```sh
-./build/bin/perplexity -m models/chatglm3-ggml.bin -f wikitext-2-raw/wiki.test.raw -s 512 -l 2048
+./build/bin/perplexity -m models/chatglm3-base-ggml.bin -f wikitext-2-raw/wiki.test.raw -s 512 -l 2048
 ```
 
 |                         | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
@@ -687,4 +699,4 @@ This will print timing for each graph operation when running the model.
 ## Acknowledgements
 
 * This project is greatly inspired by [@ggerganov](https://github.com/ggerganov)'s [llama.cpp](https://github.com/ggerganov/llama.cpp) and is based on his NN library [ggml](https://github.com/ggerganov/ggml).
-* Thank [@THUDM](https://github.com/THUDM) for the amazing [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B) and [ChatGLM3-6B](https://github.com/THUDM/ChatGLM3) and for releasing the model sources and checkpoints.
+* Thank [@THUDM](https://github.com/THUDM) for the amazing [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [ChatGLM3](https://github.com/THUDM/ChatGLM3) and [GLM-4](https://github.com/THUDM/GLM-4) and for releasing the model sources and checkpoints.

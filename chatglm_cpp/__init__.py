@@ -6,7 +6,7 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 import chatglm_cpp._C as _C
 from chatglm_cpp._C import ChatMessage
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 
 @dataclass
@@ -62,7 +62,7 @@ class Pipeline(_C.Pipeline):
         stream: bool = False,
     ) -> Union[Iterator[DeltaMessage], ChatMessage]:
         messages = [_ensure_chat_message(msg) for msg in messages]
-        input_ids = self.tokenizer.encode_messages(messages, max_context_length)
+        input_ids = self.tokenizer.apply_chat_template(messages, max_context_length)
         gen_config = _C.GenerationConfig(
             max_length=max_length,
             max_new_tokens=max_new_tokens,
@@ -130,7 +130,11 @@ class Pipeline(_C.Pipeline):
         print_token_len = 0
         for next_token_id in self._stream_generate_ids(input_ids=input_ids, gen_config=gen_config):
             token_cache.append(next_token_id)
-            output = self.tokenizer.decode(token_cache)
+
+            try:
+                output = self.tokenizer.decode(token_cache)
+            except UnicodeDecodeError:
+                continue
 
             if output.endswith("\n"):
                 yield DeltaMessage(
