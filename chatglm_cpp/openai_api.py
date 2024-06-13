@@ -209,7 +209,7 @@ async def create_chat_completion(body: ChatCompletionRequest) -> ChatCompletionR
         temperature=body.temperature,
     )
     logging.info(f'prompt: "{messages[-1].content}", sync response: "{output.content}"')
-    prompt_tokens = len(pipeline.tokenizer.encode_messages(messages, max_context_length))
+    prompt_tokens = len(pipeline.tokenizer.apply_chat_template(messages, max_context_length))
     completion_tokens = len(pipeline.tokenizer.encode(output.content, body.max_tokens))
 
     finish_reason = "stop"
