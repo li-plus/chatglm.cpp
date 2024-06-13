@@ -49,6 +49,7 @@ PYBIND11_MODULE(_C, m) {
         .value("CHATGLM", ModelType::CHATGLM)
         .value("CHATGLM2", ModelType::CHATGLM2)
         .value("CHATGLM3", ModelType::CHATGLM3)
+        .value("CHATGLM4", ModelType::CHATGLM4)
         .value("BAICHUAN7B", ModelType::BAICHUAN7B)
         .value("BAICHUAN13B", ModelType::BAICHUAN13B)
         .value("INTERNLM", ModelType::INTERNLM);
@@ -142,6 +143,10 @@ PYBIND11_MODULE(_C, m) {
     // ===== ChatGLM3 =====
 
     py::class_<ChatGLM3Tokenizer, BaseTokenizer>(m, "ChatGLM3Tokenizer");
+
+    // ===== ChatGLM4 =====
+
+    py::class_<ChatGLM4Tokenizer, BaseTokenizer>(m, "ChatGLM4Tokenizer");
 
     // ===== Baichuan7B/13B =====
 
