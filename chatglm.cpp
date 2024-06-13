@@ -1854,17 +1854,8 @@ std::vector<int> TiktokenCoreBPE::byte_pair_encode(const std::string &piece,
 std::vector<int> TiktokenCoreBPE::_encode_ordinary_native(const std::string &text) const {
     std::vector<int> ret;
     re2::StringPiece input = text;
-    re2::StringPiece prev_input = input;
     std::string piece;
     while (RE2::FindAndConsume(&input, *regex, &piece)) {
-        // recover input in case of negative lookahead
-        if (prev_input.find(piece) == 0) {
-            input = prev_input.substr(piece.size());
-            prev_input = input;
-        } else {
-            std::cerr << "[WARN] chatglm.cpp: encounter unknown token\n";
-        }
-
         if (auto it = encoder.find(piece); it != encoder.end()) {
             ret.emplace_back(it->second);
         } else {

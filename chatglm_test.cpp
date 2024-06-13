@@ -1338,6 +1338,7 @@ TEST(Pipeline, ChatGLM4) {
     Pipeline pipeline(model_path.string());
     ASSERT_TRUE(dynamic_cast<ChatGLM4Tokenizer *>(pipeline.tokenizer.get()));
     ASSERT_TRUE(dynamic_cast<ChatGLM4ForCausalLM *>(pipeline.model.get()));
+    auto tokenizer = dynamic_cast<ChatGLM4Tokenizer *>(pipeline.tokenizer.get());
 
     // const std::string system_tool_call =
     //     read_text(fs::path(__FILE__).parent_path() / "examples/system/function_call.txt");
@@ -1346,8 +1347,6 @@ TEST(Pipeline, ChatGLM4) {
 
     // tiktoken
     {
-        auto tokenizer = dynamic_cast<ChatGLM4Tokenizer *>(pipeline.tokenizer.get());
-
         // taken from:
         // https://github.com/ggerganov/llama.cpp/blob/4bfe50f741479c1df1c377260c3ff5702586719e/convert-hf-to-gguf.py#L413
         const std::string chktxt =
@@ -1372,7 +1371,30 @@ TEST(Pipeline, ChatGLM4) {
             498,    2704,   30,    364,    44,     537,   2704,   358,    3278,  1281,   432,    11,    364,    35,
             498,    1075,   1045,  15231,  30,     1205,  6,      42368,  264,   63409,  43};
 
-        std::vector<int> out_ids = tokenizer->core_bpe.encode_ordinary(chktxt);
+        const std::vector<int> out_ids = tokenizer->core_bpe.encode_ordinary(chktxt);
+        EXPECT_EQ(ref_ids, out_ids);
+    }
+    if (false) {
+        const std::string text = R"(
+```c++
+#include <iostream>
+
+int main() {
+    printf("hello world\n");    // say hello
+}
+```
+
+```python
+if __name__ == '__main__':
+    print('hello world')        # say hello
+```
+)";
+        const std::vector<int> ref_ids = {198,   73022, 66,    22879, 1067,  366,   9661,  1339, 396,   1887, 368,
+                                          341,   262,   4100,  445,   14978, 1879,  1699,  5038, 262,   442,  1977,
+                                          23745, 198,   532,   13865, 19288, 73022, 12663, 198,  333,   1304, 606,
+                                          563,   621,   12106, 3817,  16165, 262,   1173,  492,  14978, 1879, 863,
+                                          286,   671,   1977,  23745, 198,   13865, 3989};
+        const std::vector<int> out_ids = tokenizer->core_bpe.encode_ordinary(text);
         EXPECT_EQ(ref_ids, out_ids);
     }
     // tokenizer
