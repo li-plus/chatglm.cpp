@@ -3,7 +3,7 @@ ChatGLM.cpp python binding
 """
 from __future__ import annotations
 import typing
-__all__ = ['Baichuan13BForCausalLM', 'Baichuan7BForCausalLM', 'BaichuanTokenizer', 'BaseModelForCausalLM', 'BaseTokenizer', 'ChatGLM2ForCausalLM', 'ChatGLM2Tokenizer', 'ChatGLM3Tokenizer', 'ChatGLMForCausalLM', 'ChatGLMTokenizer', 'ChatMessage', 'CodeMessage', 'FunctionMessage', 'GenerationConfig', 'InternLMForCausalLM', 'InternLMTokenizer', 'ModelConfig', 'ModelType', 'Pipeline', 'ToolCallMessage']
+__all__ = ['Baichuan13BForCausalLM', 'Baichuan7BForCausalLM', 'BaichuanTokenizer', 'BaseModelForCausalLM', 'BaseTokenizer', 'ChatGLM2ForCausalLM', 'ChatGLM2Tokenizer', 'ChatGLM3Tokenizer', 'ChatGLM4Tokenizer', 'ChatGLMForCausalLM', 'ChatGLMTokenizer', 'ChatMessage', 'CodeMessage', 'FunctionMessage', 'GenerationConfig', 'InternLMForCausalLM', 'InternLMTokenizer', 'ModelConfig', 'ModelType', 'Pipeline', 'ToolCallMessage']
 class Baichuan13BForCausalLM(BaseModelForCausalLM):
     pass
 class Baichuan7BForCausalLM(BaseModelForCausalLM):
@@ -30,6 +30,8 @@ class ChatGLM2ForCausalLM(BaseModelForCausalLM):
 class ChatGLM2Tokenizer(BaseTokenizer):
     pass
 class ChatGLM3Tokenizer(BaseTokenizer):
+    pass
+class ChatGLM4Tokenizer(BaseTokenizer):
     pass
 class ChatGLMForCausalLM(BaseModelForCausalLM):
     pass
@@ -134,6 +136,8 @@ class ModelType:
     
       CHATGLM3
     
+      CHATGLM4
+    
       BAICHUAN7B
     
       BAICHUAN13B
@@ -145,8 +149,9 @@ class ModelType:
     CHATGLM: typing.ClassVar[ModelType]  # value = <ModelType.CHATGLM: 1>
     CHATGLM2: typing.ClassVar[ModelType]  # value = <ModelType.CHATGLM2: 2>
     CHATGLM3: typing.ClassVar[ModelType]  # value = <ModelType.CHATGLM3: 3>
+    CHATGLM4: typing.ClassVar[ModelType]  # value = <ModelType.CHATGLM4: 4>
     INTERNLM: typing.ClassVar[ModelType]  # value = <ModelType.INTERNLM: 1280>
-    __members__: typing.ClassVar[dict[str, ModelType]]  # value = {'CHATGLM': <ModelType.CHATGLM: 1>, 'CHATGLM2': <ModelType.CHATGLM2: 2>, 'CHATGLM3': <ModelType.CHATGLM3: 3>, 'BAICHUAN7B': <ModelType.BAICHUAN7B: 1024>, 'BAICHUAN13B': <ModelType.BAICHUAN13B: 1025>, 'INTERNLM': <ModelType.INTERNLM: 1280>}
+    __members__: typing.ClassVar[dict[str, ModelType]]  # value = {'CHATGLM': <ModelType.CHATGLM: 1>, 'CHATGLM2': <ModelType.CHATGLM2: 2>, 'CHATGLM3': <ModelType.CHATGLM3: 3>, 'CHATGLM4': <ModelType.CHATGLM4: 4>, 'BAICHUAN7B': <ModelType.BAICHUAN7B: 1024>, 'BAICHUAN13B': <ModelType.BAICHUAN13B: 1025>, 'INTERNLM': <ModelType.INTERNLM: 1280>}
     def __eq__(self, other: typing.Any) -> bool:
         ...
     def __getstate__(self) -> int:
