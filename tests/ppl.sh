@@ -10,14 +10,6 @@ ggml_model=models/chatglm3-base-ggml.bin
 hf_model=THUDM/glm-4-9b
 ggml_model=models/chatglm4-base-ggml.bin
 
-# Baichuan2-7B-Base
-# hf_model=baichuan-inc/Baichuan2-7B-Base
-# ggml_model=models/baichuan2-7b-base-ggml.bin
-
-# InternLM
-# hf_model=internlm/internlm-7b
-# ggml_model=models/internlm-7b-base-ggml.bin
-
 for dtype in f16 q8_0 q5_1 q5_0 q4_1 q4_0; do
     python3 chatglm_cpp/convert.py -i $hf_model -o $ggml_model -t $dtype
     echo "[perplexity] dtype=$dtype"

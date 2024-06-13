@@ -8,6 +8,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin CACHE STRING "")
 set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -Wall")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Wno-expansion-to-defined")   # suppress ggml warnings
 
 if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
@@ -24,17 +25,8 @@ if (CHATGLM_ENABLE_PYBIND)
 endif ()
 
 # third-party libraries
-add_compile_definitions(GGML_CUDA_MMV_Y=4)  # for large vocab
-include_directories(third_party/ggml/include/ggml third_party/ggml/src)
-add_subdirectory(third_party/ggml)
-
-set(SPM_ENABLE_SHARED OFF CACHE BOOL "chatglm: disable sentencepiece shared libraries by default")
-set(SPM_ENABLE_TCMALLOC OFF CACHE BOOL "chatglm: disable tcmalloc by default")
-include_directories(third_party/sentencepiece/src)
-add_subdirectory(third_party/sentencepiece)
-
-if (GGML_CUBLAS)
-    add_compile_definitions(GGML_USE_CUBLAS)
+if (GGML_CUDA)
+    add_compile_definitions(GGML_USE_CUDA)
     enable_language(CUDA)
     # ref: https://stackoverflow.com/questions/28932864/which-compute-capability-is-supported-by-which-cuda-versions
     set(CUDA_ARCH_LIST "52;61;70;75")
@@ -47,9 +39,16 @@ if (GGML_CUBLAS)
     if (CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL "11.8")
         set(CUDA_ARCH_LIST "${CUDA_ARCH_LIST};89;90")
     endif ()
-    set(CUDA_ARCHITECTURES ${CUDA_ARCH_LIST} CACHE STRING "chatglm: cuda architectures to compile")
-    set_property(TARGET ggml PROPERTY CUDA_ARCHITECTURES ${CUDA_ARCHITECTURES})
+    set(GGML_CUDA_ARCHITECTURES ${CUDA_ARCH_LIST} CACHE STRING "chatglm: cuda architectures to compile")
 endif ()
+
+include_directories(third_party/ggml/include/ggml third_party/ggml/src)
+add_subdirectory(third_party/ggml)
+
+set(SPM_ENABLE_SHARED OFF CACHE BOOL "chatglm: disable sentencepiece shared libraries by default")
+set(SPM_ENABLE_TCMALLOC OFF CACHE BOOL "chatglm: disable tcmalloc by default")
+include_directories(third_party/sentencepiece/src)
+add_subdirectory(third_party/sentencepiece)
 
 include_directories(third_party/sentencepiece/third_party/protobuf-lite)
 
@@ -72,7 +71,8 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 file(GLOB CPP_SOURCES
     ${PROJECT_SOURCE_DIR}/*.h
-    ${PROJECT_SOURCE_DIR}/*.cpp)
+    ${PROJECT_SOURCE_DIR}/*.cpp
+    ${PROJECT_SOURCE_DIR}/tests/*.cpp)
 
 set_source_files_properties(${CPP_SOURCES} PROPERTIES COMPILE_FLAGS "-pedantic-errors")
 

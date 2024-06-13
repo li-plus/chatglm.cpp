@@ -6,7 +6,7 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 import chatglm_cpp._C as _C
 from chatglm_cpp._C import ChatMessage
 
-__version__ = "0.3.4"
+__version__ = "0.4.0"
 
 
 @dataclass
@@ -58,7 +58,6 @@ class Pipeline(_C.Pipeline):
         top_p: float = 0.7,
         temperature: float = 0.95,
         repetition_penalty: float = 1.0,
-        num_threads: int = 0,
         stream: bool = False,
     ) -> Union[Iterator[DeltaMessage], ChatMessage]:
         messages = [_ensure_chat_message(msg) for msg in messages]
@@ -72,7 +71,6 @@ class Pipeline(_C.Pipeline):
             top_p=top_p,
             temperature=temperature,
             repetition_penalty=repetition_penalty,
-            num_threads=num_threads,
         )
         if stream:
             return self._stream_chat(input_ids=input_ids, gen_config=gen_config)
@@ -90,7 +88,6 @@ class Pipeline(_C.Pipeline):
         top_p: float = 0.7,
         temperature: float = 0.95,
         repetition_penalty: float = 1.0,
-        num_threads: int = 0,
         stream: bool = False,
     ) -> Union[Iterator[str], str]:
         input_ids = self.tokenizer.encode(prompt, max_context_length)
@@ -103,7 +100,6 @@ class Pipeline(_C.Pipeline):
             top_p=top_p,
             temperature=temperature,
             repetition_penalty=repetition_penalty,
-            num_threads=num_threads,
         )
         if stream:
             return self._stream_generate(input_ids=input_ids, gen_config=gen_config)

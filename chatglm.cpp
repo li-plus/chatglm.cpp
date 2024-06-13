@@ -38,7 +38,7 @@
 #include <windows.h>
 #endif
 
-#ifdef GGML_USE_CUBLAS
+#ifdef GGML_USE_CUDA
 #include <ggml-cuda.h>
 #endif
 
@@ -47,7 +47,7 @@ namespace chatglm {
 static std::string shape_to_string(ggml_tensor *tensor) {
     std::ostringstream oss;
     oss << '[';
-    for (int i = tensor->n_dims - 1; i >= 0; i--) {
+    for (int i = ggml_n_dims(tensor) - 1; i >= 0; i--) {
         oss << tensor->ne[i] << (i > 0 ? ", " : "");
     }
     oss << ']';
@@ -57,7 +57,7 @@ static std::string shape_to_string(ggml_tensor *tensor) {
 static std::string strides_to_string(ggml_tensor *tensor) {
     std::ostringstream oss;
     oss << '[';
-    for (int i = tensor->n_dims - 1; i >= 0; i--) {
+    for (int i = ggml_n_dims(tensor) - 1; i >= 0; i--) {
         oss << tensor->nb[i] << (i > 0 ? ", " : "");
     }
     oss << ']';
@@ -65,23 +65,26 @@ static std::string strides_to_string(ggml_tensor *tensor) {
 }
 
 std::string to_string(ggml_tensor *tensor, bool with_data) {
+    std::vector<no_init<char>> buf(ggml_nbytes(tensor));
+    ggml_backend_tensor_get(tensor, buf.data(), 0, buf.size());
+
     std::ostringstream oss;
     oss << "ggml_tensor(";
 
     if (with_data) {
-        if (tensor->n_dims > 3)
+        if (ggml_n_dims(tensor) > 3)
             oss << "[";
         for (int i3 = 0; i3 < tensor->ne[3]; i3++) {
-            if (tensor->n_dims > 2)
+            if (ggml_n_dims(tensor) > 2)
                 oss << (i3 > 0 ? ",\n\n[" : "[");
             for (int i2 = 0; i2 < tensor->ne[2]; i2++) {
-                if (tensor->n_dims > 1)
+                if (ggml_n_dims(tensor) > 1)
                     oss << (i2 > 0 ? ",\n\n[" : "[");
                 for (int i1 = 0; i1 < tensor->ne[1]; i1++) {
                     oss << (i1 > 0 ? ",\n[" : "[");
                     for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
-                        auto ptr = (char *)tensor->data + i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] +
-                                   i0 * tensor->nb[0];
+                        char *ptr = (char *)buf.data() + i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] +
+                                    i0 * tensor->nb[0];
                         oss << (i0 > 0 ? ", " : "");
                         if (tensor->type == GGML_TYPE_I32) {
                             oss << *(int *)ptr;
@@ -99,46 +102,19 @@ std::string to_string(ggml_tensor *tensor, bool with_data) {
                     }
                     oss << "]";
                 }
-                if (tensor->n_dims > 1)
+                if (ggml_n_dims(tensor) > 1)
                     oss << "]";
             }
-            if (tensor->n_dims > 2)
+            if (ggml_n_dims(tensor) > 2)
                 oss << "]";
         }
-        if (tensor->n_dims > 3)
+        if (ggml_n_dims(tensor) > 3)
             oss << "]";
         oss << ", ";
     }
 
     oss << "shape=" << shape_to_string(tensor) << ", stride=" << strides_to_string(tensor) << ")";
     return oss.str();
-}
-
-ggml_tensor *tensor_assign_buffers(ggml_tensor *tensor) {
-#ifdef GGML_USE_CUBLAS
-    ggml_cuda_assign_buffers(tensor);
-#endif
-    return tensor;
-}
-
-ggml_tensor *tensor_to_device(ggml_tensor *tensor) {
-#ifdef GGML_USE_CUBLAS
-    if (tensor->backend == GGML_BACKEND_CPU) {
-        tensor->backend = GGML_BACKEND_GPU;
-        ggml_cuda_transform_tensor(tensor->data, tensor);
-    }
-#endif
-    return tensor;
-}
-
-ggml_tensor *tensor_to_cpu(ggml_tensor *tensor) {
-#ifdef GGML_USE_CUBLAS
-    if (tensor->backend != GGML_BACKEND_CPU) {
-        ggml_cuda_free_data(tensor);
-        tensor->backend = GGML_BACKEND_CPU;
-    }
-#endif
-    return tensor;
 }
 
 const std::string ToolCallMessage::TYPE_FUNCTION = "function";
@@ -174,47 +150,34 @@ std::vector<ChatMessage> BaseTokenizer::filter_user_assistant_messages(const std
     return user_assistant_messages;
 }
 
-// Adapted from https://github.com/ggerganov/llama.cpp/blob/master/llama.cpp
-void ggml_graph_compute_helper(std::vector<uninitialized_char> &buf, ggml_cgraph *graph, int n_threads) {
-    struct ggml_cplan plan = ggml_graph_plan(graph, n_threads);
-
-    if (plan.work_size > 0) {
-        buf.resize(plan.work_size);
-        plan.work_data = (uint8_t *)buf.data();
-    }
-
-    ggml_graph_compute(graph, &plan);
-}
-
 // for debugging purpose
 [[maybe_unused]] static inline ggml_tensor *add_zero(ggml_context *ctx, ggml_tensor *tensor) {
-    ggml_tensor *zeros = ggml_new_tensor(ctx, GGML_TYPE_F32, tensor->n_dims, tensor->ne);
+    ggml_tensor *zeros = ggml_new_tensor(ctx, GGML_TYPE_F32, ggml_n_dims(tensor), tensor->ne);
     ggml_set_f32(zeros, 0);
-    tensor_to_device(zeros);
-    ggml_tensor *out = tensor_assign_buffers(ggml_add(ctx, tensor, zeros));
+    ggml_tensor *out = ggml_add(ctx, tensor, zeros);
     return out;
 }
 
-void ModelContext::init_device_context() {
-#ifdef GGML_USE_METAL
-    ctx_metal = make_unique_ggml_metal_context(1);
+// void ModelContext::init_device_context() {
+// #ifdef GGML_USE_METAL
+//     ctx_metal = make_unique_ggml_metal_context(1);
 
-    const size_t max_size = ggml_get_max_tensor_size(ctx_w.get());
+//     const size_t max_size = ggml_get_max_tensor_size(ctx_w.get());
 
-    void *weight_data = weight_buffer.empty() ? ggml_get_mem_buffer(ctx_w.get()) : (void *)weight_buffer.data();
-    size_t weight_size = weight_buffer.empty() ? ggml_get_mem_size(ctx_w.get()) : weight_buffer.size();
-    CHATGLM_CHECK(ggml_metal_add_buffer(ctx_metal.get(), "weights", weight_data, weight_size, max_size));
+//     void *weight_data = weight_buffer.empty() ? ggml_get_mem_buffer(ctx_w.get()) : (void *)weight_buffer.data();
+//     size_t weight_size = weight_buffer.empty() ? ggml_get_mem_size(ctx_w.get()) : weight_buffer.size();
+//     CHATGLM_CHECK(ggml_metal_add_buffer(ctx_metal.get(), "weights", weight_data, weight_size, max_size));
 
-    CHATGLM_CHECK(ggml_metal_add_buffer(ctx_metal.get(), "kv", ggml_get_mem_buffer(ctx_kv.get()),
-                                        ggml_get_mem_size(ctx_kv.get()), 0));
+//     CHATGLM_CHECK(ggml_metal_add_buffer(ctx_metal.get(), "kv", ggml_get_mem_buffer(ctx_kv.get()),
+//                                         ggml_get_mem_size(ctx_kv.get()), 0));
 
-    void *compute_data = ctx_b ? ggml_get_mem_buffer(ctx_b.get()) : compute_buffer.data();
-    size_t compute_size = ctx_b ? ggml_get_mem_size(ctx_b.get()) : compute_buffer.size();
-    CHATGLM_CHECK(ggml_metal_add_buffer(ctx_metal.get(), "compute", compute_data, compute_size, 0));
+//     void *compute_data = ctx_b ? ggml_get_mem_buffer(ctx_b.get()) : compute_meta.data();
+//     size_t compute_size = ctx_b ? ggml_get_mem_size(ctx_b.get()) : compute_meta.size();
+//     CHATGLM_CHECK(ggml_metal_add_buffer(ctx_metal.get(), "compute", compute_data, compute_size, 0));
 
-    CHATGLM_CHECK(ggml_metal_add_buffer(ctx_metal.get(), "scratch", scratch.data, scratch.size, 0));
-#endif
-}
+//     CHATGLM_CHECK(ggml_metal_add_buffer(ctx_metal.get(), "scratch", scratch.data, scratch.size, 0));
+// #endif
+// }
 
 // ===== streamer =====
 
@@ -387,125 +350,154 @@ std::string ModelLoader::read_string(size_t length) {
     return s;
 }
 
-void ModelLoader::checked_read_tensor_meta(const std::string &name, int target_ndim, int64_t *target_ne,
-                                           ggml_type target_dtype) {
-    // read and check tensor name
-    {
+StateDict ModelLoader::read_state_dict() {
+    StateDict sd;
+    sd.ctx = make_unique_ggml_context(GGML_DEFAULT_GRAPH_SIZE * ggml_tensor_overhead(), nullptr, true);
+    sd.buf = unique_ggml_backend_buffer_t(ggml_backend_cpu_buffer_from_ptr(data, size));
+
+    // assume state dict is stored at the back of file
+    while (tell() < (int64_t)size) {
+        // tensor name
         int name_size = read_basic<int>();
-        CHATGLM_CHECK(name_size == (int)name.size())
-            << "tensor " << name << " name size mismatch: expect " << name.size() << " but got " << name_size;
         std::string weight_name = read_string(name_size);
-        CHATGLM_CHECK(weight_name == name) << "tensor name mismatch: expect " << name << " but got " << weight_name;
-    }
 
-    // read and check tensor shape
-    {
+        // tensor shape
+        int64_t ne[4]{1, 1, 1, 1};
         int ndim = read_basic<int>();
-        CHATGLM_CHECK(ndim == target_ndim)
-            << "tensor " << name << " ndim mismatch: expect " << target_ndim << " but got " << ndim;
+        CHATGLM_CHECK(0 < ndim && ndim <= 4);
         for (int i = ndim - 1; i >= 0; i--) {
-            int dim_size = read_basic<int>();
-            CHATGLM_CHECK(dim_size == target_ne[i]) << "tensor " << name << " shape mismatch at dim " << i
-                                                    << ": expect " << target_ne[i] << " but got " << dim_size;
+            ne[i] = read_basic<int>();
         }
-    }
 
-    // read and check tensor dtype
-    {
+        // tensor dtype
         ggml_type dtype = (ggml_type)read_basic<int>();
-        CHATGLM_CHECK(dtype == target_dtype)
-            << "tensor " << name << " dtype mismatch: expect " << target_dtype << " but got " << dtype;
+
+        // tensor data
+        ggml_tensor *tensor = ggml_new_tensor(sd.ctx.get(), dtype, ndim, ne);
+        constexpr int64_t MEM_ALIGNED = 16;
+        const int64_t data_offset = (tell() + (MEM_ALIGNED - 1)) & ~(MEM_ALIGNED - 1);
+        ggml_backend_tensor_alloc(sd.buf.get(), tensor, data + data_offset);
+        // tensor->data = data + data_offset;
+        seek(data_offset + ggml_nbytes(tensor), SEEK_SET);
+
+        // add to state dict
+        sd.kv.emplace(weight_name, tensor);
     }
+    return sd;
 }
 
-void *ModelLoader::read_tensor_data(size_t nbytes) {
-    constexpr int64_t MEM_ALIGNED = 16;
-    const int64_t data_offset = (tell() + (MEM_ALIGNED - 1)) & ~(MEM_ALIGNED - 1);
-    void *tensor_data = data + data_offset;
-    seek(data_offset + nbytes, SEEK_SET);
-    return tensor_data;
-}
+ModelContext::ModelContext(ggml_type dtype)
+    : dtype(dtype), compute_meta(ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead()),
+      ctx_w(make_unique_ggml_context(ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE, nullptr, true)),
+      ctx_kv(make_unique_ggml_context(ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE, nullptr, true)),
+      ctx_b(make_unique_ggml_context(compute_meta.size(), compute_meta.data(), true)), gf(ggml_new_graph(ctx_b.get())) {
 
-void ModelLoader::read_tensor(const std::string &name, ggml_tensor *tensor) {
-    checked_read_tensor_meta(name, tensor->n_dims, tensor->ne, tensor->type);
-    tensor->data = read_tensor_data(ggml_nbytes(tensor));
+#if defined(GGML_USE_CUDA)
+    backend = unique_ggml_backend_t(ggml_backend_cuda_init(0));
+#elif defined(GGML_USE_METAL)
+    backend = unique_ggml_backend_t(ggml_backend_metal_init());
+#else
+    backend = unique_ggml_backend_t(ggml_backend_cpu_init());
+#endif
+    CHATGLM_CHECK(backend) << "failed to initialize ggml backend";
+
+    allocr = unique_ggml_gallocr_t(ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend.get())));
 }
 
 // ===== modules =====
 
-ggml_tensor *Embedding::forward(ModelContext *ctx, ggml_tensor *input) const {
-    ggml_tensor *output = ggml_get_rows(ctx->ctx_b.get(), weight, input);
+ggml_tensor *Embedding::forward(ModelContext *mctx, ggml_tensor *input) const {
+    ggml_tensor *output = ggml_get_rows(mctx->ctx_b.get(), weight, input);
     return output;
 }
 
-ggml_tensor *Linear::forward(ModelContext *ctx, ggml_tensor *input) const {
+ggml_tensor *Linear::forward(ModelContext *mctx, ggml_tensor *input) const {
     // input: [seqlen, in_features]
-    ggml_context *gctx = ctx->ctx_b.get();
-    ggml_tensor *output = tensor_assign_buffers(ggml_mul_mat(gctx, weight, input)); // [seqlen, out_features]
+    ggml_context *ctx = mctx->ctx_b.get();
+    ggml_tensor *output = ggml_mul_mat(ctx, weight, input); // [seqlen, out_features]
     if (bias) {
-        output = tensor_assign_buffers(ggml_add_inplace(gctx, output, bias));
+        output = ggml_add_inplace(ctx, output, bias);
     }
     return output;
 }
 
-ggml_tensor *LayerNorm::forward(ModelContext *ctx, ggml_tensor *input) const {
+ggml_tensor *LayerNorm::forward(ModelContext *mctx, ggml_tensor *input) const {
     // input: [seqlen, normalized_shape]
-    ggml_context *gctx = ctx->ctx_b.get();
+    ggml_context *ctx = mctx->ctx_b.get();
     auto ggml_norm_fn = inplace ? ggml_norm_inplace : ggml_norm;
-    ggml_tensor *output = tensor_assign_buffers(ggml_norm_fn(gctx, input, eps));
-    output = tensor_assign_buffers(ggml_mul_inplace(gctx, output, weight));
-    output = tensor_assign_buffers(ggml_add_inplace(gctx, output, bias));
+    ggml_tensor *output = ggml_norm_fn(ctx, input, eps);
+    output = ggml_mul_inplace(ctx, output, weight);
+    output = ggml_add_inplace(ctx, output, bias);
     return output;
 }
 
-ggml_tensor *RMSNorm::forward(ModelContext *ctx, ggml_tensor *input) const {
-    ggml_context *gctx = ctx->ctx_b.get();
+ggml_tensor *RMSNorm::forward(ModelContext *mctx, ggml_tensor *input) const {
+    ggml_context *ctx = mctx->ctx_b.get();
     auto ggml_rms_norm_fn = inplace ? ggml_rms_norm_inplace : ggml_rms_norm;
-    ggml_tensor *output = tensor_assign_buffers(ggml_rms_norm_fn(gctx, input, eps));
-    output = tensor_assign_buffers(ggml_mul_inplace(gctx, output, weight));
+    ggml_tensor *output = ggml_rms_norm_fn(ctx, input, eps);
+    output = ggml_mul_inplace(ctx, output, weight);
     return output;
 }
 
 static ggml_tensor *apply_activation_inplace(ggml_context *ctx, ggml_tensor *hidden_states, ActivationType hidden_act) {
     switch (hidden_act) {
     case ActivationType::GELU:
-        return tensor_assign_buffers(ggml_gelu_inplace(ctx, hidden_states));
+        return ggml_gelu_inplace(ctx, hidden_states);
     case ActivationType::SILU:
-        return tensor_assign_buffers(ggml_silu_inplace(ctx, hidden_states));
+        return ggml_silu_inplace(ctx, hidden_states);
     default:
         CHATGLM_THROW << "Unknown activation type " << (int)hidden_act;
     }
 }
 
-ggml_tensor *BasicMLP::forward(ModelContext *ctx, ggml_tensor *hidden_states) const {
-    ggml_context *gctx = ctx->ctx_b.get();
-    hidden_states = dense_h_to_4h.forward(ctx, hidden_states);
-    hidden_states = apply_activation_inplace(gctx, hidden_states, hidden_act);
-    hidden_states = dense_4h_to_h.forward(ctx, hidden_states);
+ggml_tensor *BasicMLP::forward(ModelContext *mctx, ggml_tensor *hidden_states) const {
+    ggml_context *ctx = mctx->ctx_b.get();
+    hidden_states = dense_h_to_4h.forward(mctx, hidden_states);
+    hidden_states = apply_activation_inplace(ctx, hidden_states, hidden_act);
+    hidden_states = dense_4h_to_h.forward(mctx, hidden_states);
     return hidden_states;
 }
 
-ggml_tensor *BasicGLU::forward(ModelContext *ctx, ggml_tensor *hidden_states) const {
-    ggml_context *gctx = ctx->ctx_b.get();
-    ggml_tensor *gate = gate_proj.forward(ctx, hidden_states);
-    gate = apply_activation_inplace(gctx, gate, hidden_act);
-    hidden_states = up_proj.forward(ctx, hidden_states);
-    hidden_states = tensor_assign_buffers(ggml_mul_inplace(gctx, hidden_states, gate));
-    hidden_states = down_proj.forward(ctx, hidden_states);
+ggml_tensor *BasicGLU::forward(ModelContext *mctx, ggml_tensor *hidden_states) const {
+    ggml_context *ctx = mctx->ctx_b.get();
+    ggml_tensor *gate = gate_proj.forward(mctx, hidden_states);
+    gate = apply_activation_inplace(ctx, gate, hidden_act);
+    hidden_states = up_proj.forward(mctx, hidden_states);
+    hidden_states = ggml_mul_inplace(ctx, hidden_states, gate);
+    hidden_states = down_proj.forward(mctx, hidden_states);
     return hidden_states;
 }
 
-// Adapted from https://github.com/ggerganov/llama.cpp/blob/master/examples/common.cpp
-int get_num_physical_cores() {
+// Adapted from https://github.com/ggerganov/llama.cpp/blob/master/common/common.cpp
+static int get_num_physical_cores() {
     unsigned int n_threads = std::thread::hardware_concurrency();
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
 }
 
-int get_default_num_threads() {
-#if defined(GGML_USE_CUBLAS) || defined(GGML_USE_METAL)
-    return 1;
-#else
-    return std::min(get_num_physical_cores(), 16);
+static void set_default_num_threads(ggml_backend_t backend, int num_tokens) {
+    int n_threads = 1;
+    if (ggml_backend_is_cpu(backend)) {
+        if (num_tokens > 1) {
+            // context
+            n_threads = get_num_physical_cores();
+        } else {
+            // decode
+            n_threads = std::min(get_num_physical_cores(), 16);
+        }
+    }
+    if (num_tokens >= 32 && ggml_cpu_has_blas() && !ggml_cpu_has_gpublas()) {
+        // BLAS is enabled
+        n_threads = std::min(4, n_threads);
+    }
+
+    if (ggml_backend_is_cpu(backend)) {
+        ggml_backend_cpu_set_n_threads(backend, n_threads);
+    }
+
+#ifdef GGML_USE_METAL
+    if (ggml_backend_is_metal(backend)) {
+        ggml_backend_metal_set_n_cb(backend, n_threads);
+    }
 #endif
 }
 
@@ -519,110 +511,102 @@ std::string to_string(ModelType model_type) {
         return "ChatGLM3";
     case ModelType::CHATGLM4:
         return "ChatGLM4";
-    case ModelType::BAICHUAN7B:
-        return "Baichuan7B";
-    case ModelType::BAICHUAN13B:
-        return "Baichuan13B";
-    case ModelType::INTERNLM:
-        return "InternLM";
     default:
         CHATGLM_THROW << "unknown model type " << (int)model_type;
     }
 }
 
-static ggml_tensor *apply_rotary_emb_basic(ModelContext *ctx, ggml_tensor *layer, ggml_tensor *position_ids, int n_ctx,
-                                           RopeType rope_type, float rope_theta, int dim_scale) {
+static ggml_tensor *apply_rotary_emb_basic(ModelContext *mctx, ggml_tensor *layer, ggml_tensor *position_ids, int n_ctx,
+                                           RopeType rope_type, float rope_theta) {
     // tensor a (activation) is of shape [s, #h, d]
     // tensor b (position_ids) is of shape [s]
-    ggml_context *gctx = ctx->ctx_b.get();
-#ifdef GGML_USE_CUBLAS
+    ggml_context *ctx = mctx->ctx_b.get();
+#ifdef GGML_USE_CUDA
     if (!ggml_is_contiguous(layer)) {
-        layer = tensor_assign_buffers(ggml_cont(gctx, layer));
+        layer = ggml_cont(ctx, layer);
     }
 #endif
     const int head_size = layer->ne[0];
-    const int rope_dim = head_size / dim_scale;
-    layer = tensor_assign_buffers(ggml_rope_custom_inplace(gctx, layer, position_ids, rope_dim, (int)rope_type, n_ctx,
-                                                           rope_theta, 1.f)); // [s, #h, d]
+    layer = ggml_rope_ext_inplace(ctx, layer, position_ids, nullptr, head_size, (int)rope_type, n_ctx, 0, rope_theta,
+                                  1.0f, 0.0f, 1.0f, 0.0f, 0.0f); // [s, #h, d]
     return layer;
 }
 
-static ggml_tensor *apply_rotary_emb_glm(ModelContext *ctx, ggml_tensor *layer, ggml_tensor *position_ids, int n_ctx) {
+static ggml_tensor *apply_rotary_emb_glm(ModelContext *mctx, ggml_tensor *layer, ggml_tensor *position_ids, int n_ctx) {
     // tensor a (activation) is of shape [s, #h, d]
     // tensor b (position_ids) is of shape [2 * s]
-    ggml_context *gctx = ctx->ctx_b.get();
+    ggml_context *ctx = mctx->ctx_b.get();
 
     const int head_size = layer->ne[0];
     const int num_heads = layer->ne[1];
     const int qlen = layer->ne[2];
     const int rope_dim = head_size / 2;
 
-    ggml_tensor *b1 = ggml_view_1d(gctx, position_ids, qlen, 0);
-    ggml_tensor *b2 = ggml_view_1d(gctx, position_ids, qlen, qlen * ggml_element_size(position_ids));
+    ggml_tensor *b1 = ggml_view_1d(ctx, position_ids, qlen, 0);
+    ggml_tensor *b2 = ggml_view_1d(ctx, position_ids, qlen, qlen * ggml_element_size(position_ids));
 
-    ggml_tensor *a1 = ggml_view_3d(gctx, layer, head_size / 2, num_heads, qlen, layer->nb[1], layer->nb[2], 0);
-    ggml_tensor *a2 = ggml_view_3d(gctx, layer, head_size / 2, num_heads, qlen, layer->nb[1], layer->nb[2],
+    ggml_tensor *a1 = ggml_view_3d(ctx, layer, head_size / 2, num_heads, qlen, layer->nb[1], layer->nb[2], 0);
+    ggml_tensor *a2 = ggml_view_3d(ctx, layer, head_size / 2, num_heads, qlen, layer->nb[1], layer->nb[2],
                                    head_size / 2 * ggml_element_size(layer));
 
     ggml_tensor *a1_rope = a1;
     ggml_tensor *a2_rope = a2;
-#ifdef GGML_USE_CUBLAS
-    a1_rope = tensor_assign_buffers(ggml_cont(gctx, a1_rope));
-    a2_rope = tensor_assign_buffers(ggml_cont(gctx, a2_rope));
+#ifdef GGML_USE_CUDA
+    a1_rope = ggml_cont(ctx, a1_rope);
+    a2_rope = ggml_cont(ctx, a2_rope);
 #endif
 
-    a1_rope = tensor_assign_buffers(
-        ggml_rope_inplace(gctx, a1_rope, b1, rope_dim, (int)RopeType::NEOX, n_ctx)); // [s, #h, d/2]
-    a2_rope = tensor_assign_buffers(
-        ggml_rope_inplace(gctx, a2_rope, b2, rope_dim, (int)RopeType::NEOX, n_ctx)); // [s, #h, d/2]
+    a1_rope = ggml_rope_inplace(ctx, a1_rope, b1, rope_dim, (int)RopeType::NEOX, n_ctx); // [s, #h, d/2]
+    a2_rope = ggml_rope_inplace(ctx, a2_rope, b2, rope_dim, (int)RopeType::NEOX, n_ctx); // [s, #h, d/2]
 
-#ifdef GGML_USE_CUBLAS
-    a1_rope = ggml_cpy(gctx, a1_rope, a1);
-    a2_rope = ggml_cpy(gctx, a2_rope, a2);
+#ifdef GGML_USE_CUDA
+    a1_rope = ggml_cpy(ctx, a1_rope, a1);
+    a2_rope = ggml_cpy(ctx, a2_rope, a2);
 #endif
-    ggml_build_forward_expand(&ctx->gf, a1_rope);
-    ggml_build_forward_expand(&ctx->gf, a2_rope);
+    ggml_build_forward_expand(mctx->gf, a1_rope);
+    ggml_build_forward_expand(mctx->gf, a2_rope);
 
     return layer;
 }
 
-[[maybe_unused]] static ggml_tensor *apply_rotary_emb_glm2(ModelContext *ctx, ggml_tensor *layer,
-                                                           ggml_tensor *position_ids) {
+static ggml_tensor *apply_rotary_emb_glm2(ModelContext *mctx, ggml_tensor *layer, ggml_tensor *position_ids,
+                                          float rope_theta) {
+    // NOTE: ChatGLM2 applies RoPE only on half of the features. The remaining half is skipped.
     // layer: [s, #h, d], position_ids: [s]
-    ggml_context *gctx = ctx->ctx_b.get();
-#ifdef GGML_USE_CUBLAS
-    if (!ggml_is_contiguous(layer)) {
-        layer = tensor_assign_buffers(ggml_cont(gctx, layer));
-    }
-#endif
+    ggml_context *ctx = mctx->ctx_b.get();
+
     const int head_size = layer->ne[0];
     const int rope_dim = head_size / 2;
-    ggml_tensor *roped_layer =
-        tensor_assign_buffers(ggml_rope(gctx, layer, position_ids, rope_dim, (int)RopeType::GPTJ, 0)); // [s, #h, d]
 
-    ggml_tensor *roped_layer_view = tensor_assign_buffers(
-        ggml_view_3d(gctx, roped_layer, rope_dim, roped_layer->ne[1], roped_layer->ne[2], roped_layer->nb[1],
-                     roped_layer->nb[2], rope_dim * roped_layer->nb[0])); // [s, #h, d/2]
+    ggml_tensor *half_layer_view =
+        ggml_view_3d(ctx, layer, rope_dim, layer->ne[1], layer->ne[2], layer->nb[1], layer->nb[2], 0);
 
-    ggml_tensor *layer_view =
-        tensor_assign_buffers(ggml_view_3d(gctx, layer, rope_dim, layer->ne[1], layer->ne[2], layer->nb[1],
-                                           layer->nb[2], rope_dim * layer->nb[0])); // [s, #h, d/2]
+    // TODO: metal
+    ggml_tensor *half_layer = half_layer_view;
+    if (!ggml_backend_is_cpu(mctx->backend.get())) {
+        half_layer = ggml_cont(ctx, half_layer);
+    }
+    ggml_tensor *roped_half_layer =
+        ggml_rope_ext_inplace(ctx, half_layer, position_ids, nullptr, rope_dim, (int)RopeType::GPTJ, 0, 0, rope_theta,
+                              1.0f, 0.0f, 1.0f, 0.0f, 0.0f); // [s, #h, d]
+    if (!ggml_backend_is_cpu(mctx->backend.get())) {
+        roped_half_layer = ggml_cpy(ctx, roped_half_layer, half_layer_view);
+    }
+    ggml_build_forward_expand(mctx->gf, roped_half_layer);
 
-    ggml_build_forward_expand(&ctx->gf, ggml_cpy(gctx, layer_view, roped_layer_view));
-
-    return roped_layer;
+    return layer;
 }
 
-static ggml_tensor *apply_rotary_emb(ModelContext *ctx, ggml_tensor *layer, ggml_tensor *position_ids, int n_ctx,
-                                     RopeType rope_type, float rope_theta, int dim_scale) {
+static ggml_tensor *apply_rotary_emb(ModelContext *mctx, ggml_tensor *layer, ggml_tensor *position_ids, int n_ctx,
+                                     RopeType rope_type, float rope_theta) {
     switch (rope_type) {
     case RopeType::GPTJ:
     case RopeType::NEOX:
-        return apply_rotary_emb_basic(ctx, layer, position_ids, n_ctx, rope_type, rope_theta, dim_scale);
+        return apply_rotary_emb_basic(mctx, layer, position_ids, n_ctx, rope_type, rope_theta);
     case RopeType::CHATGLM:
-        return apply_rotary_emb_glm(ctx, layer, position_ids, n_ctx);
-    // case RopeType::CHATGLM2:
-    //     return apply_rotary_emb_glm2(ctx, layer, position_ids);
+        return apply_rotary_emb_glm(mctx, layer, position_ids, n_ctx);
+    case RopeType::CHATGLM2:
+        return apply_rotary_emb_glm2(mctx, layer, position_ids, rope_theta);
     case RopeType::DISABLED:
         return layer;
     default:
@@ -630,50 +614,16 @@ static ggml_tensor *apply_rotary_emb(ModelContext *ctx, ggml_tensor *layer, ggml
     }
 }
 
-static inline ggml_tensor *apply_attention_mask_causal(ModelContext *ctx, ggml_tensor *attn_scores, int n_past) {
-    return tensor_assign_buffers(ggml_diag_mask_inf_inplace(ctx->ctx_b.get(), attn_scores, n_past));
-}
-
-static ggml_tensor *apply_attention_mask_glm(ModelContext *ctx, ggml_tensor *attn_scores, int n_past) {
-    // attn_scores: [#h, s, kvs]
-    // semantic: attn_scores[:, :-1, -1] = -inf
-    ggml_context *gctx = ctx->ctx_b.get();
-    const int kvlen = attn_scores->ne[0];
-    const int qlen = attn_scores->ne[1];
-    const int num_attention_heads = attn_scores->ne[2];
-    ggml_tensor *inf = ggml_new_tensor_3d(gctx, attn_scores->type, 1, qlen - 1, num_attention_heads);
-    ggml_set_f32(inf, -INFINITY);
-    tensor_to_device(inf); // TODO: optimize
-    ggml_tensor *masked_attn_scores =
-        tensor_assign_buffers(ggml_view_3d(gctx, attn_scores, 1, qlen - 1, num_attention_heads, attn_scores->nb[1],
-                                           attn_scores->nb[2], (kvlen - 1) * attn_scores->nb[0]));
-    ggml_build_forward_expand(&ctx->gf, ggml_cpy(gctx, inf, masked_attn_scores));
-    return attn_scores;
-}
-
-static ggml_tensor *apply_attention_mask(ModelContext *ctx, ggml_tensor *attn_scores, int n_past,
-                                         AttentionMaskType attn_mask_type) {
-    switch (attn_mask_type) {
-    case AttentionMaskType::CAUSAL:
-        return apply_attention_mask_causal(ctx, attn_scores, n_past);
-    case AttentionMaskType::CHATGLM:
-        return apply_attention_mask_glm(ctx, attn_scores, n_past);
-    default:
-        CHATGLM_THROW << "Unknown attention mask type " << (int)attn_mask_type;
-    }
-}
-
-ggml_tensor *BasicAttention::forward(ModelContext *ctx, ggml_tensor *hidden_states, ggml_tensor *position_ids,
-                                     int n_past, int n_ctx) const {
-    ggml_context *gctx = ctx->ctx_b.get();
+ggml_tensor *BasicAttention::forward(ModelContext *mctx, ggml_tensor *hidden_states, ggml_tensor *attention_mask,
+                                     ggml_tensor *position_ids, int n_past, int n_ctx) const {
+    ggml_context *ctx = mctx->ctx_b.get();
 
     const int hidden_size = hidden_states->ne[0];
     const int qlen = hidden_states->ne[1];
     const int head_size = hidden_size / num_attention_heads;
     const int num_shared_q_heads = num_attention_heads / num_kv_heads;
-    const bool is_gqa = num_shared_q_heads > 1;
 
-    ggml_tensor *qkv = query_key_value.forward(ctx, hidden_states); // [sq, (#h + 2 * #kvh) * d]
+    ggml_tensor *qkv = query_key_value.forward(mctx, hidden_states); // [sq, (#h + 2 * #kvh) * d]
 
     // split mixed qkv into separate query, key and value
     ggml_tensor *query_layer; // [s, #h, d]
@@ -681,138 +631,119 @@ ggml_tensor *BasicAttention::forward(ModelContext *ctx, ggml_tensor *hidden_stat
     ggml_tensor *value_layer; // [s, #kvh, d]
 
     if (interleaved_qkv) {
-        CHATGLM_CHECK(!is_gqa) << "interleaved qkv is not supported for GQA";
-        query_layer = ggml_view_3d(gctx, qkv, head_size, num_attention_heads, qlen,
+        CHATGLM_CHECK(num_shared_q_heads == 1) << "interleaved qkv is not supported for GQA";
+        query_layer = ggml_view_3d(ctx, qkv, head_size, num_attention_heads, qlen,
                                    3 * head_size * ggml_element_size(qkv), qkv->nb[1], 0);
-        key_layer =
-            ggml_view_3d(gctx, qkv, head_size, num_attention_heads, qlen, 3 * head_size * ggml_element_size(qkv),
-                         qkv->nb[1], head_size * ggml_element_size(qkv));
+        key_layer = ggml_view_3d(ctx, qkv, head_size, num_attention_heads, qlen, 3 * head_size * ggml_element_size(qkv),
+                                 qkv->nb[1], head_size * ggml_element_size(qkv));
         value_layer =
-            ggml_view_3d(gctx, qkv, head_size, num_attention_heads, qlen, 3 * head_size * ggml_element_size(qkv),
+            ggml_view_3d(ctx, qkv, head_size, num_attention_heads, qlen, 3 * head_size * ggml_element_size(qkv),
                          qkv->nb[1], 2 * head_size * ggml_element_size(qkv));
     } else {
-        query_layer = ggml_view_3d(gctx, qkv, head_size, num_attention_heads, qlen, head_size * ggml_element_size(qkv),
+        query_layer = ggml_view_3d(ctx, qkv, head_size, num_attention_heads, qlen, head_size * ggml_element_size(qkv),
                                    qkv->nb[1], 0);
-        key_layer = ggml_view_3d(gctx, qkv, head_size, num_kv_heads, qlen, head_size * ggml_element_size(qkv),
+        key_layer = ggml_view_3d(ctx, qkv, head_size, num_kv_heads, qlen, head_size * ggml_element_size(qkv),
                                  qkv->nb[1], hidden_size * ggml_element_size(qkv));
-        value_layer = ggml_view_3d(gctx, qkv, head_size, num_kv_heads, qlen, head_size * ggml_element_size(qkv),
+        value_layer = ggml_view_3d(ctx, qkv, head_size, num_kv_heads, qlen, head_size * ggml_element_size(qkv),
                                    qkv->nb[1], (hidden_size + head_size * num_kv_heads) * ggml_element_size(qkv));
     }
 
-    query_layer = apply_rotary_emb(ctx, query_layer, position_ids, n_ctx, rope_type, rope_theta, rope_dim_scale);
-    key_layer = apply_rotary_emb(ctx, key_layer, position_ids, n_ctx, rope_type, rope_theta, rope_dim_scale);
+    query_layer = apply_rotary_emb(mctx, query_layer, position_ids, n_ctx, rope_type, rope_theta);
+    key_layer = apply_rotary_emb(mctx, key_layer, position_ids, n_ctx, rope_type, rope_theta);
 
-    query_layer = tensor_assign_buffers(ggml_cont(gctx, ggml_permute(gctx, query_layer, 0, 2, 1, 3))); // [#h, s, d]
+    query_layer = ggml_cont(ctx, ggml_permute(ctx, query_layer, 0, 2, 1, 3)); // [#h, s, d]
     if (num_shared_q_heads > 1) {
-        query_layer = tensor_assign_buffers(ggml_reshape_3d(gctx, query_layer, head_size, num_shared_q_heads * qlen,
-                                                            num_kv_heads)); // [#kvh, (#h/#kvh) * s, d]
+        query_layer = ggml_reshape_3d(ctx, query_layer, head_size, num_shared_q_heads * qlen,
+                                      num_kv_heads); // [#kvh, (#h/#kvh) * s, d]
     }
 
-    key_layer = tensor_assign_buffers(ggml_permute(gctx, key_layer, 0, 2, 1, 3));     // [#kvh, s, d]
-    value_layer = tensor_assign_buffers(ggml_permute(gctx, value_layer, 1, 2, 0, 3)); // [#kvh, d, s]
+    key_layer = ggml_permute(ctx, key_layer, 0, 2, 1, 3);     // [#kvh, s, d]
+    value_layer = ggml_permute(ctx, value_layer, 1, 2, 0, 3); // [#kvh, d, s]
 
     // store key & value to cache
-    ggml_tensor *k_cache_view = tensor_assign_buffers(
-        ggml_view_3d(gctx, k_cache, head_size, qlen, num_kv_heads, k_cache->nb[1], k_cache->nb[2],
-                     (num_virtual_tokens + n_past) * head_size * ggml_element_size(k_cache))); // [#kvh, s, d]
-    ggml_build_forward_expand(&ctx->gf, ggml_cpy(gctx, key_layer, k_cache_view));
+    ggml_tensor *k_cache_view =
+        ggml_view_3d(ctx, k_cache, head_size, qlen, num_kv_heads, k_cache->nb[1], k_cache->nb[2],
+                     (num_virtual_tokens + n_past) * head_size * ggml_element_size(k_cache)); // [#kvh, s, d]
+    ggml_build_forward_expand(mctx->gf, ggml_cpy(ctx, key_layer, k_cache_view));
     ggml_tensor *v_cache_view =
-        tensor_assign_buffers(ggml_view_3d(gctx, v_cache, qlen, head_size, num_kv_heads, v_cache->nb[1], v_cache->nb[2],
-                                           (num_virtual_tokens + n_past) * ggml_element_size(v_cache))); // [#kvh, d, s]
-    ggml_build_forward_expand(&ctx->gf, ggml_cpy(gctx, value_layer, v_cache_view));
+        ggml_view_3d(ctx, v_cache, qlen, head_size, num_kv_heads, v_cache->nb[1], v_cache->nb[2],
+                     (num_virtual_tokens + n_past) * ggml_element_size(v_cache)); // [#kvh, d, s]
+    ggml_build_forward_expand(mctx->gf, ggml_cpy(ctx, value_layer, v_cache_view));
 
     // concat key & value with past kv
-    key_layer = tensor_assign_buffers(ggml_view_3d(gctx, k_cache, head_size, num_virtual_tokens + n_past + qlen,
-                                                   num_kv_heads, k_cache->nb[1], k_cache->nb[2],
-                                                   0)); // [#kvh, kvs, d]
-    value_layer = tensor_assign_buffers(ggml_view_3d(gctx, v_cache, num_virtual_tokens + n_past + qlen, head_size,
-                                                     num_kv_heads, v_cache->nb[1], v_cache->nb[2],
-                                                     0)); // [#kvh, d, kvs]
+    key_layer = ggml_view_3d(ctx, k_cache, head_size, num_virtual_tokens + n_past + qlen, num_kv_heads, k_cache->nb[1],
+                             k_cache->nb[2],
+                             0); // [#kvh, kvs, d]
+    value_layer = ggml_view_3d(ctx, v_cache, num_virtual_tokens + n_past + qlen, head_size, num_kv_heads,
+                               v_cache->nb[1], v_cache->nb[2],
+                               0); // [#kvh, d, kvs]
 
     // attention
-    ggml_tensor *attn_scores =
-        tensor_assign_buffers(ggml_mul_mat(gctx, key_layer, query_layer)); // [#kvh, (#h/#kvh) * s, kvs]
-    attn_scores =
-        tensor_assign_buffers(ggml_scale_inplace(gctx, attn_scores, ggml_new_f32(gctx, 1.f / std::sqrt(head_size))));
-    if (use_alibi) {
-        attn_scores = tensor_assign_buffers(ggml_alibi(gctx, attn_scores, n_past, num_attention_heads, 8));
-    }
+    ggml_tensor *attn_scores = ggml_mul_mat(ctx, key_layer, query_layer); // [#kvh, (#h/#kvh) * s, kvs]
+    attn_scores = ggml_scale_inplace(ctx, attn_scores, 1.f / std::sqrt(head_size));
+
     if (n_past == 0) {
         // build attention mask for context input
         if (num_shared_q_heads > 1) {
-            attn_scores = ggml_reshape_3d(gctx, attn_scores, num_virtual_tokens + n_past + qlen, qlen,
+            attn_scores = ggml_reshape_3d(ctx, attn_scores, num_virtual_tokens + n_past + qlen, qlen,
                                           num_attention_heads); // [#h, s, kvs]
         }
-        attn_scores = apply_attention_mask(ctx, attn_scores, num_virtual_tokens + n_past, attn_mask_type);
+
+        if (attn_mask_type == AttentionMaskType::CAUSAL) {
+            attn_scores = ggml_diag_mask_inf_inplace(ctx, attn_scores, num_virtual_tokens + n_past);
+        } else {
+            attn_scores = ggml_add_inplace(ctx, attn_scores, attention_mask);
+        }
+
         if (num_shared_q_heads > 1) {
             attn_scores =
-                ggml_reshape_3d(gctx, attn_scores, num_virtual_tokens + n_past + qlen, num_shared_q_heads * qlen,
+                ggml_reshape_3d(ctx, attn_scores, num_virtual_tokens + n_past + qlen, num_shared_q_heads * qlen,
                                 num_kv_heads); // [#kvh, (#h/#kvh) * s, kvs]
         }
     }
-    ggml_tensor *attn_probs =
-        tensor_assign_buffers(ggml_soft_max_inplace(gctx, attn_scores)); // [#kvh, (#h/#kvh) * s, kvs]
 
-    ggml_tensor *context_layer =
-        tensor_assign_buffers(ggml_mul_mat(gctx, value_layer, attn_probs)); // [#kvh, (#h/#kvh) * s, d]
+    ggml_tensor *attn_probs = ggml_soft_max_inplace(ctx, attn_scores); // [#kvh, (#h/#kvh) * s, kvs]
+
+    ggml_tensor *context_layer = ggml_mul_mat(ctx, value_layer, attn_probs); // [#kvh, (#h/#kvh) * s, d]
     if (num_shared_q_heads > 1) {
-        context_layer = ggml_reshape_3d(gctx, context_layer, head_size, qlen,
+        context_layer = ggml_reshape_3d(ctx, context_layer, head_size, qlen,
                                         num_attention_heads); // [#h, s, d]
     }
-    context_layer = tensor_assign_buffers(ggml_cont(gctx, ggml_permute(gctx, context_layer, 0, 2, 1, 3))); // [s, #h, d]
-    context_layer = tensor_assign_buffers(ggml_reshape_2d(gctx, context_layer, hidden_size, qlen)); // [s, #h * d]
+    context_layer = ggml_cont(ctx, ggml_permute(ctx, context_layer, 0, 2, 1, 3)); // [s, #h, d]
+    context_layer = ggml_reshape_2d(ctx, context_layer, hidden_size, qlen);       // [s, #h * d]
 
-    ggml_tensor *attn_output = dense.forward(ctx, context_layer);
+    ggml_tensor *attn_output = dense.forward(mctx, context_layer);
     return attn_output;
 }
 
-BaseModelForCausalLM::BaseModelForCausalLM(ModelConfig config, size_t mem_size, size_t scratch_size, size_t num_weights)
-    : config(config) {
-    ctx_.dtype = config.dtype;
-    const size_t ctx_w_size = num_weights * ggml_tensor_overhead();
-    const size_t ctx_kv_size = 2 * config.num_hidden_layers *
-                               ((config.max_length + config.num_virtual_tokens) * config.hidden_size /
-                                    config.num_attention_heads * config.num_kv_heads * ggml_type_size(GGML_TYPE_F16) +
-                                ggml_tensor_overhead());
-    ctx_.ctx_w = make_unique_ggml_context(ctx_w_size, nullptr, true);
-    ctx_.ctx_kv = make_unique_ggml_context(ctx_kv_size + 1 * MB, nullptr, false); // 1MB extra for MPS
-
-    ctx_.compute_buffer.resize(mem_size);
-    ctx_.scratch_buffer.resize(scratch_size);
-    ctx_.scratch = {0, ctx_.scratch_buffer.size(), ctx_.scratch_buffer.data()};
-#ifdef GGML_USE_CUBLAS
-    ggml_cuda_set_scratch_size(scratch_size);
-#endif
-}
+BaseModelForCausalLM::BaseModelForCausalLM(ModelConfig config)
+    : config(config), mctx_(std::make_unique<ModelContext>(config.dtype)) {}
 
 ggml_tensor *BaseModelForCausalLM::forward_graph_compute(const std::vector<int> &input_ids, int n_past, int n_ctx,
-                                                         int n_threads, bool is_decoding) {
-    ctx_.ctx_b = make_unique_ggml_context(ctx_.compute_buffer.size(), ctx_.compute_buffer.data(), false);
-    ctx_.gf = {};
+                                                         bool is_decoding) {
+    mctx_->ctx_b = make_unique_ggml_context(mctx_->compute_meta.size(), mctx_->compute_meta.data(), true);
+    mctx_->gf = ggml_new_graph(mctx_->ctx_b.get());
 
-    if (n_threads <= 0) {
-        n_threads = get_default_num_threads(); // default thread num
-    }
-    int curr_input_ids_size = input_ids.size() - n_past;
-    if (curr_input_ids_size >= 32 && ggml_cpu_has_blas() && !ggml_cpu_has_gpublas()) {
-        n_threads = 1; // use 1 thread if BLAS is enabled
-    }
+    const int qlen = input_ids.size() - n_past;
 
-    ggml_tensor *curr_input_ids = ggml_new_tensor_1d(ctx_.ctx_b.get(), GGML_TYPE_I32, curr_input_ids_size);
-    memcpy(curr_input_ids->data, input_ids.data() + n_past, ggml_nbytes(curr_input_ids));
+    ggml_tensor *curr_input_ids = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_I32, qlen);
+    ggml_set_name(curr_input_ids, "input_ids");
+    ggml_set_input(curr_input_ids);
 
-    ggml_tensor *lm_logits = forward(&ctx_, curr_input_ids, n_past, n_ctx, is_decoding);
-    lm_logits->backend = GGML_BACKEND_CPU;
+    ggml_tensor *lm_logits = forward(mctx_.get(), curr_input_ids, n_past, n_ctx, is_decoding);
 
-    ggml_build_forward_expand(&ctx_.gf, lm_logits);
-#ifdef GGML_USE_METAL
-    ggml_metal_graph_compute(ctx_.ctx_metal.get(), &ctx_.gf);
-#else
-    ggml_graph_compute_helper(ctx_.work_buffer, &ctx_.gf, n_threads);
-#endif
+    ggml_build_forward_expand(mctx_->gf, lm_logits);
+    CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
+
+    ggml_backend_tensor_set(curr_input_ids, input_ids.data() + n_past, 0, qlen * sizeof(int));
+
+    set_graph_inputs(qlen, n_past, n_ctx);
+
+    set_default_num_threads(mctx_->backend.get(), qlen);
+    CHATGLM_CHECK(ggml_backend_graph_compute(mctx_->backend.get(), mctx_->gf) == GGML_STATUS_SUCCESS);
 
 #ifdef GGML_PERF
-    ggml_graph_print(&ctx_.gf);
+    ggml_graph_print(mctx_->gf);
 #endif
 
     return lm_logits;
@@ -820,10 +751,12 @@ ggml_tensor *BaseModelForCausalLM::forward_graph_compute(const std::vector<int> 
 
 int BaseModelForCausalLM::generate_next_token(const std::vector<int> &input_ids, const GenerationConfig &gen_config,
                                               int n_past, int n_ctx) {
-    ggml_tensor *lm_logits = forward_graph_compute(input_ids, n_past, n_ctx, gen_config.num_threads, true);
+    ggml_tensor *lm_logits = forward_graph_compute(input_ids, n_past, n_ctx, true);
+    CHATGLM_CHECK(ggml_n_dims(lm_logits) == 1);
 
     int vocab_size = lm_logits->ne[0];
-    float *next_token_logits = (float *)lm_logits->data;
+    std::vector<float> next_token_logits(vocab_size);
+    ggml_backend_tensor_get(lm_logits, next_token_logits.data(), 0, vocab_size * sizeof(float));
 
     // check nan
     for (int i = 0; i < vocab_size; i++) {
@@ -832,7 +765,7 @@ int BaseModelForCausalLM::generate_next_token(const std::vector<int> &input_ids,
 
     // logits pre-process
     if (gen_config.repetition_penalty != 1.f) {
-        sampling_repetition_penalty(next_token_logits, next_token_logits + vocab_size, input_ids,
+        sampling_repetition_penalty(next_token_logits.data(), next_token_logits.data() + vocab_size, input_ids,
                                     gen_config.repetition_penalty);
     }
 
@@ -840,7 +773,8 @@ int BaseModelForCausalLM::generate_next_token(const std::vector<int> &input_ids,
     if (gen_config.do_sample) {
         // temperature sampling
         if (gen_config.temperature > 0) {
-            sampling_temperature(next_token_logits, next_token_logits + vocab_size, gen_config.temperature);
+            sampling_temperature(next_token_logits.data(), next_token_logits.data() + vocab_size,
+                                 gen_config.temperature);
         }
 
         std::vector<TokenIdScore> token_scores(vocab_size);
@@ -870,11 +804,12 @@ int BaseModelForCausalLM::generate_next_token(const std::vector<int> &input_ids,
         thread_local std::random_device rd;
         thread_local std::mt19937 gen(rd());
 
-        std::discrete_distribution<> dist(next_token_logits, next_token_logits + token_scores.size());
+        std::discrete_distribution<> dist(next_token_logits.data(), next_token_logits.data() + token_scores.size());
         next_token_id = token_scores[dist(gen)].id;
     } else {
         // greedy search
-        next_token_id = std::max_element(next_token_logits, next_token_logits + vocab_size) - next_token_logits;
+        next_token_id =
+            std::max_element(next_token_logits.begin(), next_token_logits.end()) - next_token_logits.begin();
     }
 
     return next_token_id;
@@ -1127,74 +1062,107 @@ std::string ChatGLMTokenizer::postprocess(const std::string &text) {
     return output;
 }
 
-ggml_tensor *GLMBlock::forward(ModelContext *ctx, ggml_tensor *hidden_states, ggml_tensor *position_ids, int n_past,
-                               int n_ctx) const {
-    ggml_context *gctx = ctx->ctx_b.get();
+ggml_tensor *GLMBlock::forward(ModelContext *mctx, ggml_tensor *hidden_states, ggml_tensor *attention_mask,
+                               ggml_tensor *position_ids, int n_past, int n_ctx) const {
+    ggml_context *ctx = mctx->ctx_b.get();
 
-    ggml_tensor *alpha = ggml_new_f32(gctx, alpha_value);
+    ggml_tensor *attn_input = input_layernorm.forward(mctx, hidden_states);
+    ggml_tensor *attn_output = attention.forward(mctx, attn_input, attention_mask, position_ids, n_past, n_ctx);
+    ggml_build_forward_expand(mctx->gf, attn_output);
+    attn_input = ggml_scale_inplace(ctx, attn_input, alpha);
+    hidden_states = ggml_add_inplace(ctx, attn_input, attn_output);
 
-    ggml_tensor *attn_input = input_layernorm.forward(ctx, hidden_states);
-    ggml_tensor *attn_output = attention.forward(ctx, attn_input, position_ids, n_past, n_ctx);
-    ggml_build_forward_expand(&ctx->gf, attn_output);
-    attn_input = tensor_assign_buffers(ggml_scale_inplace(gctx, attn_input, alpha));
-    hidden_states = tensor_assign_buffers(ggml_add_inplace(gctx, attn_input, attn_output));
-
-    ggml_tensor *mlp_input = post_attention_layernorm.forward(ctx, hidden_states);
-    ggml_tensor *mlp_output = mlp.forward(ctx, mlp_input);
-    ggml_build_forward_expand(&ctx->gf, mlp_output);
-    mlp_input = tensor_assign_buffers(ggml_scale_inplace(gctx, mlp_input, alpha));
-    ggml_tensor *output = tensor_assign_buffers(ggml_add_inplace(gctx, mlp_input, mlp_output));
+    ggml_tensor *mlp_input = post_attention_layernorm.forward(mctx, hidden_states);
+    ggml_tensor *mlp_output = mlp.forward(mctx, mlp_input);
+    ggml_build_forward_expand(mctx->gf, mlp_output);
+    mlp_input = ggml_scale_inplace(ctx, mlp_input, alpha);
+    ggml_tensor *output = ggml_add_inplace(ctx, mlp_input, mlp_output);
 
     return output;
 }
 
-ChatGLMForCausalLM::ChatGLMForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM(config, MEM_SIZE, SCRATCH_SIZE, num_weights(config.num_hidden_layers)) {
-    state_dict_ = state_dict();
-}
+ChatGLMForCausalLM::ChatGLMForCausalLM(const ModelConfig &config) : BasicModelForCausalLM(config) {}
 
-void ChatGLMForCausalLM::load(ModelLoader &loader) {
-    for (auto &item : state_dict_) {
+void ChatGLMForCausalLM::load_state_dict(const StateDict &sd) {
+    // TODO: handle metal
+    if (ggml_backend_is_cpu(mctx_->backend.get())) {
+        mctx_->buf_w = unique_ggml_backend_buffer_t(ggml_backend_cpu_buffer_from_ptr(
+            ggml_backend_buffer_get_base(sd.buf.get()), ggml_backend_buffer_get_size(sd.buf.get())));
+    } else {
+        mctx_->buf_w =
+            unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_w.get(), mctx_->backend.get()));
+    }
+
+    StateDict self_sd = state_dict();
+    for (auto &item : self_sd.kv) {
         const std::string &name = item.first;
-        ggml_tensor *tensor = item.second;
-        if (name != "lm_head.weight") {
-            loader.read_tensor(name, tensor);
+        ggml_tensor *self_weight = item.second;
+        ggml_tensor *ckpt_weight = sd.kv.at(name);
+        if (ggml_backend_is_cpu(mctx_->backend.get())) {
+            ggml_backend_tensor_alloc(mctx_->buf_w.get(), self_weight, ckpt_weight->data);
+        } else {
+            ggml_backend_tensor_set(self_weight, ckpt_weight->data, 0, ggml_nbytes(self_weight));
         }
     }
-    lm_head.weight->data = transformer.word_embeddings.weight->data; // tied weight
+}
 
-    to_device();
+void ChatGLMForCausalLM::set_graph_inputs(int qlen, int n_past, int n_ctx) const {
+    set_graph_inputs(mctx_->gf, qlen, n_past, n_ctx);
+}
 
-    ctx_.weight_buffer = std::string_view(loader.data, loader.size);
-    ctx_.init_device_context();
+void ChatGLMForCausalLM::set_graph_inputs(ggml_cgraph *gf, int qlen, int n_past, int n_ctx) {
+    // attention_mask: [s, kvs] auto broadcast to [#h, s, kvs]
+    // semantic: attn_scores[:, :-1, -1] = -inf
+    if (n_past == 0) {
+        ggml_tensor *attention_mask = ggml_graph_get_tensor(gf, "attention_mask");
+        const int kvlen = attention_mask->ne[0];
+        std::vector<float> attention_mask_buffer(qlen * kvlen, 0.f);
+        CHATGLM_CHECK(ggml_nbytes(attention_mask) == attention_mask_buffer.size() * sizeof(float));
+        for (int i = 0; i < qlen - 1; i++) {
+            attention_mask_buffer[i * kvlen + (kvlen - 1)] = -INFINITY;
+        }
+        ggml_backend_tensor_set(attention_mask, attention_mask_buffer.data(), 0,
+                                attention_mask_buffer.size() * sizeof(float));
+    }
+
+    // position_ids: [2 * qlen]
+    ggml_tensor *position_ids = ggml_graph_get_tensor(gf, "position_ids");
+    CHATGLM_CHECK(ggml_n_dims(position_ids) == 1 && position_ids->ne[0] == 2 * qlen)
+        << "invalid position ids size " << position_ids->ne[0];
+
+    std::vector<int> position_ids_buffer(position_ids->ne[0]);
+    for (int i = 0; i < qlen; i++) {
+        const int p = n_past + i;
+        position_ids_buffer[i] = std::min(p, n_ctx - 2);
+        position_ids_buffer[qlen + i] = std::max(p - (n_ctx - 2), 0);
+    }
+    ggml_backend_tensor_set(position_ids, position_ids_buffer.data(), 0, position_ids_buffer.size() * sizeof(int));
 }
 
 StateDict ChatGLMForCausalLM::state_dict() const {
     StateDict sd;
-    sd.reserve(num_weights(config.num_hidden_layers));
-    sd.emplace_back("transformer.word_embeddings.weight", transformer.word_embeddings.weight);
+    sd.kv.emplace("transformer.word_embeddings.weight", transformer.word_embeddings.weight);
     for (int i = 0; i < config.num_hidden_layers; i++) {
         std::string layer_prefix = "transformer.layers." + std::to_string(i) + '.';
-        sd.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
-        sd.emplace_back(layer_prefix + "input_layernorm.bias", transformer.layers[i].input_layernorm.bias);
-        sd.emplace_back(layer_prefix + "attention.query_key_value.weight",
-                        transformer.layers[i].attention.query_key_value.weight);
-        sd.emplace_back(layer_prefix + "attention.query_key_value.bias",
-                        transformer.layers[i].attention.query_key_value.bias);
-        sd.emplace_back(layer_prefix + "attention.dense.weight", transformer.layers[i].attention.dense.weight);
-        sd.emplace_back(layer_prefix + "attention.dense.bias", transformer.layers[i].attention.dense.bias);
-        sd.emplace_back(layer_prefix + "post_attention_layernorm.weight",
-                        transformer.layers[i].post_attention_layernorm.weight);
-        sd.emplace_back(layer_prefix + "post_attention_layernorm.bias",
-                        transformer.layers[i].post_attention_layernorm.bias);
-        sd.emplace_back(layer_prefix + "mlp.dense_h_to_4h.weight", transformer.layers[i].mlp.dense_h_to_4h.weight);
-        sd.emplace_back(layer_prefix + "mlp.dense_h_to_4h.bias", transformer.layers[i].mlp.dense_h_to_4h.bias);
-        sd.emplace_back(layer_prefix + "mlp.dense_4h_to_h.weight", transformer.layers[i].mlp.dense_4h_to_h.weight);
-        sd.emplace_back(layer_prefix + "mlp.dense_4h_to_h.bias", transformer.layers[i].mlp.dense_4h_to_h.bias);
+        sd.kv.emplace(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
+        sd.kv.emplace(layer_prefix + "input_layernorm.bias", transformer.layers[i].input_layernorm.bias);
+        sd.kv.emplace(layer_prefix + "attention.query_key_value.weight",
+                      transformer.layers[i].attention.query_key_value.weight);
+        sd.kv.emplace(layer_prefix + "attention.query_key_value.bias",
+                      transformer.layers[i].attention.query_key_value.bias);
+        sd.kv.emplace(layer_prefix + "attention.dense.weight", transformer.layers[i].attention.dense.weight);
+        sd.kv.emplace(layer_prefix + "attention.dense.bias", transformer.layers[i].attention.dense.bias);
+        sd.kv.emplace(layer_prefix + "post_attention_layernorm.weight",
+                      transformer.layers[i].post_attention_layernorm.weight);
+        sd.kv.emplace(layer_prefix + "post_attention_layernorm.bias",
+                      transformer.layers[i].post_attention_layernorm.bias);
+        sd.kv.emplace(layer_prefix + "mlp.dense_h_to_4h.weight", transformer.layers[i].mlp.dense_h_to_4h.weight);
+        sd.kv.emplace(layer_prefix + "mlp.dense_h_to_4h.bias", transformer.layers[i].mlp.dense_h_to_4h.bias);
+        sd.kv.emplace(layer_prefix + "mlp.dense_4h_to_h.weight", transformer.layers[i].mlp.dense_4h_to_h.weight);
+        sd.kv.emplace(layer_prefix + "mlp.dense_4h_to_h.bias", transformer.layers[i].mlp.dense_4h_to_h.bias);
     }
-    sd.emplace_back("transformer.final_layernorm.weight", transformer.final_layernorm.weight);
-    sd.emplace_back("transformer.final_layernorm.bias", transformer.final_layernorm.bias);
-    sd.emplace_back("lm_head.weight", lm_head.weight);
+    sd.kv.emplace("transformer.final_layernorm.weight", transformer.final_layernorm.weight);
+    sd.kv.emplace("transformer.final_layernorm.bias", transformer.final_layernorm.bias);
     return sd;
 }
 
@@ -1263,83 +1231,97 @@ bool ChatGLM2Tokenizer::is_special_id(int id) const {
            id == eop_token_id;
 }
 
-ChatGLM2ForCausalLM::ChatGLM2ForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM(config, MEM_SIZE, SCRATCH_SIZE, num_weights(config.num_hidden_layers)) {
-    state_dict_ = state_dict();
-}
+ChatGLM2ForCausalLM::ChatGLM2ForCausalLM(const ModelConfig &config) : BasicModelForCausalLM(config) {}
 
-void ChatGLM2ForCausalLM::load(ModelLoader &loader) {
+void ChatGLM2ForCausalLM::load_state_dict(const StateDict &sd) {
+    if (ggml_backend_is_cpu(mctx_->backend.get())) {
+        mctx_->buf_w = unique_ggml_backend_buffer_t(ggml_backend_cpu_buffer_from_ptr(
+            ggml_backend_buffer_get_base(sd.buf.get()), ggml_backend_buffer_get_size(sd.buf.get())));
+    } else {
+        mctx_->buf_w =
+            unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_w.get(), mctx_->backend.get()));
+    }
+
     if (config.num_virtual_tokens > 0) {
-        const int head_size = config.hidden_size / config.num_attention_heads;
-        auto prefix_cache_ctx = make_unique_ggml_context(
-            ggml_tensor_overhead() + config.num_hidden_layers * 2 * config.num_kv_heads * config.num_virtual_tokens *
-                                         head_size * ggml_type_size(GGML_TYPE_F16),
-            nullptr, false);
-        ggml_tensor *past_key_values =
-            ggml_new_tensor_4d(prefix_cache_ctx.get(), GGML_TYPE_F16, head_size, config.num_virtual_tokens,
-                               config.num_kv_heads, config.num_hidden_layers * 2);
-        CHATGLM_CHECK(ggml_used_mem(prefix_cache_ctx.get()) == ggml_get_mem_size(prefix_cache_ctx.get()))
-            << "corrupted prefix cache";
-        loader.read_tensor("past_key_values", past_key_values);
+        ggml_tensor *past_key_values = sd.kv.at("past_key_values");
         load_prefix_cache(past_key_values);
     }
 
-    std::unordered_map<std::string, std::string> glu_name_map;
-    for (int i = 0; i < config.num_hidden_layers; i++) {
-        std::string layer_prefix = "transformer.encoder.layers." + std::to_string(i) + '.';
-        glu_name_map.emplace(layer_prefix + "mlp.gate_proj.weight", layer_prefix + "mlp.dense_h_to_4h.weight");
-        glu_name_map.emplace(layer_prefix + "mlp.up_proj.weight", layer_prefix + "mlp.dense_h_to_4h.weight");
-    }
-
-    for (auto it = state_dict_.begin(); it != state_dict_.end(); it++) {
+    auto self_sd = state_dict();
+    for (auto it = sd.kv.begin(); it != sd.kv.end(); it++) {
         const std::string &name = it->first;
-        ggml_tensor *tensor = it->second;
+        ggml_tensor *ckpt_weight = it->second;
 
-        auto glu_it = glu_name_map.find(name);
-        if (glu_it != glu_name_map.end()) {
-            // for compatibility: load gate_proj & up_proj from dense_h_to_4h
-            const std::string &dense_h_to_4h_name = glu_it->second;
-            ggml_tensor *gate_proj = tensor;
-            it++;
-            CHATGLM_CHECK(glu_name_map.at(it->first) == dense_h_to_4h_name) << "corrupted glu weights";
-            ggml_tensor *up_proj = it->second;
+        if (name == "past_key_values") {
+            continue;
+        }
 
-            int64_t target_ne[4]{gate_proj->ne[0], gate_proj->ne[1] + up_proj->ne[1]};
-            loader.checked_read_tensor_meta(dense_h_to_4h_name, gate_proj->n_dims, target_ne, gate_proj->type);
-            gate_proj->data = loader.read_tensor_data(ggml_nbytes(gate_proj));
-            up_proj->data = loader.read_tensor_data(ggml_nbytes(up_proj));
+        size_t pos = name.rfind("mlp.dense_h_to_4h.weight");
+        if (pos != std::string::npos) {
+            // split dense_h_to_4h to gate & up
+            std::string gate_name = name.substr(0, pos) + "mlp.gate_proj.weight";
+            ggml_tensor *gate_proj = self_sd.kv.at(gate_name);
+
+            std::string up_name = name.substr(0, pos) + "mlp.up_proj.weight";
+            ggml_tensor *up_proj = self_sd.kv.at(up_name);
+
+            CHATGLM_CHECK(ggml_nbytes(ckpt_weight) == ggml_nbytes(gate_proj) + ggml_nbytes(up_proj));
+
+            if (ggml_backend_is_cpu(mctx_->backend.get())) {
+                ggml_backend_tensor_alloc(mctx_->buf_w.get(), gate_proj, ckpt_weight->data);
+                ggml_backend_tensor_alloc(mctx_->buf_w.get(), up_proj,
+                                          (char *)ckpt_weight->data + ggml_nbytes(gate_proj));
+            } else {
+                ggml_backend_tensor_set(gate_proj, ckpt_weight->data, 0, ggml_nbytes(gate_proj));
+                ggml_backend_tensor_set(up_proj, (char *)ckpt_weight->data + ggml_nbytes(gate_proj), 0,
+                                        ggml_nbytes(up_proj));
+            }
         } else {
-            loader.read_tensor(name, tensor);
+            // normal weight
+            ggml_tensor *self_weight = self_sd.kv.at(name);
+            if (ggml_backend_is_cpu(mctx_->backend.get())) {
+                ggml_backend_tensor_alloc(mctx_->buf_w.get(), self_weight, ckpt_weight->data);
+            } else {
+                ggml_backend_tensor_set(self_weight, ckpt_weight->data, 0, ggml_nbytes(self_weight));
+            }
         }
     }
+}
 
-    to_device();
+void ChatGLM2ForCausalLM::set_graph_inputs(int qlen, int n_past, int n_ctx) const {
+    set_graph_inputs(mctx_->gf, qlen, n_past, n_ctx);
+}
 
-    ctx_.weight_buffer = std::string_view(loader.data, loader.size);
-    ctx_.init_device_context();
+void ChatGLM2ForCausalLM::set_graph_inputs(ggml_cgraph *gf, int qlen, int n_past, int n_ctx) {
+    ggml_tensor *position_ids = ggml_graph_get_tensor(gf, "position_ids");
+    CHATGLM_CHECK(ggml_n_dims(position_ids) == 1 && position_ids->ne[0] == qlen)
+        << "invalid position ids size " << position_ids->ne[0];
+
+    std::vector<int> position_ids_buffer(position_ids->ne[0]);
+    std::iota(position_ids_buffer.begin(), position_ids_buffer.end(), n_past);
+    ggml_backend_tensor_set(position_ids, position_ids_buffer.data(), 0, position_ids_buffer.size() * sizeof(int));
 }
 
 StateDict ChatGLM2ForCausalLM::state_dict() const {
     StateDict sd;
-    sd.reserve(num_weights(config.num_hidden_layers));
-    sd.emplace_back("transformer.embedding.word_embeddings.weight", transformer.word_embeddings.weight);
+    sd.kv.emplace("transformer.embedding.word_embeddings.weight", transformer.word_embeddings.weight);
     for (int i = 0; i < config.num_hidden_layers; i++) {
         std::string layer_prefix = "transformer.encoder.layers." + std::to_string(i) + '.';
-        sd.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
-        sd.emplace_back(layer_prefix + "self_attention.query_key_value.weight",
-                        transformer.layers[i].attention.query_key_value.weight);
-        sd.emplace_back(layer_prefix + "self_attention.query_key_value.bias",
-                        transformer.layers[i].attention.query_key_value.bias);
-        sd.emplace_back(layer_prefix + "self_attention.dense.weight", transformer.layers[i].attention.dense.weight);
-        sd.emplace_back(layer_prefix + "post_attention_layernorm.weight",
-                        transformer.layers[i].post_attention_layernorm.weight);
-        sd.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
-        sd.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
+        sd.kv.emplace(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
+        sd.kv.emplace(layer_prefix + "self_attention.query_key_value.weight",
+                      transformer.layers[i].attention.query_key_value.weight);
+        sd.kv.emplace(layer_prefix + "self_attention.query_key_value.bias",
+                      transformer.layers[i].attention.query_key_value.bias);
+        sd.kv.emplace(layer_prefix + "self_attention.dense.weight", transformer.layers[i].attention.dense.weight);
+        sd.kv.emplace(layer_prefix + "post_attention_layernorm.weight",
+                      transformer.layers[i].post_attention_layernorm.weight);
+        sd.kv.emplace(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
+        sd.kv.emplace(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
         // for compatibility
-        sd.emplace_back(layer_prefix + "mlp.dense_4h_to_h.weight", transformer.layers[i].mlp.down_proj.weight);
+        sd.kv.emplace(layer_prefix + "mlp.dense_4h_to_h.weight", transformer.layers[i].mlp.down_proj.weight);
     }
-    sd.emplace_back("transformer.encoder.final_layernorm.weight", transformer.final_layernorm.weight);
-    sd.emplace_back("transformer.output_layer.weight", lm_head.weight);
+    sd.kv.emplace("transformer.encoder.final_layernorm.weight", transformer.final_layernorm.weight);
+    sd.kv.emplace("transformer.output_layer.weight", lm_head.weight);
     return sd;
 }
 
@@ -1517,245 +1499,6 @@ void ChatGLM3Tokenizer::truncate(std::vector<int> &ids, int max_length) {
         int num_drop = (int)ids.size() - max_length;
         ids.erase(ids.begin() + 2, ids.begin() + 2 + num_drop);
     }
-}
-
-// ===== Baichuan =====
-
-BaichuanTokenizer::BaichuanTokenizer(std::string_view serialized_model_proto) {
-    const auto status = sp.LoadFromSerializedProto(serialized_model_proto);
-    CHATGLM_CHECK(status.ok()) << status.ToString();
-}
-
-std::vector<int> BaichuanTokenizer::encode(const std::string &text, int max_length) const {
-    std::vector<int> ids;
-    sp.Encode(text, &ids);
-    truncate(ids, max_length);
-    return ids;
-}
-
-std::string BaichuanTokenizer::decode(const std::vector<int> &ids, bool skip_special_tokens) const {
-    CHATGLM_CHECK(skip_special_tokens) << "unimplemented";
-    std::vector<int> normal_ids(ids);
-    normal_ids.erase(std::remove_if(normal_ids.begin(), normal_ids.end(), [this](int id) { return is_special_id(id); }),
-                     normal_ids.end());
-
-    std::string text;
-    sp.Decode(normal_ids, &text);
-    return text;
-}
-
-std::vector<int> BaichuanTokenizer::apply_chat_template(const std::vector<ChatMessage> &messages,
-                                                        int max_length) const {
-    check_chat_messages(messages);
-    std::vector<ChatMessage> user_assistant_messages = filter_user_assistant_messages(messages);
-
-    std::vector<int> ids;
-    ids.reserve(max_length);
-    for (const auto &msg : user_assistant_messages) {
-        ids.push_back((msg.role == ChatMessage::ROLE_USER) ? USER_TOKEN_ID : ASSISTANT_TOKEN_ID);
-        std::vector<int> content_ids = encode(msg.content, max_length);
-        ids.insert(ids.end(), content_ids.begin(), content_ids.end());
-    }
-    ids.push_back(ASSISTANT_TOKEN_ID);
-
-    truncate(ids, max_length);
-    return ids;
-}
-
-bool BaichuanTokenizer::is_special_id(int id) const {
-    return id == bos_token_id || id == eos_token_id || id == pad_token_id;
-}
-
-void BaichuanTokenizer::truncate(std::vector<int> &ids, int max_length) {
-    if ((int)ids.size() > max_length) {
-        ids.erase(ids.begin(), ids.end() - max_length);
-    }
-}
-
-// ===== Baichuan-7B =====
-
-Baichuan7BForCausalLM::Baichuan7BForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM(config, MEM_SIZE, SCRATCH_SIZE, num_weights(config.num_hidden_layers)) {
-    state_dict_ = state_dict();
-}
-
-void Baichuan7BForCausalLM::load(ModelLoader &loader) {
-    for (auto &item : state_dict_) {
-        const std::string &name = item.first;
-        ggml_tensor *tensor = item.second;
-        loader.read_tensor(name, tensor);
-    }
-
-    to_device();
-
-    ctx_.weight_buffer = std::string_view(loader.data, loader.size);
-    ctx_.init_device_context();
-}
-
-StateDict Baichuan7BForCausalLM::state_dict() const {
-    StateDict sd;
-    sd.reserve(num_weights(config.num_hidden_layers));
-    sd.emplace_back("model.embed_tokens.weight", transformer.word_embeddings.weight);
-    for (int i = 0; i < config.num_hidden_layers; i++) {
-        std::string layer_prefix = "model.layers." + std::to_string(i) + '.';
-        sd.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
-        sd.emplace_back(layer_prefix + "self_attn.W_pack.weight",
-                        transformer.layers[i].attention.query_key_value.weight);
-        sd.emplace_back(layer_prefix + "self_attn.o_proj.weight", transformer.layers[i].attention.dense.weight);
-        sd.emplace_back(layer_prefix + "post_attention_layernorm.weight",
-                        transformer.layers[i].post_attention_layernorm.weight);
-        sd.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
-        sd.emplace_back(layer_prefix + "mlp.down_proj.weight", transformer.layers[i].mlp.down_proj.weight);
-        sd.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
-    }
-    sd.emplace_back("model.norm.weight", transformer.final_layernorm.weight);
-    sd.emplace_back("lm_head.weight", lm_head.weight);
-    return sd;
-}
-
-// ===== Baichuan-13B =====
-
-Baichuan13BForCausalLM::Baichuan13BForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM(config, MEM_SIZE, SCRATCH_SIZE, num_weights(config.num_hidden_layers)) {
-    state_dict_ = state_dict();
-}
-
-void Baichuan13BForCausalLM::load(ModelLoader &loader) {
-    for (auto &item : state_dict_) {
-        const std::string &name = item.first;
-        ggml_tensor *tensor = item.second;
-        loader.read_tensor(name, tensor);
-    }
-
-    to_device();
-
-    ctx_.weight_buffer = std::string_view(loader.data, loader.size);
-    ctx_.init_device_context();
-}
-
-StateDict Baichuan13BForCausalLM::state_dict() const {
-    StateDict sd;
-    sd.reserve(num_weights(config.num_hidden_layers));
-    sd.emplace_back("model.embed_tokens.weight", transformer.word_embeddings.weight);
-    for (int i = 0; i < config.num_hidden_layers; i++) {
-        std::string layer_prefix = "model.layers." + std::to_string(i) + '.';
-        sd.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
-        sd.emplace_back(layer_prefix + "self_attn.W_pack.weight",
-                        transformer.layers[i].attention.query_key_value.weight);
-        sd.emplace_back(layer_prefix + "self_attn.o_proj.weight", transformer.layers[i].attention.dense.weight);
-        sd.emplace_back(layer_prefix + "post_attention_layernorm.weight",
-                        transformer.layers[i].post_attention_layernorm.weight);
-        sd.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
-        sd.emplace_back(layer_prefix + "mlp.down_proj.weight", transformer.layers[i].mlp.down_proj.weight);
-        sd.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
-    }
-    sd.emplace_back("model.norm.weight", transformer.final_layernorm.weight);
-    sd.emplace_back("lm_head.weight", lm_head.weight);
-    return sd;
-}
-
-// ===== InternLM =====
-
-InternLMTokenizer::InternLMTokenizer(std::string_view serialized_model_proto) {
-    const auto status = sp.LoadFromSerializedProto(serialized_model_proto);
-    CHATGLM_CHECK(status.ok()) << status.ToString();
-}
-
-std::vector<int> InternLMTokenizer::encode(const std::string &text, int max_length) const {
-    std::vector<int> ids;
-    sp.Encode(text, &ids);
-    ids.insert(ids.begin(), {bos_token_id}); // special prefix
-    if ((int)ids.size() > max_length) {
-        // sliding window: drop the least recent history while keeping the special prefix
-        int num_drop = (int)ids.size() - max_length;
-        ids.erase(ids.begin() + 1, ids.begin() + 1 + num_drop);
-    }
-    return ids;
-}
-
-std::string InternLMTokenizer::decode(const std::vector<int> &ids, bool skip_special_tokens) const {
-    CHATGLM_CHECK(skip_special_tokens) << "unimplemented";
-    // filter out special tokens
-    std::vector<int> normal_ids(ids);
-    normal_ids.erase(std::remove_if(normal_ids.begin(), normal_ids.end(), [this](int id) { return is_special_id(id); }),
-                     normal_ids.end());
-
-    std::string text;
-    sp.Decode(normal_ids, &text);
-    // remove <eoa> and its following
-    size_t eoa_pos = text.find("<eoa>");
-    if (eoa_pos != std::string::npos) {
-        text.erase(eoa_pos);
-    }
-    return text;
-}
-
-std::vector<int> InternLMTokenizer::apply_chat_template(const std::vector<ChatMessage> &messages,
-                                                        int max_length) const {
-    std::string prompt = build_prompt(messages);
-    std::vector<int> input_ids = encode(prompt, max_length);
-    return input_ids;
-}
-
-std::string InternLMTokenizer::build_prompt(const std::vector<ChatMessage> &messages) {
-    check_chat_messages(messages);
-    std::vector<ChatMessage> user_assistant_messages = filter_user_assistant_messages(messages);
-
-    std::ostringstream oss_prompt;
-    for (const auto &msg : user_assistant_messages) {
-        if (msg.role == ChatMessage::ROLE_USER) {
-            oss_prompt << "<|User|>:" << msg.content << "<eoh>\n<|Bot|>:";
-        } else {
-            oss_prompt << msg.content << "<eoa>\n";
-        }
-    }
-    return oss_prompt.str();
-}
-
-InternLMForCausalLM::InternLMForCausalLM(const ModelConfig &config)
-    : BasicModelForCausalLM(config, MEM_SIZE, SCRATCH_SIZE, num_weights(config.num_hidden_layers, config.hidden_size)) {
-    state_dict_ = state_dict();
-}
-
-void InternLMForCausalLM::load(ModelLoader &loader) {
-    for (auto &item : state_dict_) {
-        const std::string &name = item.first;
-        ggml_tensor *tensor = item.second;
-        loader.read_tensor(name, tensor);
-    }
-
-    to_device();
-
-    ctx_.weight_buffer = std::string_view(loader.data, loader.size);
-    ctx_.init_device_context();
-}
-
-StateDict InternLMForCausalLM::state_dict() const {
-    StateDict sd;
-    sd.reserve(num_weights(config.num_hidden_layers, config.hidden_size));
-    sd.emplace_back("model.embed_tokens.weight", transformer.word_embeddings.weight);
-    for (int i = 0; i < config.num_hidden_layers; i++) {
-        std::string layer_prefix = "model.layers." + std::to_string(i) + '.';
-        sd.emplace_back(layer_prefix + "input_layernorm.weight", transformer.layers[i].input_layernorm.weight);
-        sd.emplace_back(layer_prefix + "self_attn.qkv_proj.weight",
-                        transformer.layers[i].attention.query_key_value.weight);
-        if (transformer.layers[i].attention.query_key_value.bias) {
-            sd.emplace_back(layer_prefix + "self_attn.qkv_proj.bias",
-                            transformer.layers[i].attention.query_key_value.bias);
-        }
-        sd.emplace_back(layer_prefix + "self_attn.o_proj.weight", transformer.layers[i].attention.dense.weight);
-        if (transformer.layers[i].attention.dense.bias) {
-            sd.emplace_back(layer_prefix + "self_attn.o_proj.bias", transformer.layers[i].attention.dense.bias);
-        }
-        sd.emplace_back(layer_prefix + "post_attention_layernorm.weight",
-                        transformer.layers[i].post_attention_layernorm.weight);
-        sd.emplace_back(layer_prefix + "mlp.gate_proj.weight", transformer.layers[i].mlp.gate_proj.weight);
-        sd.emplace_back(layer_prefix + "mlp.up_proj.weight", transformer.layers[i].mlp.up_proj.weight);
-        sd.emplace_back(layer_prefix + "mlp.down_proj.weight", transformer.layers[i].mlp.down_proj.weight);
-    }
-    sd.emplace_back("model.norm.weight", transformer.final_layernorm.weight);
-    sd.emplace_back("lm_head.weight", lm_head.weight);
-    return sd;
 }
 
 // ===== ChatGLM4-9B =====
@@ -1994,8 +1737,8 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
         }
     };
 
-    mapped_file = std::make_unique<MappedFile>(path);
-    ModelLoader loader(mapped_file->data, mapped_file->size);
+    mapped_file_ = std::make_unique<MappedFile>(path);
+    ModelLoader loader(mapped_file_->data, mapped_file_->size);
 
     // load magic
     std::string magic = loader.read_string(4);
@@ -2009,11 +1752,9 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
         // load config
         ModelConfig config;
         if (version == 1) {
-            config = ModelConfig(model_type, loader.read_basic<ConfigRecordV1>(), 1e-5f, ActivationType::GELU, true,
-                                 true, true, false, RopeType::CHATGLM, 10000.f, -1, AttentionMaskType::CHATGLM, 0);
+            config = ModelConfig(model_type, loader.read_basic<ConfigRecordV1>(), 1e-5f, 10000.f, 0);
         } else if (version == 2) {
-            config = ModelConfig(model_type, loader.read_basic<ConfigRecordV2>(), ActivationType::GELU, true, true,
-                                 true, false, RopeType::CHATGLM, -1, AttentionMaskType::CHATGLM);
+            config = ModelConfig(model_type, loader.read_basic<ConfigRecordV2>());
         } else {
             CHATGLM_THROW << "only support version 1 or 2 for now but got " << version;
         }
@@ -2021,22 +1762,21 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
 
         // load tokenizer
         int proto_size = loader.read_basic<int>();
-        std::string_view serialized_model_proto((char *)mapped_file->data + loader.tell(), proto_size);
+        std::string_view serialized_model_proto((char *)mapped_file_->data + loader.tell(), proto_size);
         loader.seek(proto_size, SEEK_CUR);
         tokenizer = std::make_unique<ChatGLMTokenizer>(serialized_model_proto);
 
         // load model
         model = std::make_unique<ChatGLMForCausalLM>(config);
-        model->load(loader);
+        StateDict sd = loader.read_state_dict();
+        model->load_state_dict(sd);
     } else if (model_type == ModelType::CHATGLM2 || model_type == ModelType::CHATGLM3) {
         // load config
         ModelConfig config;
         if (version == 1) {
-            config = ModelConfig(model_type, loader.read_basic<ConfigRecordV1GQA>(), 1e-5f, ActivationType::SILU, true,
-                                 false, false, false, RopeType::GPTJ, 10000.f, 2, AttentionMaskType::CAUSAL, 0);
+            config = ModelConfig(model_type, loader.read_basic<ConfigRecordV1GQA>(), 1e-5f, 10000.f, 0);
         } else if (version == 2) {
-            config = ModelConfig(model_type, loader.read_basic<ConfigRecordV2>(), ActivationType::SILU, true, false,
-                                 false, false, RopeType::GPTJ, 2, AttentionMaskType::CAUSAL);
+            config = ModelConfig(model_type, loader.read_basic<ConfigRecordV2>());
         } else {
             CHATGLM_THROW << "only support version 1 or 2 for now but got " << version;
         }
@@ -2044,7 +1784,7 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
 
         // load tokenizer
         int proto_size = loader.read_basic<int>();
-        std::string_view serialized_model_proto((char *)mapped_file->data + loader.tell(), proto_size);
+        std::string_view serialized_model_proto((char *)mapped_file_->data + loader.tell(), proto_size);
         loader.seek(proto_size, SEEK_CUR);
 
         if (model_type == ModelType::CHATGLM2) {
@@ -2059,12 +1799,12 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
         }
 
         // load model
-        model->load(loader);
+        StateDict sd = loader.read_state_dict();
+        model->load_state_dict(sd);
     } else if (model_type == ModelType::CHATGLM4) {
         // load config
         CHATGLM_CHECK(version == 2) << "only support version 2 for now but got " << version;
-        ModelConfig config(model_type, loader.read_basic<ConfigRecordV2>(), ActivationType::SILU, true, false, false,
-                           false, RopeType::GPTJ, 2, AttentionMaskType::CAUSAL);
+        ModelConfig config(model_type, loader.read_basic<ConfigRecordV2>());
         _update_config_max_length(config, max_length);
 
         // load tokenizer
@@ -2076,71 +1816,8 @@ Pipeline::Pipeline(const std::string &path, int max_length) {
 
         // load model
         model = std::make_unique<ChatGLM4ForCausalLM>(config);
-        model->load(loader);
-    } else if (model_type == ModelType::BAICHUAN7B) {
-        std::cerr << "[WARN] Baichuan models are deprecated in favor of llama.cpp, and will be removed in next major "
-                     "version of chatglm.cpp\n";
-        CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
-
-        // load config
-        ModelConfig config(model_type, loader.read_basic<ConfigRecordV1>(), 1e-6f, ActivationType::SILU, false, false,
-                           false, false, RopeType::NEOX, 10000.f, 1, AttentionMaskType::CAUSAL, 0);
-        _update_config_max_length(config, max_length);
-
-        // load tokenizer
-        int proto_size = loader.read_basic<int>();
-        std::string_view serialized_model_proto((char *)mapped_file->data + loader.tell(), proto_size);
-        loader.seek(proto_size, SEEK_CUR);
-        tokenizer = std::make_unique<BaichuanTokenizer>(serialized_model_proto);
-
-        // load model
-        model = std::make_unique<Baichuan7BForCausalLM>(config);
-        model->load(loader);
-    } else if (model_type == ModelType::BAICHUAN13B) {
-        std::cerr << "[WARN] Baichuan models are deprecated in favor of llama.cpp, and will be removed in next major "
-                     "version of chatglm.cpp\n";
-        CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
-
-        // load config
-        ModelConfig config(model_type, loader.read_basic<ConfigRecordV1>(), 1e-6f, ActivationType::SILU, false, false,
-                           false, true, RopeType::DISABLED, 10000.f, -1, AttentionMaskType::CAUSAL, 0);
-        _update_config_max_length(config, max_length);
-
-        // load tokenizer
-        int proto_size = loader.read_basic<int>();
-        std::string_view serialized_model_proto((char *)mapped_file->data + loader.tell(), proto_size);
-        loader.seek(proto_size, SEEK_CUR);
-        tokenizer = std::make_unique<BaichuanTokenizer>(serialized_model_proto);
-
-        // load model
-        model = std::make_unique<Baichuan13BForCausalLM>(config);
-        model->load(loader);
-    } else if (model_type == ModelType::INTERNLM) {
-        std::cerr << "[WARN] InternLM models are deprecated in favor of llama.cpp, and will be removed in next major "
-                     "version of chatglm.cpp\n";
-        CHATGLM_CHECK(version == 1) << "only support version 1 for now but got " << version;
-
-        // load config
-        auto rec = loader.read_basic<ConfigRecordV1>();
-        ModelConfig config;
-        if (rec.hidden_size == 4096) {
-            config = ModelConfig(model_type, rec, 1e-6f, ActivationType::SILU, true, true, false, false, RopeType::NEOX,
-                                 10000.f, 1, AttentionMaskType::CAUSAL, 0);
-        } else {
-            config = ModelConfig(model_type, rec, 1e-6f, ActivationType::SILU, false, false, false, false,
-                                 RopeType::NEOX, 10000.f, 1, AttentionMaskType::CAUSAL, 0);
-        }
-        _update_config_max_length(config, max_length);
-
-        // load tokenizer
-        int proto_size = loader.read_basic<int>();
-        std::string_view serialized_model_proto((char *)mapped_file->data + loader.tell(), proto_size);
-        loader.seek(proto_size, SEEK_CUR);
-        tokenizer = std::make_unique<InternLMTokenizer>(serialized_model_proto);
-
-        // load model
-        model = std::make_unique<InternLMForCausalLM>(config);
-        model->load(loader);
+        StateDict sd = loader.read_state_dict();
+        model->load_state_dict(sd);
     } else {
         CHATGLM_THROW << "invalid model type " << (int)model_type;
     }

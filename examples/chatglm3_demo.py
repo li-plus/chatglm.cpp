@@ -302,7 +302,6 @@ def main():
                 top_p=top_p,
                 temperature=temperature,
                 repetition_penalty=1.0,
-                num_threads=0,
                 stream=True,
             ):
                 response += chunk.content

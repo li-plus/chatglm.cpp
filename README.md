@@ -22,9 +22,7 @@ Highlights:
 Support Matrix:
 * Hardwares: x86/arm CPU, NVIDIA GPU, Apple Silicon GPU
 * Platforms: Linux, MacOS, Windows
-* Models: [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [ChatGLM3](https://github.com/THUDM/ChatGLM3), [GLM-4](https://github.com/THUDM/GLM-4), [CodeGeeX2](https://github.com/THUDM/CodeGeeX2), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan-7B](https://github.com/baichuan-inc/Baichuan-7B), [Baichuan-13B](https://github.com/baichuan-inc/Baichuan-13B), [Baichuan2](https://github.com/baichuan-inc/Baichuan2), [InternLM](https://github.com/InternLM/InternLM)
-
-**NOTE**: Baichuan & InternLM model series are deprecated in favor of [llama.cpp](https://github.com/ggerganov/llama.cpp).
+* Models: [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [ChatGLM3](https://github.com/THUDM/ChatGLM3), [GLM-4](https://github.com/THUDM/GLM-4), [CodeGeeX2](https://github.com/THUDM/CodeGeeX2)
 
 ## Getting Started
 
@@ -59,7 +57,6 @@ The original model (`-i <model_name_or_path>`) can be a Hugging Face model name 
 * ChatGLM3-6B: `THUDM/chatglm3-6b`
 * ChatGLM4-9B: `THUDM/glm-4-9b-chat`
 * CodeGeeX2: `THUDM/codegeex2-6b`, `THUDM/codegeex2-6b-int4`
-* Baichuan & Baichuan2: `baichuan-inc/Baichuan-13B-Chat`, `baichuan-inc/Baichuan2-7B-Chat`, `baichuan-inc/Baichuan2-13B-Chat`
 
 You are free to try any of the below quantization types by specifying `-t <type>`:
 * `q4_0`: 4-bit integer quantization with fp16 scales.
@@ -212,56 +209,6 @@ print(bubble_sort([5, 4, 3, 2, 1]))
 ```
 </details>
 
-<details>
-<summary>Baichuan-13B-Chat</summary>
-
-```sh
-python3 chatglm_cpp/convert.py -i baichuan-inc/Baichuan-13B-Chat -t q4_0 -o models/baichuan-13b-chat-ggml.bin
-./build/bin/main -m models/baichuan-13b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1
-# 你好！有什么我可以帮助你的吗？
-```
-</details>
-
-<details>
-<summary>Baichuan2-7B-Chat</summary>
-
-```sh
-python3 chatglm_cpp/convert.py -i baichuan-inc/Baichuan2-7B-Chat -t q4_0 -o models/baichuan2-7b-chat-ggml.bin
-./build/bin/main -m models/baichuan2-7b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05
-# 你好！很高兴为您提供帮助。请问有什么问题我可以帮您解答？
-```
-</details>
-
-<details>
-<summary>Baichuan2-13B-Chat</summary>
-
-```sh
-python3 chatglm_cpp/convert.py -i baichuan-inc/Baichuan2-13B-Chat -t q4_0 -o models/baichuan2-13b-chat-ggml.bin
-./build/bin/main -m models/baichuan2-13b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05
-# 你好！今天我能为您提供什么帮助？
-```
-</details>
-
-<details>
-<summary>InternLM-Chat-7B</summary>
-
-```sh
-python3 chatglm_cpp/convert.py -i internlm/internlm-chat-7b -t q4_0 -o models/internlm-chat-7b-ggml.bin
-./build/bin/main -m models/internlm-chat-7b-ggml.bin -p 你好 --top_p 0.8 --temp 0.8
-# 你好，我是书生·浦语，有什么可以帮助你的吗？
-```
-</details>
-
-<details>
-<summary>InternLM-Chat-20B</summary>
-
-```sh
-python3 chatglm_cpp/convert.py -i internlm/internlm-chat-20b -t q4_0 -o models/internlm-chat-20b-ggml.bin
-./build/bin/main -m models/internlm-chat-20b-ggml.bin -p 你好 --top_p 0.8 --temp 0.8
-# 你好！有什么我可以帮到你的吗？
-```
-</details>
-
 ## Using BLAS
 
 BLAS library can be integrated to further accelerate matrix multiplication. However, in some cases, using BLAS may cause performance degradation. Whether to turn on BLAS should depend on the benchmarking result.
@@ -279,15 +226,15 @@ cmake -B build -DGGML_OPENBLAS=ON && cmake --build build -j
 
 **cuBLAS**
 
-cuBLAS uses NVIDIA GPU to accelerate BLAS. Add the CMake flag `-DGGML_CUBLAS=ON` to enable it.
+cuBLAS uses NVIDIA GPU to accelerate BLAS. Add the CMake flag `-DGGML_CUDA=ON` to enable it.
 ```sh
-cmake -B build -DGGML_CUBLAS=ON && cmake --build build -j
+cmake -B build -DGGML_CUDA=ON && cmake --build build -j
 ```
 
-By default, all kernels will be compiled for all possible CUDA architectures and it takes some time. To run on a specific type of device, you may specify `CUDA_ARCHITECTURES` to speed up the nvcc compilation. For example:
+By default, all kernels will be compiled for all possible CUDA architectures and it takes some time. To run on a specific type of device, you may specify `GGML_CUDA_ARCHITECTURES` to speed up the nvcc compilation. For example:
 ```sh
-cmake -B build -DGGML_CUBLAS=ON -DCUDA_ARCHITECTURES="80"       # for A100
-cmake -B build -DGGML_CUBLAS=ON -DCUDA_ARCHITECTURES="70;75"    # compatible with both V100 and T4
+cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_ARCHITECTURES="80"       # for A100
+cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_ARCHITECTURES="70;75"    # compatible with both V100 and T4
 ```
 
 To find out the CUDA architecture of your GPU device, see [Your GPU Compute Capability](https://developer.nvidia.com/cuda-gpus).
@@ -312,7 +259,7 @@ pip install -U chatglm-cpp
 
 To enable cuBLAS acceleration on NVIDIA GPU:
 ```sh
-CMAKE_ARGS="-DGGML_CUBLAS=ON" pip install -U chatglm-cpp
+CMAKE_ARGS="-DGGML_CUDA=ON" pip install -U chatglm-cpp
 ```
 
 To enable Metal on Apple silicon devices:
@@ -426,51 +373,6 @@ python3 web_demo.py -m ../models/codegeex2-ggml.bin --temp 0 --max_length 512 --
 ```
 </details>
 
-<details>
-<summary>Baichuan-13B-Chat</summary>
-
-```sh
-python3 cli_demo.py -m ../models/baichuan-13b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1 # CLI demo
-python3 web_demo.py -m ../models/baichuan-13b-chat-ggml.bin --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.1   # web demo
-```
-</details>
-
-<details>
-<summary>Baichuan2-7B-Chat</summary>
-
-```sh
-python3 cli_demo.py -m ../models/baichuan2-7b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05 # CLI demo
-python3 web_demo.py -m ../models/baichuan2-7b-chat-ggml.bin --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05   # web demo
-```
-</details>
-
-<details>
-<summary>Baichuan2-13B-Chat</summary>
-
-```sh
-python3 cli_demo.py -m ../models/baichuan2-13b-chat-ggml.bin -p 你好 --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05 # CLI demo
-python3 web_demo.py -m ../models/baichuan2-13b-chat-ggml.bin --top_k 5 --top_p 0.85 --temp 0.3 --repeat_penalty 1.05   # web demo
-```
-</details>
-
-<details>
-<summary>InternLM-Chat-7B</summary>
-
-```sh
-python3 cli_demo.py -m ../models/internlm-chat-7b-ggml.bin -p 你好 --top_p 0.8 --temp 0.8  # CLI demo
-python3 web_demo.py -m ../models/internlm-chat-7b-ggml.bin --top_p 0.8 --temp 0.8  # web demo
-```
-</details>
-
-<details>
-<summary>InternLM-Chat-20B</summary>
-
-```sh
-python3 cli_demo.py -m ../models/internlm-chat-20b-ggml.bin -p 你好 --top_p 0.8 --temp 0.8 # CLI demo
-python3 web_demo.py -m ../models/internlm-chat-20b-ggml.bin --top_p 0.8 --temp 0.8 # web demo
-```
-</details>
-
 **Converting Hugging Face LLMs at Runtime**
 
 Sometimes it might be inconvenient to convert and save the intermediate GGML models beforehand. Here is an option to directly load from the original Hugging Face model, quantize it into GGML models in a minute, and start serving. All you need is to replace the GGML model path with the Hugging Face model name or path.
@@ -579,7 +481,7 @@ For CUDA support, make sure [nvidia-docker](https://github.com/NVIDIA/nvidia-doc
 ```sh
 docker build . --network=host -t chatglm.cpp-cuda \
     --build-arg BASE_IMAGE=nvidia/cuda:12.2.0-devel-ubuntu20.04 \
-    --build-arg CMAKE_ARGS="-DGGML_CUBLAS=ON -DCUDA_ARCHITECTURES=80"
+    --build-arg CMAKE_ARGS="-DGGML_CUDA=ON -DGGML_CUDA_ARCHITECTURES=80"
 docker run -it --rm --gpus all -v $PWD/models:/chatglm.cpp/models chatglm.cpp-cuda \
     ./build/bin/main -m models/chatglm-ggml.bin -p "你好"
 ```
@@ -636,40 +538,6 @@ ChatGLM4-9B:
 | ms/token (CPU @ Platinum 8260) | 105   | 105   | 122   | 134   | 158   | 279   |
 | ms/token (CUDA @ V100 SXM2)    | 12.1  | 12.5  | 13.8  | 13.9  | 17.7  | 27.7  |
 | file size                      | 5.0G  | 5.5G  | 6.1G  | 6.6G  | 9.4G  | 18G   |
-
-Baichuan-7B / Baichuan2-7B:
-
-|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
-|--------------------------------|-------|-------|-------|-------|-------|-------|
-| ms/token (CPU @ Platinum 8260) | 85.3  | 94.8  | 103.4 | 109.6 | 136.8 | 248.5 |
-| ms/token (CUDA @ V100 SXM2)    | 8.7   | 9.2   | 10.2  | 10.3  | 13.2  | 21.0  |
-| ms/token (MPS @ M2 Ultra)      | 11.3  | 12.0  | N/A   | N/A   | 16.4  | 25.6  |
-| file size                      | 4.0G  | 4.4G  | 4.9G  | 5.3G  | 7.5G  | 14G   |
-| mem usage                      | 4.5G  | 4.9G  | 5.3G  | 5.7G  | 7.8G  | 14G   |
-
-Baichuan-13B / Baichuan2-13B:
-
-|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
-|--------------------------------|-------|-------|-------|-------|-------|-------|
-| ms/token (CPU @ Platinum 8260) | 161.7 | 175.8 | 189.9 | 192.3 | 255.6 | 459.6 |
-| ms/token (CUDA @ V100 SXM2)    | 13.7  | 15.1  | 16.3  | 16.9  | 21.9  | 36.8  |
-| ms/token (MPS @ M2 Ultra)      | 18.2  | 18.8  | N/A   | N/A   | 27.2  | 44.4  |
-| file size                      | 7.0G  | 7.8G  | 8.5G  | 9.3G  | 14G   | 25G   |
-| mem usage                      | 7.8G  | 8.8G  | 9.5G  | 10G   | 14G   | 25G   |
-
-InternLM-7B:
-
-|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
-|--------------------------------|-------|-------|-------|-------|-------|-------|
-| ms/token (CPU @ Platinum 8260) | 85.3  | 90.1  | 103.5 | 112.5 | 137.3 | 232.2 |
-| ms/token (CUDA @ V100 SXM2)    | 9.1   | 9.4   | 10.5  | 10.5  | 13.3  | 21.1  |
-
-InternLM-20B:
-
-|                                | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
-|--------------------------------|-------|-------|-------|-------|-------|-------|
-| ms/token (CPU @ Platinum 8260) | 230.0 | 236.7 | 276.6 | 290.6 | 357.1 | N/A   |
-| ms/token (CUDA @ V100 SXM2)    | 21.6  | 23.2  | 25.0  | 25.9  | 33.4  | N/A   |
 
 ## Model Quality
 

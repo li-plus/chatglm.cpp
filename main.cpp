@@ -35,7 +35,6 @@ struct Args {
     float top_p = 0.7;
     float temp = 0.95;
     float repeat_penalty = 1.0;
-    int num_threads = 0;
     bool verbose = false;
 };
 
@@ -112,8 +111,6 @@ static Args parse_args(const std::vector<std::string> &argv) {
             args.temp = std::stof(argv.at(++i));
         } else if (arg == "--repeat_penalty") {
             args.repeat_penalty = std::stof(argv.at(++i));
-        } else if (arg == "-t" || arg == "--threads") {
-            args.num_threads = std::stoi(argv.at(++i));
         } else if (arg == "-v" || arg == "--verbose") {
             args.verbose = true;
         } else {
@@ -185,7 +182,7 @@ static void chat(Args &args) {
     auto streamer = std::make_unique<chatglm::StreamerGroup>(std::move(streamers));
 
     chatglm::GenerationConfig gen_config(args.max_length, args.max_new_tokens, args.max_context_length, args.temp > 0,
-                                         args.top_k, args.top_p, args.temp, args.repeat_penalty, args.num_threads);
+                                         args.top_k, args.top_p, args.temp, args.repeat_penalty);
 
     if (args.verbose) {
         std::cout << "system info: | "
@@ -210,8 +207,7 @@ static void chat(Args &args) {
                   << "top_k = " << args.top_k << " | "
                   << "top_p = " << args.top_p << " | "
                   << "temperature = " << args.temp << " | "
-                  << "repetition_penalty = " << args.repeat_penalty << " | "
-                  << "num_threads = " << args.num_threads << " |\n";
+                  << "repetition_penalty = " << args.repeat_penalty << " |\n";
 
         std::cout << "loaded " << pipeline.model->config.model_type_name() << " model from " << args.model_path
                   << " within: " << (end_load_us - start_load_us) / 1000.f << " ms\n";

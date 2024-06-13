@@ -3,13 +3,7 @@ ChatGLM.cpp python binding
 """
 from __future__ import annotations
 import typing
-__all__ = ['Baichuan13BForCausalLM', 'Baichuan7BForCausalLM', 'BaichuanTokenizer', 'BaseModelForCausalLM', 'BaseTokenizer', 'ChatGLM2ForCausalLM', 'ChatGLM2Tokenizer', 'ChatGLM3Tokenizer', 'ChatGLM4Tokenizer', 'ChatGLMForCausalLM', 'ChatGLMTokenizer', 'ChatMessage', 'CodeMessage', 'FunctionMessage', 'GenerationConfig', 'InternLMForCausalLM', 'InternLMTokenizer', 'ModelConfig', 'ModelType', 'Pipeline', 'ToolCallMessage']
-class Baichuan13BForCausalLM(BaseModelForCausalLM):
-    pass
-class Baichuan7BForCausalLM(BaseModelForCausalLM):
-    pass
-class BaichuanTokenizer(BaseTokenizer):
-    pass
+__all__ = ['BaseModelForCausalLM', 'BaseTokenizer', 'ChatGLM2ForCausalLM', 'ChatGLM2Tokenizer', 'ChatGLM3Tokenizer', 'ChatGLM4Tokenizer', 'ChatGLMForCausalLM', 'ChatGLMTokenizer', 'ChatMessage', 'CodeMessage', 'FunctionMessage', 'GenerationConfig', 'ModelConfig', 'ModelType', 'Pipeline', 'ToolCallMessage']
 class BaseModelForCausalLM:
     def generate_next_token(self, input_ids: list[int], gen_config: GenerationConfig, n_past: int, n_ctx: int) -> int:
         ...
@@ -69,17 +63,12 @@ class GenerationConfig:
     max_context_length: int
     max_length: int
     max_new_tokens: int
-    num_threads: int
     repetition_penalty: float
     temperature: float
     top_k: int
     top_p: float
-    def __init__(self, max_length: int = 2048, max_new_tokens: int = -1, max_context_length: int = 512, do_sample: bool = True, top_k: int = 0, top_p: float = 0.7, temperature: float = 0.95, repetition_penalty: float = 1.0, num_threads: int = 0) -> None:
+    def __init__(self, max_length: int = 2048, max_new_tokens: int = -1, max_context_length: int = 512, do_sample: bool = True, top_k: int = 0, top_p: float = 0.7, temperature: float = 0.95, repetition_penalty: float = 1.0) -> None:
         ...
-class InternLMForCausalLM(BaseModelForCausalLM):
-    pass
-class InternLMTokenizer(BaseTokenizer):
-    pass
 class ModelConfig:
     @property
     def bos_token_id(self) -> int:
@@ -137,21 +126,12 @@ class ModelType:
       CHATGLM3
     
       CHATGLM4
-    
-      BAICHUAN7B
-    
-      BAICHUAN13B
-    
-      INTERNLM
     """
-    BAICHUAN13B: typing.ClassVar[ModelType]  # value = <ModelType.BAICHUAN13B: 1025>
-    BAICHUAN7B: typing.ClassVar[ModelType]  # value = <ModelType.BAICHUAN7B: 1024>
     CHATGLM: typing.ClassVar[ModelType]  # value = <ModelType.CHATGLM: 1>
     CHATGLM2: typing.ClassVar[ModelType]  # value = <ModelType.CHATGLM2: 2>
     CHATGLM3: typing.ClassVar[ModelType]  # value = <ModelType.CHATGLM3: 3>
     CHATGLM4: typing.ClassVar[ModelType]  # value = <ModelType.CHATGLM4: 4>
-    INTERNLM: typing.ClassVar[ModelType]  # value = <ModelType.INTERNLM: 1280>
-    __members__: typing.ClassVar[dict[str, ModelType]]  # value = {'CHATGLM': <ModelType.CHATGLM: 1>, 'CHATGLM2': <ModelType.CHATGLM2: 2>, 'CHATGLM3': <ModelType.CHATGLM3: 3>, 'CHATGLM4': <ModelType.CHATGLM4: 4>, 'BAICHUAN7B': <ModelType.BAICHUAN7B: 1024>, 'BAICHUAN13B': <ModelType.BAICHUAN13B: 1025>, 'INTERNLM': <ModelType.INTERNLM: 1280>}
+    __members__: typing.ClassVar[dict[str, ModelType]]  # value = {'CHATGLM': <ModelType.CHATGLM: 1>, 'CHATGLM2': <ModelType.CHATGLM2: 2>, 'CHATGLM3': <ModelType.CHATGLM3: 3>, 'CHATGLM4': <ModelType.CHATGLM4: 4>}
     def __eq__(self, other: typing.Any) -> bool:
         ...
     def __getstate__(self) -> int:
