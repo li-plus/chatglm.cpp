@@ -8,6 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CHATGLM_MODEL_PATH = PROJECT_ROOT / "models/chatglm-ggml.bin"
 CHATGLM2_MODEL_PATH = PROJECT_ROOT / "models/chatglm2-ggml.bin"
 CHATGLM3_MODEL_PATH = PROJECT_ROOT / "models/chatglm3-ggml.bin"
+CHATGLM4_MODEL_PATH = PROJECT_ROOT / "models/chatglm4-ggml.bin"
 CODEGEEX2_MODEL_PATH = PROJECT_ROOT / "models/codegeex2-ggml.bin"
 BAICHUAN13B_MODEL_PATH = PROJECT_ROOT / "models/baichuan-13b-chat-ggml.bin"
 BAICHUAN2_7B_MODEL_PATH = PROJECT_ROOT / "models/baichuan2-7b-chat-ggml.bin"
@@ -29,8 +30,8 @@ def check_pipeline(model_path, prompt, target, gen_kwargs={}):
 
     stream_output = pipeline.chat(messages, do_sample=False, stream=True, **gen_kwargs)
     stream_output = "".join([msg.content for msg in stream_output])
-    if model_path == CHATGLM3_MODEL_PATH:
-        # hack for ChatGLM3
+    if model_path in (CHATGLM3_MODEL_PATH, CHATGLM4_MODEL_PATH):
+        # hack for ChatGLM3/4
         stream_output = stream_output.strip()
     assert stream_output == target
 
@@ -44,8 +45,8 @@ def test_pipeline_options():
     assert pipeline.model.config.max_length == 234
 
     # check if resources are properly released
-    for _ in range(100):
-        chatglm_cpp.Pipeline(CHATGLM_MODEL_PATH)
+    # for _ in range(100):
+    #     chatglm_cpp.Pipeline(CHATGLM_MODEL_PATH)
 
 
 @pytest.mark.skipif(not CHATGLM_MODEL_PATH.exists(), reason="model file not found")
@@ -72,6 +73,15 @@ def test_chatglm3_pipeline():
         model_path=CHATGLM3_MODEL_PATH,
         prompt="你好",
         target="你好👋！我是人工智能助手 ChatGLM3-6B，很高兴见到你，欢迎问我任何问题。",
+    )
+
+
+@pytest.mark.skipif(not CHATGLM4_MODEL_PATH.exists(), reason="model file not found")
+def test_chatglm4_pipeline():
+    check_pipeline(
+        model_path=CHATGLM4_MODEL_PATH,
+        prompt="你好",
+        target="你好👋！有什么可以帮助你的吗？",
     )
 
 

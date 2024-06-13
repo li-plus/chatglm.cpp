@@ -3,6 +3,7 @@
 #include <cmath>
 #include <ggml.h>
 #include <iomanip>
+#include <re2/re2.h>
 #include <sentencepiece_processor.h>
 #include <sstream>
 #include <unordered_map>
@@ -50,6 +51,7 @@ enum class ModelType {
     CHATGLM = 1,
     CHATGLM2 = 2,
     CHATGLM3 = 3,
+    CHATGLM4 = 4,
     BAICHUAN7B = 1024,
     BAICHUAN13B = 1025,
     INTERNLM = 1280,
@@ -264,9 +266,9 @@ class BaseTokenizer {
 
     virtual std::vector<int> encode(const std::string &text, int max_length) const = 0;
 
-    virtual std::string decode(const std::vector<int> &ids) const = 0;
+    virtual std::string decode(const std::vector<int> &ids, bool skip_special_tokens = true) const = 0;
 
-    virtual std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const = 0;
+    virtual std::vector<int> apply_chat_template(const std::vector<ChatMessage> &messages, int max_length) const = 0;
 
     virtual ChatMessage decode_message(const std::vector<int> &ids) const {
         return {ChatMessage::ROLE_ASSISTANT, decode(ids)};
@@ -855,11 +857,11 @@ class ChatGLMTokenizer : public BaseTokenizer {
 
     std::vector<int> encode(const std::string &text, int max_length) const override;
 
-    std::string decode(const std::vector<int> &ids) const override;
+    std::string decode(const std::vector<int> &ids, bool skip_special_tokens = true) const override;
 
-    std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
+    std::vector<int> apply_chat_template(const std::vector<ChatMessage> &messages, int max_length) const override;
 
-    static std::string build_prompt(const std::vector<ChatMessage> &messages);
+    static std::string apply_chat_template_text(const std::vector<ChatMessage> &messages);
 
   private:
     static std::string preprocess(const std::string &text);
@@ -928,11 +930,11 @@ class ChatGLM2Tokenizer : public BaseTokenizer {
 
     std::vector<int> encode(const std::string &text, int max_length) const override;
 
-    std::string decode(const std::vector<int> &ids) const override;
+    std::string decode(const std::vector<int> &ids, bool skip_special_tokens = true) const override;
 
-    std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
+    std::vector<int> apply_chat_template(const std::vector<ChatMessage> &messages, int max_length) const override;
 
-    static std::string build_prompt(const std::vector<ChatMessage> &messages);
+    static std::string apply_chat_template_text(const std::vector<ChatMessage> &messages);
 
   private:
     bool is_special_id(int id) const;
@@ -974,16 +976,14 @@ class ChatGLM3Tokenizer : public BaseTokenizer {
 
     std::vector<int> encode(const std::string &text, int max_length) const override;
 
-    std::string decode(const std::vector<int> &ids) const override;
+    std::string decode(const std::vector<int> &ids, bool skip_special_tokens = true) const override;
 
-    std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
+    std::vector<int> apply_chat_template(const std::vector<ChatMessage> &messages, int max_length) const override;
 
     ChatMessage decode_message(const std::vector<int> &ids) const override;
 
   private:
     std::vector<int> encode_single_message(const std::string &role, const std::string &content) const;
-
-    std::string decode_with_special_tokens(const std::vector<int> &ids) const;
 
     static std::string remove_special_tokens(const std::string &text);
 
@@ -1020,9 +1020,9 @@ class BaichuanTokenizer : public BaseTokenizer {
 
     std::vector<int> encode(const std::string &text, int max_length) const override;
 
-    std::string decode(const std::vector<int> &ids) const override;
+    std::string decode(const std::vector<int> &ids, bool skip_special_tokens = true) const override;
 
-    std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
+    std::vector<int> apply_chat_template(const std::vector<ChatMessage> &messages, int max_length) const override;
 
   private:
     bool is_special_id(int id) const;
@@ -1091,9 +1091,9 @@ class InternLMTokenizer : public BaseTokenizer {
 
     std::vector<int> encode(const std::string &text, int max_length) const override;
 
-    std::string decode(const std::vector<int> &ids) const override;
+    std::string decode(const std::vector<int> &ids, bool skip_special_tokens = true) const override;
 
-    std::vector<int> encode_messages(const std::vector<ChatMessage> &messages, int max_length) const override;
+    std::vector<int> apply_chat_template(const std::vector<ChatMessage> &messages, int max_length) const override;
 
     static std::string build_prompt(const std::vector<ChatMessage> &messages);
 
@@ -1128,6 +1128,71 @@ class InternLMForCausalLM : public BasicModelForCausalLM<InternLMModel> {
     static constexpr size_t MEM_SIZE = 1280 * MB;
     static constexpr size_t SCRATCH_SIZE = 1280 * MB;
 };
+// ===== ChatGLM4-9B =====
+
+// C++ port of BPE algorithm from https://github.com/openai/tiktoken/blob/main/src/lib.rs
+class TiktokenCoreBPE {
+  public:
+    TiktokenCoreBPE() = default;
+
+    TiktokenCoreBPE(std::unordered_map<std::string, int> encoder,
+                    std::unordered_map<std::string, int> special_tokens_encoder, const std::string &pattern);
+
+    std::vector<int> encode_ordinary(const std::string &text) const { return _encode_ordinary_native(text); }
+
+    std::string decode(const std::vector<int> &tokens) const { return _decode_native(tokens); }
+
+  private:
+    static std::vector<std::pair<size_t, int>> _byte_pair_merge(const std::unordered_map<std::string, int> &ranks,
+                                                                const std::string &piece);
+
+    static std::vector<int> byte_pair_encode(const std::string &piece,
+                                             const std::unordered_map<std::string, int> &ranks);
+
+    std::vector<int> _encode_ordinary_native(const std::string &text) const;
+
+    std::string _decode_native(const std::vector<int> &tokens) const;
+
+  public:
+    std::unique_ptr<RE2> regex;
+    std::unordered_map<std::string, int> encoder;
+    std::unordered_map<std::string, int> special_tokens_encoder;
+    std::unordered_map<int, std::string> decoder;
+    std::unordered_map<int, std::string> special_tokens_decoder;
+};
+
+class ChatGLM4Tokenizer : public BaseTokenizer {
+  public:
+    ChatGLM4Tokenizer(const std::string &vocab_text);
+
+    std::vector<int> encode(const std::string &text, int max_length) const override;
+
+    std::string decode(const std::vector<int> &ids, bool skip_special_tokens = true) const override;
+
+    std::vector<int> apply_chat_template(const std::vector<ChatMessage> &messages, int max_length) const override;
+
+    ChatMessage decode_message(const std::vector<int> &ids) const override;
+
+  private:
+    static void truncate(std::vector<int> &ids, int max_length);
+
+  public:
+    TiktokenCoreBPE core_bpe;
+    // int eos_token_id;
+    // int mask_token_id;
+    int gmask_token_id;
+    // int smask_token_id;
+    int sop_token_id;
+    // int eop_token_id;
+    // int system_token_id;
+    int user_token_id;
+    int assistant_token_id;
+    int observation_token_id;
+};
+
+using ChatGLM4Model = ChatGLM2Model;
+
+using ChatGLM4ForCausalLM = ChatGLM2ForCausalLM;
 
 // ===== pipeline =====
 

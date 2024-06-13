@@ -8,3 +8,9 @@
 [submodule "third_party/ggml"]
 	path = third_party/ggml
 	url = https://github.com/ggerganov/ggml.git
+[submodule "third_party/re2"]
+	path = third_party/re2
+	url = https://github.com/google/re2.git
+[submodule "third_party/abseil-cpp"]
+	path = third_party/abseil-cpp
+	url = https://github.com/abseil/abseil-cpp.git

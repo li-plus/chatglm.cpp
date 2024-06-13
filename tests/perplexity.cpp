@@ -108,6 +108,8 @@ static void perplexity(Args &args) {
     float total_loss = 0.f;
     size_t num_samples = 0;
 
+    std::vector<chatglm::uninitialized_char> buf;
+
     size_t prev_end = 0;
     for (size_t begin = 0; begin < corpus_ids.size(); begin += args.stride) {
         const auto clk_start = std::chrono::system_clock::now();
@@ -119,7 +121,9 @@ static void perplexity(Args &args) {
 
         const auto clk_fwd = std::chrono::system_clock::now();
 
-        auto ctx = chatglm::make_unique_ggml_context(512 * chatglm::MB, nullptr, false);
+        buf.resize(ggml_nbytes(lm_logits) + 16 * chatglm::MB);
+
+        auto ctx = chatglm::make_unique_ggml_context(buf.size(), buf.data(), false);
         ggml_tensor *next_lm_logits = ggml_view_2d(ctx.get(), lm_logits, lm_logits->ne[0], target_len, lm_logits->nb[1],
                                                    (input_ids.size() - target_len - 1) * lm_logits->nb[1]);
         ggml_tensor *next_input_ids = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, target_len);

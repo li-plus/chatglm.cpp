@@ -558,6 +558,85 @@ def make_data_glm3_model():
         y3.numpy().tofile(f)
 
 
+def make_data_glm4_model():
+    def _forward_steps(model, seq_len):
+        # self attention
+        x1 = torch.arange(seq_len, dtype=torch.int64)[None, :]
+        position_ids = torch.arange(seq_len, dtype=torch.int64)[None, :]
+        attn_mask = torch.ones(1, seq_len, dtype=torch.int64)
+        with torch.no_grad():
+            out = model(x1, position_ids=position_ids, attention_mask=attn_mask, use_cache=True)
+            y1 = out.last_hidden_state
+            kv_cache = out.past_key_values
+
+        # cross attention
+        x2 = torch.tensor([[seq_len]], dtype=torch.int64)
+        position_ids = torch.tensor([[seq_len]], dtype=torch.int64)
+        attn_mask = torch.ones(1, seq_len + 1, dtype=torch.int64)
+        with torch.no_grad():
+            out = model(
+                x2, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True
+            )
+            y2 = out.last_hidden_state
+            kv_cache = out.past_key_values
+
+        # cross attention
+        x3 = torch.tensor([[seq_len + 1]], dtype=torch.int64)
+        position_ids = torch.tensor([[seq_len + 1]], dtype=torch.int64)
+        attn_mask = torch.ones(1, seq_len + 2, dtype=torch.int64)
+        with torch.no_grad():
+            out = model(
+                x3, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True
+            )
+            y3 = out.last_hidden_state
+            kv_cache = out.past_key_values
+
+        return x1, y1, x2, y2, x3, y3
+
+    CHATGLM4_MODEL_PATH = Path(
+        "~/.cache/huggingface/hub/models--THUDM--glm-4-9b-chat/snapshots/6f060dcb542d48b6bc743628634924b271545428"
+    ).expanduser()
+
+    sys.path.append(str(CHATGLM4_MODEL_PATH))
+    from modeling_chatglm import ChatGLMModel
+    from transformers import AutoConfig
+
+    config = AutoConfig.from_pretrained(CHATGLM4_MODEL_PATH, trust_remote_code=True)
+    config.hidden_size = 32
+    config.num_attention_heads = 8
+    config.num_layers = 1
+    config.padded_vocab_size = 5
+    config.multi_query_group_num = 2
+    config.ffn_hidden_size = 48
+    config.kv_channels = config.hidden_size // config.num_attention_heads
+    config.torch_dtype = torch.float32
+
+    m = ChatGLMModel(config).float().eval()
+
+    seq_len = 3
+    x1, y1, x2, y2, x3, y3 = _forward_steps(m, seq_len)
+
+    print(m)
+
+    with open(HERE / "data/glm4_model.data", "wb") as f:
+        m.embedding.word_embeddings.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].input_layernorm.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].self_attention.query_key_value.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].self_attention.query_key_value.bias.data.numpy().tofile(f)
+        m.encoder.layers[0].self_attention.dense.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].post_attention_layernorm.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].mlp.dense_h_to_4h.weight.data.numpy().tofile(f)
+        m.encoder.layers[0].mlp.dense_4h_to_h.weight.data.numpy().tofile(f)
+        m.encoder.final_layernorm.weight.data.numpy().tofile(f)
+
+        x1.int().numpy().tofile(f)
+        y1.numpy().tofile(f)
+        x2.int().numpy().tofile(f)
+        y2.numpy().tofile(f)
+        x3.int().numpy().tofile(f)
+        y3.numpy().tofile(f)
+
+
 def _make_data_baichuan_model(model_path, out_name):
     sys.path.append(str(model_path))
     from modeling_baichuan import BaichuanModel
@@ -715,6 +794,61 @@ def make_internlm_model():
         y3.numpy().tofile(f)
 
 
+def make_glm4_pipeline_data():
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained("THUDM/glm-4-9b-chat", trust_remote_code=True)
+
+    # tiktoken
+    chktxt = "\n \n\n \n\n\n \t \t\t \t\n  \n   \n    \n     \n🚀 (normal) 😶\u200d🌫️ (multiple emojis concatenated) ✅ 🦙🦙 3 33 333 3333 33333 333333 3333333 33333333 3.3 3..3 3...3 កាន់តែពិសេសអាច😁 ?我想在apple工作1314151天～ ------======= нещо на Български ''''''```````\"\"\"\"......!!!!!!?????? I've been 'told he's there, 'RE you sure? 'M not sure I'll make it, 'D you like some tea? We'Ve a'lL"
+    print("tiktoken:", tokenizer.tokenizer.encode(chktxt, disallowed_special=()))
+
+    # tokenizer
+    inputs = tokenizer("你好")
+    print(f"encode: {inputs=}")
+
+    conversation = [{"role": "user", "content": "你好"}]
+    inputs = tokenizer.apply_chat_template(
+        conversation,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_tensors="pt",
+        return_dict=True,
+    )
+    print(f"apply_chat_template: {conversation=} {inputs=}")
+
+    # round 1
+    inputs = inputs.to("cuda")
+    model = AutoModelForCausalLM.from_pretrained(
+        "THUDM/glm-4-9b-chat",
+        torch_dtype=torch.bfloat16,
+        low_cpu_mem_usage=True,
+        trust_remote_code=True,
+        device_map="auto",
+    ).eval()
+
+    outputs = model.generate(**inputs, do_sample=False)
+    outputs = outputs[:, inputs["input_ids"].shape[1] :]
+    response = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+    print(f"generate: {response=}")
+
+    conversation += [{"role": "assistant", "content": response}, {"role": "user", "content": "晚上睡不着应该怎么办"}]
+    inputs = tokenizer.apply_chat_template(
+        conversation,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_tensors="pt",
+        return_dict=True,
+    )
+    print(f"apply_chat_template: {conversation=} {inputs=}")
+
+    # round 2
+    outputs = model.generate(**inputs, do_sample=False)
+    outputs = outputs[:, inputs["input_ids"].shape[1] :]
+    response = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+    print(f"generate: {response=}")
+
+
 def main():
     torch.manual_seed(0)
     (HERE / "data").mkdir(parents=True, exist_ok=True)
@@ -723,10 +857,12 @@ def main():
     # make_data_rms_norm()
     # make_data_glm_model()
     # make_data_glm2_model()
-    make_data_glm3_model()
+    # make_data_glm3_model()
     # make_data_baichuan7b_model()
     # make_data_baichuan13b_model()
     # make_internlm_model()
+    make_data_glm4_model()
+    # make_glm4_pipeline_data()
 
 
 if __name__ == "__main__":

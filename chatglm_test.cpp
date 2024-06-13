@@ -764,6 +764,37 @@ TEST_F(ChatGLMTest, GLM3PTuningV2Model) {
     test_model(model, config, data_path, seq_len, all_weights);
 }
 
+TEST_F(ChatGLMTest, GLM4Model) {
+    fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/glm4_model.data";
+
+    ModelConfig config(
+        ModelType::CHATGLM4, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
+        /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
+        /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/false,
+        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_theta=*/10000.f,
+        /*rope_dim_scale=*/2,
+        /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
+        /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
+        /*extra_eos_token_ids=*/{});
+
+    constexpr int seq_len = 3;
+
+    ChatGLM4Model model(&ctx, config);
+
+    std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
+                                           model.layers[0].input_layernorm.weight,
+                                           model.layers[0].attention.query_key_value.weight,
+                                           model.layers[0].attention.query_key_value.bias,
+                                           model.layers[0].attention.dense.weight,
+                                           model.layers[0].post_attention_layernorm.weight,
+                                           model.layers[0].mlp.gate_proj.weight,
+                                           model.layers[0].mlp.up_proj.weight,
+                                           model.layers[0].mlp.down_proj.weight,
+                                           model.final_layernorm.weight};
+
+    test_model(model, config, data_path, seq_len, all_weights);
+}
+
 TEST_F(ChatGLMTest, Baichuan7BModel) {
     fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/baichuan7b_model.data";
 
@@ -1000,7 +1031,8 @@ TEST(Pipeline, ChatGLM) {
         GTEST_SKIP() << "Skipping ChatGLM e2e test (ggml model not found)";
     }
     Pipeline pipeline(model_path.string());
-    EXPECT_TRUE(dynamic_cast<ChatGLMForCausalLM *>(pipeline.model.get()));
+    ASSERT_TRUE(dynamic_cast<ChatGLMTokenizer *>(pipeline.tokenizer.get()));
+    ASSERT_TRUE(dynamic_cast<ChatGLMForCausalLM *>(pipeline.model.get()));
 
     // tokenizer
     {
@@ -1019,9 +1051,9 @@ TEST(Pipeline, ChatGLM) {
 
     // prompter
     {
-        EXPECT_EQ(ChatGLMTokenizer::build_prompt({{ChatMessage::ROLE_USER, "你好"}}), "你好");
+        EXPECT_EQ(ChatGLMTokenizer::apply_chat_template_text({{ChatMessage::ROLE_USER, "你好"}}), "你好");
         EXPECT_EQ(
-            ChatGLMTokenizer::build_prompt({
+            ChatGLMTokenizer::apply_chat_template_text({
                 {ChatMessage::ROLE_USER, "你好"},
                 {ChatMessage::ROLE_ASSISTANT, "你好👋！我是人工智能助手 ChatGLM-6B，很高兴见到你，欢迎问我任何问题。"},
                 {ChatMessage::ROLE_USER, "晚上睡不着应该怎么办"},
@@ -1062,7 +1094,8 @@ TEST(Pipeline, ChatGLM2) {
         GTEST_SKIP() << "Skipping ChatGLM2 e2e test (ggml model not found)";
     }
     Pipeline pipeline(model_path.string());
-    EXPECT_TRUE(dynamic_cast<ChatGLM2ForCausalLM *>(pipeline.model.get()));
+    ASSERT_TRUE(dynamic_cast<ChatGLM2Tokenizer *>(pipeline.tokenizer.get()));
+    ASSERT_TRUE(dynamic_cast<ChatGLM2ForCausalLM *>(pipeline.model.get()));
 
     // tokenizer
     {
@@ -1084,9 +1117,10 @@ TEST(Pipeline, ChatGLM2) {
 
     // prompter
     {
-        EXPECT_EQ(ChatGLM2Tokenizer::build_prompt({{ChatMessage::ROLE_USER, "你好"}}), "[Round 1]\n\n问：你好\n\n答：");
+        EXPECT_EQ(ChatGLM2Tokenizer::apply_chat_template_text({{ChatMessage::ROLE_USER, "你好"}}),
+                  "[Round 1]\n\n问：你好\n\n答：");
         EXPECT_EQ(
-            ChatGLM2Tokenizer::build_prompt({
+            ChatGLM2Tokenizer::apply_chat_template_text({
                 {ChatMessage::ROLE_USER, "你好"},
                 {ChatMessage::ROLE_ASSISTANT, "你好👋！我是人工智能助手 ChatGLM2-6B，很高兴见到你，欢迎问我任何问题。"},
                 {ChatMessage::ROLE_USER, "晚上睡不着应该怎么办"},
@@ -1132,7 +1166,8 @@ TEST(Pipeline, ChatGLM3) {
         GTEST_SKIP() << "Skipping ChatGLM3 e2e test (ggml model not found)";
     }
     Pipeline pipeline(model_path.string());
-    EXPECT_TRUE(dynamic_cast<ChatGLM3ForCausalLM *>(pipeline.model.get()));
+    ASSERT_TRUE(dynamic_cast<ChatGLM3Tokenizer *>(pipeline.tokenizer.get()));
+    ASSERT_TRUE(dynamic_cast<ChatGLM3ForCausalLM *>(pipeline.model.get()));
 
     const std::string system_tool_call =
         read_text(fs::path(__FILE__).parent_path() / "examples/system/function_call.txt");
@@ -1146,7 +1181,7 @@ TEST(Pipeline, ChatGLM3) {
     }
     {
         std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
-        std::vector<int> input_ids = pipeline.tokenizer->encode_messages(messages, 2048);
+        std::vector<int> input_ids = pipeline.tokenizer->apply_chat_template(messages, 2048);
         std::vector<int> target_ids{64790, 64792, 64795, 30910, 13, 36474, 54591, 64796};
         EXPECT_EQ(input_ids, target_ids);
     }
@@ -1156,7 +1191,7 @@ TEST(Pipeline, ChatGLM3) {
             {ChatMessage::ROLE_ASSISTANT, "你好👋！我是人工智能助手 ChatGLM3-6B，很高兴见到你，欢迎问我任何问题。"},
             {ChatMessage::ROLE_USER, "晚上睡不着应该怎么办"},
         };
-        std::vector<int> input_ids = pipeline.tokenizer->encode_messages(messages, 2048);
+        std::vector<int> input_ids = pipeline.tokenizer->apply_chat_template(messages, 2048);
         std::vector<int> target_ids{64790, 64792, 64795, 30910, 13,    36474, 54591, 64796, 30910, 13,    36474, 54591,
                                     243,   162,   148,   142,   31404, 33030, 34797, 42481, 22011, 10461, 30944, 30966,
                                     30941, 30978, 30949, 31123, 48895, 35214, 54622, 31123, 32616, 39905, 31901, 31639,
@@ -1168,7 +1203,7 @@ TEST(Pipeline, ChatGLM3) {
             {ChatMessage::ROLE_SYSTEM, system_tool_call},
             {ChatMessage::ROLE_USER, "生成一个随机数"},
         };
-        std::vector<int> input_ids = pipeline.tokenizer->encode_messages(messages, 2048);
+        std::vector<int> input_ids = pipeline.tokenizer->apply_chat_template(messages, 2048);
         std::vector<int> target_ids{
             64790, 64792, 64794, 30910, 13,    20115, 267,   1762,  2554,  362,   1077,  362,   344,   457,   30930,
             809,   431,   1675,  289,   267,   1762,  4159,  30954, 13,    30982, 13,    296,   30955, 16599, 30962,
@@ -1295,13 +1330,136 @@ $$)");
     }
 }
 
+TEST(Pipeline, ChatGLM4) {
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/chatglm4-ggml.bin";
+    if (!fs::exists(model_path)) {
+        GTEST_SKIP() << "Skipping ChatGLM4 e2e test (ggml model not found)";
+    }
+    Pipeline pipeline(model_path.string());
+    ASSERT_TRUE(dynamic_cast<ChatGLM4Tokenizer *>(pipeline.tokenizer.get()));
+    ASSERT_TRUE(dynamic_cast<ChatGLM4ForCausalLM *>(pipeline.model.get()));
+
+    // const std::string system_tool_call =
+    //     read_text(fs::path(__FILE__).parent_path() / "examples/system/function_call.txt");
+    // const std::string system_ci = read_text(fs::path(__FILE__).parent_path() /
+    // "examples/system/code_interpreter.txt");
+
+    // tiktoken
+    {
+        auto tokenizer = dynamic_cast<ChatGLM4Tokenizer *>(pipeline.tokenizer.get());
+
+        // taken from:
+        // https://github.com/ggerganov/llama.cpp/blob/4bfe50f741479c1df1c377260c3ff5702586719e/convert-hf-to-gguf.py#L413
+        const std::string chktxt =
+            "\n \n\n \n\n\n \t \t\t \t\n  \n   \n    \n     \n🚀 (normal) 😶\u200d🌫️ (multiple emojis "
+            "concatenated) "
+            "✅ 🦙🦙 3 33 333 3333 33333 333333 3333333 33333333 3.3 3..3 3...3 "
+            "កាន់តែពិសេសអាច😁 "
+            "?我想在apple工作1314151天～ ------======= нещо на Български ''''''```````\"\"\"\"......!!!!!!?????? I've "
+            "been 'told he's there, 'RE you sure? 'M not sure I'll make it, 'D you like some tea? We'Ve a'lL";
+
+        const std::vector<int> ref_ids{
+            198,    4710,   14721, 65020,  7847,   1572,  2303,   78043,  10942, 9281,   248,    222,   320,    8251,
+            8,      26440,  114,   124564, 9281,   234,   104,    30423,  320,   35495,  98226,  96714, 8,      25442,
+            227,    11157,  99,    247,    9281,   99,    247,    220,    18,    220,    100702, 220,   121577, 220,
+            121577, 18,     220,   121577, 100702, 220,   121577, 121577, 220,   121577, 121577, 18,    220,    121577,
+            121577, 100702, 220,   18,     13,     18,    220,    18,     496,   18,     220,    18,    1112,   18,
+            220,    20833,  222,   96709,  241,    44002, 233,    20833,  237,   44002,  224,    20833, 244,    20833,
+            115,    20833,  253,   44002,  223,    20833, 253,    20833,  95,    96709,  227,    74764, 223,    937,
+            101446, 98319,  22320, 98538,  118901, 19,    99082,  16,     98411, 21168,  55088,  52883, 18625,  131040,
+            13065,  146335, 78377, 3355,   4605,   4605,  13865,  13865,  73022, 3014,   3014,   28052, 17066,  2928,
+            26524,  7646,   358,   3003,   1012,   364,   83,     813,    566,   594,    1052,   11,    364,    787,
+            498,    2704,   30,    364,    44,     537,   2704,   358,    3278,  1281,   432,    11,    364,    35,
+            498,    1075,   1045,  15231,  30,     1205,  6,      42368,  264,   63409,  43};
+
+        std::vector<int> out_ids = tokenizer->core_bpe.encode_ordinary(chktxt);
+        EXPECT_EQ(ref_ids, out_ids);
+    }
+    // tokenizer
+    {
+        std::vector<int> target_ids{151331, 151333, 109377};
+        std::vector<int> input_ids = pipeline.tokenizer->encode("你好", 2048);
+        EXPECT_EQ(input_ids, target_ids);
+    }
+    {
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
+        std::vector<int> input_ids = pipeline.tokenizer->apply_chat_template(messages, 2048);
+        std::vector<int> target_ids{151331, 151333, 151336, 198, 109377, 151337};
+        EXPECT_EQ(input_ids, target_ids);
+    }
+    {
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"},
+                                          {ChatMessage::ROLE_ASSISTANT, "你好👋！很高兴见到你，有什么可以帮助你的吗？"},
+                                          {ChatMessage::ROLE_USER, "晚上睡不着应该怎么办"}};
+        std::vector<int> input_ids = pipeline.tokenizer->apply_chat_template(messages, 2048);
+        std::vector<int> target_ids{151331, 151333, 151336, 198,    109377, 151337, 198,    109377, 9281,  239,
+                                    233,    6313,   118295, 103810, 98406,  3837,   101665, 110368, 99444, 99212,
+                                    11314,  151336, 198,    101160, 120410, 99379,  103298, 151337};
+        EXPECT_EQ(input_ids, target_ids);
+    }
+    // {
+    //     std::vector<ChatMessage> messages{
+    //         {ChatMessage::ROLE_SYSTEM, system_tool_call},
+    //         {ChatMessage::ROLE_USER, "生成一个随机数"},
+    //     };
+    //     std::vector<int> input_ids = pipeline.tokenizer->apply_chat_template(messages, 2048);
+    //     std::vector<int> target_ids{
+    //         64790, 64792, 64794, 30910, 13,    20115, 267,   1762,  2554,  362,   1077,  362,   344,   457,   30930,
+    //         809,   431,   1675,  289,   267,   1762,  4159,  30954, 13,    30982, 13,    296,   30955, 16599, 30962,
+    //         11228, 30962, 7311,  1306,  2932,  729,   13,    352,   30955, 2323,  2932,  449,   16599, 30962, 11228,
+    //         30962, 7311,  1306,  1252,  13,    352,   30955, 16302, 2932,  449,   9398,  711,   260,   5402,  1276,
+    //         1994,  30932, 268,   30930, 30912, 30930, 2288,  30995, 30940, 30996, 14819, 1994,  906,   2288,  30995,
+    //         30939, 30996, 1252,  13,    352,   30955, 12209, 2932,  790,   13,    753,   30982, 13,    647,   30955,
+    //         2323,  2932,  449,   24794, 1252,  13,    647,   30955, 16302, 2932,  449,   1036,  5402,  9352,  1050,
+    //         422,   267,   17009, 1252,  13,    647,   30955, 3543,  2932,  449,   592,   1252,  13,    647,   30955,
+    //         20379, 2932,  2033,  13,    753,   4143,  13,    753,   30982, 13,    647,   30955, 2323,  2932,  449,
+    //         7855,  1252,  13,    647,   30955, 16302, 2932,  449,   1036,  2288,  290,   267,   7383,  3859,  1252,
+    //         13,    647,   30955, 3543,  2932,  449,   30912, 16471, 30995, 592,   30932, 558,   30996, 1252,  13,
+    //         647,   30955, 20379, 2932,  2033,  13,    753,   30983, 13,    352,   30996, 13,    296,   4143,  13,
+    //         296,   30955, 752,   30962, 27564, 2932,  729,   13,    352,   30955, 2323,  2932,  449,   752,   30962,
+    //         27564, 1252,  13,    352,   30955, 16302, 2932,  449,   4867,  267,   1465,  5100,  332,   4256,  17654,
+    //         30962, 2323,  31040, 1252,  13,    352,   30955, 12209, 2932,  790,   13,    753,   30982, 13,    647,
+    //         30955, 2323,  2932,  449,   17654, 30962, 2323,  1252,  13,    647,   30955, 16302, 2932,  449,   1036,
+    //         1462,  290,   267,   1911,  289,   330,   580,   266,   819,   1252,  13,    647,   30955, 3543,  2932,
+    //         449,   2069,  1252,  13,    647,   30955, 20379, 2932,  2033,  13,    753,   30983, 13,    352,   30996,
+    //         13,    296,   30983, 13,    30983, 64795, 30910, 13,    30910, 36454, 31623, 37853, 54744, 64796};
+    //     EXPECT_EQ(input_ids, target_ids);
+    // }
+
+    // memory test
+    {
+        GenerationConfig gen_config;
+        gen_config.max_length = 2048;
+        gen_config.max_context_length = gen_config.max_length - 1;
+        gen_config.do_sample = false;
+
+        std::ostringstream oss;
+        for (int i = 0; i < gen_config.max_context_length; i++) {
+            oss << "你好 ";
+        }
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, oss.str()}};
+        pipeline.chat(messages, gen_config);
+    }
+
+    // chat
+    {
+        // check_chat_format(pipeline);
+        GenerationConfig gen_config;
+        gen_config.do_sample = false;
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
+        ChatMessage output = pipeline.chat(messages, gen_config);
+        EXPECT_EQ(output.content, "你好👋！有什么可以帮助你的吗？");
+    }
+}
+
 TEST(Pipeline, CodeGeeX2) {
     fs::path model_path = fs::path(__FILE__).parent_path() / "models/codegeex2-ggml.bin";
     if (!fs::exists(model_path)) {
         GTEST_SKIP() << "Skipping CodeGeeX2 e2e test (ggml model not found)";
     }
     Pipeline pipeline(model_path.string());
-    EXPECT_TRUE(dynamic_cast<ChatGLM2ForCausalLM *>(pipeline.model.get()));
+    ASSERT_TRUE(dynamic_cast<ChatGLM2Tokenizer *>(pipeline.tokenizer.get()));
+    ASSERT_TRUE(dynamic_cast<ChatGLM2ForCausalLM *>(pipeline.model.get()));
 
     // tokenizer
     {
@@ -1360,7 +1518,7 @@ TEST(Pipeline, Baichuan13B) {
             {ChatMessage::ROLE_ASSISTANT, "你好！很高兴和你交流。请问有什么我可以帮助你的吗？"},
             {ChatMessage::ROLE_USER, "你叫什么名字？"},
         };
-        std::vector<int> input_ids = pipeline.tokenizer->encode_messages(messages, 2048);
+        std::vector<int> input_ids = pipeline.tokenizer->apply_chat_template(messages, 2048);
         std::vector<int> target_input_ids{195,   9875, 31213, 32889, 196,  9875,  31213, 74,   17318, 31906,
                                           14822, 5536, 73,    20389, 7713, 31182, 1231,  4090, 2689,  31763,
                                           75,    195,  9875,  32177, 1534, 10240, 75,    196};
@@ -1415,7 +1573,7 @@ TEST(Pipeline, Baichuan2_7B) {
             {ChatMessage::ROLE_ASSISTANT, "你好！很高兴和你交流。请问有什么问题我可以帮助你解决吗？"},
             {ChatMessage::ROLE_USER, "你叫什么名字？"},
         };
-        std::vector<int> input_ids = pipeline.tokenizer->encode_messages(messages, 2048);
+        std::vector<int> input_ids = pipeline.tokenizer->apply_chat_template(messages, 2048);
         std::vector<int> target_input_ids{195, 16829, 94278, 196,   16829, 67,    52160, 10329, 3341,
                                           66,  23216, 5817,  1754,  92392, 21777, 92430, 2740,  93122,
                                           68,  195,   92430, 93410, 1747,  6642,  68,    196};
@@ -1470,7 +1628,7 @@ TEST(Pipeline, Baichuan2_13B) {
             {ChatMessage::ROLE_ASSISTANT, "你好！很高兴和你交流。请问有什么我可以帮助你的吗？"},
             {ChatMessage::ROLE_USER, "你叫什么名字？"},
         };
-        std::vector<int> input_ids = pipeline.tokenizer->encode_messages(messages, 2048);
+        std::vector<int> input_ids = pipeline.tokenizer->apply_chat_template(messages, 2048);
         std::vector<int> target_input_ids{195,   16829, 94278, 196,   16829, 67,  52160, 10329, 3341, 66,   23216, 5817,
                                           92392, 21777, 2193,  93122, 68,    195, 92430, 93410, 1747, 6642, 68,    196};
         EXPECT_TRUE(equal(input_ids, target_input_ids));
@@ -1584,6 +1742,11 @@ TEST(Benchmark, ChatGLM) {
 
 TEST(Benchmark, ChatGLM2) {
     fs::path model_path = fs::path(__FILE__).parent_path() / "models/chatglm2-ggml.bin";
+    run_benchmark(model_path);
+}
+
+TEST(Benchmark, ChatGLM4) {
+    fs::path model_path = fs::path(__FILE__).parent_path() / "models/chatglm4-ggml.bin";
     run_benchmark(model_path);
 }
 
