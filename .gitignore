@@ -27,3 +27,4 @@ build/
 
 # data
 /data/
+*.log

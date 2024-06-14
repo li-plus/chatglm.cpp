@@ -803,6 +803,22 @@ def make_glm4_pipeline_data():
     chktxt = "\n \n\n \n\n\n \t \t\t \t\n  \n   \n    \n     \n🚀 (normal) 😶\u200d🌫️ (multiple emojis concatenated) ✅ 🦙🦙 3 33 333 3333 33333 333333 3333333 33333333 3.3 3..3 3...3 កាន់តែពិសេសអាច😁 ?我想在apple工作1314151天～ ------======= нещо на Български ''''''```````\"\"\"\"......!!!!!!?????? I've been 'told he's there, 'RE you sure? 'M not sure I'll make it, 'D you like some tea? We'Ve a'lL"
     print("tiktoken:", tokenizer.tokenizer.encode(chktxt, disallowed_special=()))
 
+    chktxt = r"""
+```c++
+#include <iostream>
+
+int main() {
+    printf("hello world\n");    // say hello
+}
+```
+
+```python
+if __name__ == '__main__':
+    print('hello world')        # say hello
+```
+"""
+    print("tiktoken:", tokenizer.tokenizer.encode(chktxt, disallowed_special=()))
+
     # tokenizer
     inputs = tokenizer("你好")
     print(f"encode: {inputs=}")
@@ -861,8 +877,8 @@ def main():
     # make_data_baichuan7b_model()
     # make_data_baichuan13b_model()
     # make_internlm_model()
-    make_data_glm4_model()
-    # make_glm4_pipeline_data()
+    # make_data_glm4_model()
+    make_glm4_pipeline_data()
 
 
 if __name__ == "__main__":
