@@ -21,7 +21,7 @@ parser.add_argument("-t", "--threads", default=0, type=int, help="number of thre
 parser.add_argument("--plain", action="store_true", help="display in plain text without markdown support")
 args = parser.parse_args()
 
-pipeline = chatglm_cpp.Pipeline(args.model)
+pipeline = chatglm_cpp.Pipeline(args.model, max_length=args.max_length)
 
 
 def postprocess(text):

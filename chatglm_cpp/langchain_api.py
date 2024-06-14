@@ -12,6 +12,7 @@ logging.basicConfig(level=logging.INFO, format=r"%(asctime)s - %(module)s - %(le
 
 class Settings(BaseSettings):
     model: str = "models/chatglm-ggml.bin"
+    max_length: int = 4096
 
 
 class ChatRequest(BaseModel):
@@ -48,7 +49,7 @@ app = FastAPI()
 settings = Settings()
 logging.info(settings)
 
-pipeline = chatglm_cpp.Pipeline(settings.model)
+pipeline = chatglm_cpp.Pipeline(settings.model, max_length=settings.max_length)
 
 
 @app.post("/")

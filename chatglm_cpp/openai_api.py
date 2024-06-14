@@ -17,6 +17,7 @@ logging.basicConfig(level=logging.INFO, format=r"%(asctime)s - %(module)s - %(le
 
 class Settings(BaseSettings):
     model: str = "models/chatglm3-ggml.bin"
+    max_length: int = 4096
     num_threads: int = 0
 
 
@@ -129,7 +130,7 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
 )
-pipeline = chatglm_cpp.Pipeline(settings.model)
+pipeline = chatglm_cpp.Pipeline(settings.model, max_length=settings.max_length)
 lock = asyncio.Lock()
 
 

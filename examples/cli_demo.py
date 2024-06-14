@@ -63,7 +63,7 @@ def main() -> None:
     if args.sp:
         system = args.sp.read_text()
 
-    pipeline = chatglm_cpp.Pipeline(args.model)
+    pipeline = chatglm_cpp.Pipeline(args.model, max_length=args.max_length)
 
     if args.mode != "chat" and args.interactive:
         print("interactive demo is only supported for chat mode, falling back to non-interactive one")

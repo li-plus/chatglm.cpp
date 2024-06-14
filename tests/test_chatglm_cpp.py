@@ -147,3 +147,39 @@ def test_internlm7b_pipeline():
 @pytest.mark.skipif(not INTERNLM20B_MODEL_PATH.exists(), reason="model file not found")
 def test_internlm20b_pipeline():
     check_pipeline(model_path=INTERNLM20B_MODEL_PATH, prompt="你好", target="你好！有什么我可以帮助你的吗？")
+
+
+@pytest.mark.skipif(not CHATGLM4_MODEL_PATH.exists(), reason="model file not found")
+def test_langchain_api():
+    import os
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+
+    with patch.dict(os.environ, {"MODEL": str(CHATGLM4_MODEL_PATH)}):
+        from chatglm_cpp.langchain_api import app
+
+    client = TestClient(app)
+    response = client.post("/", json={"prompt": "你好", "temperature": 0})
+    assert response.status_code == 200
+    assert response.json()["response"] == "你好👋！有什么可以帮助你的吗？"
+
+
+@pytest.mark.skipif(not CHATGLM4_MODEL_PATH.exists(), reason="model file not found")
+def test_openai_api():
+    import os
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+
+    with patch.dict(os.environ, {"MODEL": str(CHATGLM4_MODEL_PATH)}):
+        from chatglm_cpp.openai_api import app
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/chat/completions", json={"messages": [{"role": "user", "content": "你好"}], "temperature": 0}
+    )
+    assert response.status_code == 200
+    response_message = response.json()["choices"][0]["message"]
+    assert response_message["role"] == "assistant"
+    assert response_message["content"] == "你好👋！有什么可以帮助你的吗？"
