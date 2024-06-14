@@ -1766,6 +1766,7 @@ TiktokenCoreBPE::TiktokenCoreBPE(std::unordered_map<std::string, int> encoder,
     : regex(std::make_unique<RE2>("(" + pattern + ")")), encoder(std::move(encoder)),
       special_tokens_encoder(std::move(special_tokens_encoder)) {
     CHATGLM_CHECK(regex->ok()) << regex->error();
+    CHATGLM_CHECK(regex->NumberOfCapturingGroups() <= 2) << "unimplemented";
 
     decoder.reserve(this->encoder.size());
     for (const auto &[token, rank] : this->encoder) {
@@ -1853,15 +1854,24 @@ std::vector<int> TiktokenCoreBPE::byte_pair_encode(const std::string &piece,
 
 std::vector<int> TiktokenCoreBPE::_encode_ordinary_native(const std::string &text) const {
     std::vector<int> ret;
-    re2::StringPiece input = text;
+    re2::StringPiece input(text);
+    re2::StringPiece prev_input(input);
     std::string piece;
-    while (RE2::FindAndConsume(&input, *regex, &piece)) {
+    std::string piece2;
+    while (RE2::FindAndConsume(&input, *regex, &piece, &piece2)) {
+        if (!piece2.empty()) {
+            // workaround for lookahead: capture sub group and restore input
+            auto pos = prev_input.find(piece2);
+            input = prev_input.substr(pos + piece2.length());
+            piece = std::move(piece2);
+        }
         if (auto it = encoder.find(piece); it != encoder.end()) {
             ret.emplace_back(it->second);
         } else {
             std::vector<int> bpe_ids = byte_pair_encode(piece, encoder);
             ret.insert(ret.end(), bpe_ids.begin(), bpe_ids.end());
         }
+        prev_input = input;
     }
     return ret;
 }
@@ -1921,7 +1931,7 @@ ChatGLM4Tokenizer::ChatGLM4Tokenizer(const std::string &vocab_text) {
     observation_token_id = special_tokens_encoder.at("<|observation|>");
 
     const std::string pattern =
-        R"((?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?:$|\s)|\s+)";
+        R"((?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|(\s+)(?:\s)|\s+)";
     core_bpe = TiktokenCoreBPE(std::move(mergeable_ranks), std::move(special_tokens_encoder), pattern);
 }
 

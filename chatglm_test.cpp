@@ -1374,7 +1374,7 @@ TEST(Pipeline, ChatGLM4) {
         const std::vector<int> out_ids = tokenizer->core_bpe.encode_ordinary(chktxt);
         EXPECT_EQ(ref_ids, out_ids);
     }
-    if (false) {
+    {
         const std::string text = R"(
 ```c++
 #include <iostream>
