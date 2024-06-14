@@ -17,6 +17,7 @@ option(CHATGLM_ENABLE_EXAMPLES "chatglm: enable c++ examples" ON)
 option(CHATGLM_ENABLE_PYBIND "chatglm: enable python binding" OFF)
 option(CHATGLM_ENABLE_TESTING "chatglm: enable testing" OFF)
 
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "")
 if (CHATGLM_ENABLE_PYBIND)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
