@@ -94,7 +94,7 @@ static float cross_entropy(const ggml_tensor *input, const ggml_tensor *target) 
 // reference: https://huggingface.co/docs/transformers/perplexity
 static void perplexity(Args &args) {
     std::cout << "Loading model from " << args.model_path << " ...\n";
-    chatglm::Pipeline pipeline(args.model_path);
+    chatglm::Pipeline pipeline(args.model_path, args.max_length);
 
     std::cout << "Loading corpus from " << args.corpus_path << " ...\n";
     std::string corpus = read_text(args.corpus_path);
