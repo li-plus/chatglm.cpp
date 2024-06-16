@@ -516,7 +516,7 @@ std::string to_string(ModelType model_type) {
     }
 }
 
-static ggml_tensor *apply_rotary_emb_basic(ModelContext *mctx, ggml_tensor *layer, ggml_tensor *position_ids, int n_ctx,
+static ggml_tensor *apply_rotary_emb_basic(ModelContext *mctx, ggml_tensor *layer, ggml_tensor *position_ids,
                                            RopeType rope_type, float rope_theta) {
     // tensor a (activation) is of shape [s, #h, d]
     // tensor b (position_ids) is of shape [s]
@@ -527,12 +527,12 @@ static ggml_tensor *apply_rotary_emb_basic(ModelContext *mctx, ggml_tensor *laye
     }
 #endif
     const int head_size = layer->ne[0];
-    layer = ggml_rope_ext_inplace(ctx, layer, position_ids, nullptr, head_size, (int)rope_type, n_ctx, 0, rope_theta,
+    layer = ggml_rope_ext_inplace(ctx, layer, position_ids, nullptr, head_size, (int)rope_type, 0, rope_theta,
                                   1.0f, 0.0f, 1.0f, 0.0f, 0.0f); // [s, #h, d]
     return layer;
 }
 
-static ggml_tensor *apply_rotary_emb_glm(ModelContext *mctx, ggml_tensor *layer, ggml_tensor *position_ids, int n_ctx) {
+static ggml_tensor *apply_rotary_emb_glm(ModelContext *mctx, ggml_tensor *layer, ggml_tensor *position_ids) {
     // tensor a (activation) is of shape [s, #h, d]
     // tensor b (position_ids) is of shape [2 * s]
     ggml_context *ctx = mctx->ctx_b.get();
@@ -556,8 +556,8 @@ static ggml_tensor *apply_rotary_emb_glm(ModelContext *mctx, ggml_tensor *layer,
     a2_rope = ggml_cont(ctx, a2_rope);
 #endif
 
-    a1_rope = ggml_rope_inplace(ctx, a1_rope, b1, rope_dim, (int)RopeType::NEOX, n_ctx); // [s, #h, d/2]
-    a2_rope = ggml_rope_inplace(ctx, a2_rope, b2, rope_dim, (int)RopeType::NEOX, n_ctx); // [s, #h, d/2]
+    a1_rope = ggml_rope_inplace(ctx, a1_rope, b1, rope_dim, (int)RopeType::NEOX); // [s, #h, d/2]
+    a2_rope = ggml_rope_inplace(ctx, a2_rope, b2, rope_dim, (int)RopeType::NEOX); // [s, #h, d/2]
 
 #ifdef GGML_USE_CUDA
     a1_rope = ggml_cpy(ctx, a1_rope, a1);
@@ -587,7 +587,7 @@ static ggml_tensor *apply_rotary_emb_glm2(ModelContext *mctx, ggml_tensor *layer
         half_layer = ggml_cont(ctx, half_layer);
     }
     ggml_tensor *roped_half_layer =
-        ggml_rope_ext_inplace(ctx, half_layer, position_ids, nullptr, rope_dim, (int)RopeType::GPTJ, 0, 0, rope_theta,
+        ggml_rope_ext_inplace(ctx, half_layer, position_ids, nullptr, rope_dim, (int)RopeType::GPTJ, 0, rope_theta,
                               1.0f, 0.0f, 1.0f, 0.0f, 0.0f); // [s, #h, d]
     if (!ggml_backend_is_cpu(mctx->backend.get())) {
         roped_half_layer = ggml_cpy(ctx, roped_half_layer, half_layer_view);
@@ -597,14 +597,14 @@ static ggml_tensor *apply_rotary_emb_glm2(ModelContext *mctx, ggml_tensor *layer
     return layer;
 }
 
-static ggml_tensor *apply_rotary_emb(ModelContext *mctx, ggml_tensor *layer, ggml_tensor *position_ids, int n_ctx,
+static ggml_tensor *apply_rotary_emb(ModelContext *mctx, ggml_tensor *layer, ggml_tensor *position_ids,
                                      RopeType rope_type, float rope_theta) {
     switch (rope_type) {
     case RopeType::GPTJ:
     case RopeType::NEOX:
-        return apply_rotary_emb_basic(mctx, layer, position_ids, n_ctx, rope_type, rope_theta);
+        return apply_rotary_emb_basic(mctx, layer, position_ids, rope_type, rope_theta);
     case RopeType::CHATGLM:
-        return apply_rotary_emb_glm(mctx, layer, position_ids, n_ctx);
+        return apply_rotary_emb_glm(mctx, layer, position_ids);
     case RopeType::CHATGLM2:
         return apply_rotary_emb_glm2(mctx, layer, position_ids, rope_theta);
     case RopeType::DISABLED:
@@ -615,7 +615,7 @@ static ggml_tensor *apply_rotary_emb(ModelContext *mctx, ggml_tensor *layer, ggm
 }
 
 ggml_tensor *BasicAttention::forward(ModelContext *mctx, ggml_tensor *hidden_states, ggml_tensor *attention_mask,
-                                     ggml_tensor *position_ids, int n_past, int n_ctx) const {
+                                     ggml_tensor *position_ids, int n_past) const {
     ggml_context *ctx = mctx->ctx_b.get();
 
     const int hidden_size = hidden_states->ne[0];
@@ -648,8 +648,8 @@ ggml_tensor *BasicAttention::forward(ModelContext *mctx, ggml_tensor *hidden_sta
                                    qkv->nb[1], (hidden_size + head_size * num_kv_heads) * ggml_element_size(qkv));
     }
 
-    query_layer = apply_rotary_emb(mctx, query_layer, position_ids, n_ctx, rope_type, rope_theta);
-    key_layer = apply_rotary_emb(mctx, key_layer, position_ids, n_ctx, rope_type, rope_theta);
+    query_layer = apply_rotary_emb(mctx, query_layer, position_ids, rope_type, rope_theta);
+    key_layer = apply_rotary_emb(mctx, key_layer, position_ids, rope_type, rope_theta);
 
     query_layer = ggml_cont(ctx, ggml_permute(ctx, query_layer, 0, 2, 1, 3)); // [#h, s, d]
     if (num_shared_q_heads > 1) {
@@ -1063,11 +1063,11 @@ std::string ChatGLMTokenizer::postprocess(const std::string &text) {
 }
 
 ggml_tensor *GLMBlock::forward(ModelContext *mctx, ggml_tensor *hidden_states, ggml_tensor *attention_mask,
-                               ggml_tensor *position_ids, int n_past, int n_ctx) const {
+                               ggml_tensor *position_ids, int n_past) const {
     ggml_context *ctx = mctx->ctx_b.get();
 
     ggml_tensor *attn_input = input_layernorm.forward(mctx, hidden_states);
-    ggml_tensor *attn_output = attention.forward(mctx, attn_input, attention_mask, position_ids, n_past, n_ctx);
+    ggml_tensor *attn_output = attention.forward(mctx, attn_input, attention_mask, position_ids, n_past);
     ggml_build_forward_expand(mctx->gf, attn_output);
     attn_input = ggml_scale_inplace(ctx, attn_input, alpha);
     hidden_states = ggml_add_inplace(ctx, attn_input, attn_output);

@@ -459,7 +459,7 @@ class BasicAttention {
                                      hidden_size / num_attention_heads, num_kv_heads)) {}
 
     ggml_tensor *forward(ModelContext *mctx, ggml_tensor *hidden_states, ggml_tensor *attention_mask,
-                         ggml_tensor *position_ids, int n_past, int n_ctx) const;
+                         ggml_tensor *position_ids, int n_past) const;
 
   public:
     int num_attention_heads;
@@ -490,14 +490,12 @@ class BasicBlock {
           mlp(mctx, hidden_size, intermediate_size, hidden_act) {}
 
     ggml_tensor *forward(ModelContext *mctx, ggml_tensor *hidden_states, ggml_tensor *attention_mask,
-                         ggml_tensor *position_ids, int n_past,
-
-                         int n_ctx) const {
+                         ggml_tensor *position_ids, int n_past) const {
         ggml_context *ctx = mctx->ctx_b.get();
 
         ggml_tensor *residual = hidden_states;
         hidden_states = input_layernorm.forward(mctx, hidden_states);
-        hidden_states = attention.forward(mctx, hidden_states, attention_mask, position_ids, n_past, n_ctx);
+        hidden_states = attention.forward(mctx, hidden_states, attention_mask, position_ids, n_past);
         hidden_states = ggml_add_inplace(ctx, hidden_states, residual);
 
         residual = hidden_states;
@@ -556,7 +554,7 @@ class BasicModel {
         : word_embeddings(mctx, config.vocab_size, config.hidden_size), layers(build_layers(mctx, config)),
           final_layernorm(mctx, config.hidden_size) {}
 
-    ggml_tensor *forward(ModelContext *mctx, ggml_tensor *input_ids, int n_past, int n_ctx) const {
+    ggml_tensor *forward(ModelContext *mctx, ggml_tensor *input_ids, int n_past) const {
         ggml_context *ctx = mctx->ctx_b.get();
 
         const int qlen = input_ids->ne[0];
@@ -576,7 +574,7 @@ class BasicModel {
 
         ggml_tensor *hidden_states = word_embeddings.forward(mctx, input_ids);
         for (const auto &layer : layers) {
-            hidden_states = layer.forward(mctx, hidden_states, attention_mask, position_ids, n_past, n_ctx);
+            hidden_states = layer.forward(mctx, hidden_states, attention_mask, position_ids, n_past);
         }
 
         hidden_states = final_layernorm.forward(mctx, hidden_states);
@@ -835,7 +833,7 @@ class BasicModelForCausalLM : public BaseModelForCausalLM {
   public:
     ggml_tensor *forward(ModelContext *mctx, ggml_tensor *input_ids, int n_past, int n_ctx,
                          bool is_decoding) const override {
-        ggml_tensor *transformer_outputs = transformer.forward(mctx, input_ids, n_past, n_ctx);
+        ggml_tensor *transformer_outputs = transformer.forward(mctx, input_ids, n_past);
         // NOTE: only compute next token logits for decoding
         if (is_decoding && input_ids->ne[0] > 1) {
             transformer_outputs =
@@ -898,7 +896,7 @@ class GLMBlock : public BasicBlock<LayerNorm, BasicMLP> {
           alpha(std::sqrt(2.f * 28)) {}
 
     ggml_tensor *forward(ModelContext *mctx, ggml_tensor *hidden_states, ggml_tensor *attention_mask,
-                         ggml_tensor *position_ids, int n_past, int n_ctx) const;
+                         ggml_tensor *position_ids, int n_past) const;
 
   public:
     float alpha;

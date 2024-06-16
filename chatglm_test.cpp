@@ -316,7 +316,7 @@ class ChatGLMTest : public ::testing::Test {
         // self attention
         {
             ggml_graph_clear(mctx_->gf);
-            ggml_tensor *out_y1 = model.forward(mctx_.get(), x1, 0, seq_len);
+            ggml_tensor *out_y1 = model.forward(mctx_.get(), x1, 0);
             ggml_build_forward_expand(mctx_->gf, out_y1);
             CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
             set_graph_inputs<Model>(mctx_->gf, seq_len, 0, seq_len);
@@ -328,7 +328,7 @@ class ChatGLMTest : public ::testing::Test {
         // cross attention
         {
             ggml_graph_clear(mctx_->gf);
-            ggml_tensor *out_y2 = model.forward(mctx_.get(), x2, seq_len, seq_len);
+            ggml_tensor *out_y2 = model.forward(mctx_.get(), x2, seq_len);
             ggml_build_forward_expand(mctx_->gf, out_y2);
             CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
             set_graph_inputs<Model>(mctx_->gf, 1, seq_len, seq_len);
@@ -338,7 +338,7 @@ class ChatGLMTest : public ::testing::Test {
         }
         {
             ggml_graph_clear(mctx_->gf);
-            ggml_tensor *out_y3 = model.forward(mctx_.get(), x3, seq_len + 1, seq_len);
+            ggml_tensor *out_y3 = model.forward(mctx_.get(), x3, seq_len + 1);
             ggml_build_forward_expand(mctx_->gf, out_y3);
             CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
             set_graph_inputs<Model>(mctx_->gf, 1, seq_len + 1, seq_len);
@@ -1202,7 +1202,7 @@ TEST(Pipeline, ChatGLM3) {
         {
             ChatMessage output = pipeline.chat(messages, gen_config);
             EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
-            EXPECT_EQ(output.content, "根据您的要求，我使用随机数生成器API生成了一个在0和100之间的随机数，结果为22。");
+            EXPECT_EQ(output.content, "根据您的要求，我使用随机数生成器API生成了一个随机数。根据API返回的结果，生成的随机数为22。");
         }
     }
 
@@ -1219,9 +1219,9 @@ TEST(Pipeline, ChatGLM3) {
             EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
             EXPECT_EQ(output.content, R"(好的，我会为您列出100以内的所有质数。
 
-质数是指只能被1和它本身整除的正整数。例如，2、3、5、7等都是质数。
+质数是指只能被1和它本身整除的大于1的整数。例如，2、3、5、7等都是质数。
 
-让我们开始计算。)");
+让我们开始吧！)");
             EXPECT_EQ(output.tool_calls.front().code.input, R"(```python
 def is_prime(n):
     """Check if a number is prime."""
@@ -1239,8 +1239,8 @@ def is_prime(n):
     return True
 
 # Get all prime numbers up to 100
-primes_up_to_100 = [i for i in range(2, 101) if is_prime(i)]
-primes_up_to_100
+primes_upto_100 = [i for i in range(2, 101) if is_prime(i)]
+primes_upto_100
 ```)");
             messages.emplace_back(std::move(output));
         }
@@ -1431,7 +1431,7 @@ TEST(Pipeline, CodeGeeX2) {
 
 def bubble_sort(list):
     for i in range(len(list) - 1):
-        for j in range(len(list) - 1):
+        for j in range(len(list) - 1 - i):
             if list[j] > list[j + 1]:
                 list[j], list[j + 1] = list[j + 1], list[j]
     return list
