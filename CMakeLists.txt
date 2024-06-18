@@ -137,7 +137,7 @@ add_custom_target(check-all
     COMMAND cmake --build build -j
     COMMAND ./build/bin/chatglm_test
     COMMAND python3 setup.py develop
-    COMMAND python3 -m pytest tests/test_chatglm_cpp.py -v
+    COMMAND python3 -m pytest tests/test_chatglm_cpp.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
 )
 
