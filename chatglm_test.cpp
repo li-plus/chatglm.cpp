@@ -381,13 +381,13 @@ TEST_F(ChatGLMTest, Linear) {
     std::ifstream ifs(test_path, std::ios::binary);
     ASSERT_TRUE(ifs) << "cannot open file " << test_path;
 
-    ggml_tensor *w = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, 32, 16);
-    ggml_tensor *b = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_F32, 16);
-    ggml_tensor *x = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, 32, 2);
-    ggml_tensor *ref = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, 16, 2);
+    ggml_tensor *w = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, 64, 32);
+    ggml_tensor *b = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_F32, 32);
+    ggml_tensor *x = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, 64, 2);
+    ggml_tensor *ref = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, 32, 2);
 
-    ggml_tensor *vec_x = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_F32, 32);
-    ggml_tensor *vec_ref = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_F32, 16);
+    ggml_tensor *vec_x = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_F32, 64);
+    ggml_tensor *vec_ref = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_F32, 32);
 
     auto buf_b = unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_b.get(), mctx_->backend.get()));
 
@@ -405,7 +405,7 @@ TEST_F(ChatGLMTest, Linear) {
         ggml_tensor *x;
         ggml_tensor *ref;
     };
-    std::vector<TestCase> cases{{x, ref}};
+    std::vector<TestCase> cases{{x, ref}, {vec_x, vec_ref}};
 
     struct TestConfig {
         ggml_type dtype;
@@ -413,14 +413,14 @@ TEST_F(ChatGLMTest, Linear) {
         float rtol;
     };
     std::vector<TestConfig> test_configs{
-        {GGML_TYPE_F32, 1e-5, 0},   {GGML_TYPE_F16, 1e-2, 5e-4}, {GGML_TYPE_Q8_0, 0.15, 5e-4},
-        {GGML_TYPE_Q5_0, 0.8, 0.1}, {GGML_TYPE_Q5_1, 0.8, 0.1},  {GGML_TYPE_Q4_1, 1.0, 0.2},
-        {GGML_TYPE_Q4_0, 1.0, 0.2},
+        {GGML_TYPE_F32, 1e-5, 0},   {GGML_TYPE_F16, 1e-2, 5e-4}, {GGML_TYPE_Q8_0, 0.2, 5e-4},
+        {GGML_TYPE_Q5_0, 1.5, 0.1}, {GGML_TYPE_Q5_1, 1.5, 0.1},  {GGML_TYPE_Q4_1, 2.0, 0.2},
+        {GGML_TYPE_Q4_0, 2.0, 0.2},
     };
 
     for (const auto &config : test_configs) {
         mctx_->dtype = config.dtype;
-        Linear model(mctx_.get(), 32, 16);
+        Linear model(mctx_.get(), 64, 32);
         auto buf_w =
             unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_w.get(), mctx_->backend.get()));
 
