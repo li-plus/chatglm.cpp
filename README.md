@@ -224,9 +224,9 @@ OpenBLAS provides acceleration on CPU. Add the CMake flag `-DGGML_OPENBLAS=ON` t
 cmake -B build -DGGML_OPENBLAS=ON && cmake --build build -j
 ```
 
-**cuBLAS**
+**CUDA**
 
-cuBLAS uses NVIDIA GPU to accelerate BLAS. Add the CMake flag `-DGGML_CUDA=ON` to enable it.
+CUDA accelerates model inference on NVIDIA GPU. Add the CMake flag `-DGGML_CUDA=ON` to enable it.
 ```sh
 cmake -B build -DGGML_CUDA=ON && cmake --build build -j
 ```
@@ -257,7 +257,7 @@ Install from PyPI (recommended): will trigger compilation on your platform.
 pip install -U chatglm-cpp
 ```
 
-To enable cuBLAS acceleration on NVIDIA GPU:
+To enable CUDA on NVIDIA GPU:
 ```sh
 CMAKE_ARGS="-DGGML_CUDA=ON" pip install -U chatglm-cpp
 ```
