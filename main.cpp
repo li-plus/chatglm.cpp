@@ -59,7 +59,6 @@ options:
   --top_p N             top-p sampling (default: 0.7)
   --temp N              temperature (default: 0.95)
   --repeat_penalty N    penalize repeat sequence of tokens (default: 1.0, 1.0 = disabled)
-  -t, --threads N       number of threads for inference
   -v, --verbose         display verbose output including config/system/performance info
 )";
 }

@@ -323,15 +323,7 @@ struct ModelContext {
     unique_ggml_backend_buffer_t buf_w;
     unique_ggml_backend_buffer_t buf_kv;
 
-    // #ifdef GGML_USE_METAL
-    //     // unique_ggml_metal_context_t ctx_metal;
-    // #endif
-
-    // std::string_view weight_buffer; // mapped weight
-
     ModelContext(ggml_type dtype);
-
-    // void init_device_context();
 };
 
 class Embedding {

@@ -13,7 +13,7 @@ authors = [
 maintainers = [
     {name = "Jiahao Li", email = "liplus17@163.com"},
 ]
-description = "C++ implementation of ChatGLM family models and more LLMs"
+description = "C++ implementation of ChatGLM family models"
 readme = "README.md"
 requires-python = ">=3.7"
 keywords = ["ChatGLM", "ChatGLM2", "ChatGLM3", "Large Language Model"]

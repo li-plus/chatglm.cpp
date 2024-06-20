@@ -461,19 +461,6 @@ TEST_F(ChatGLMTest, Linear) {
             CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
             CHATGLM_CHECK(ggml_backend_graph_compute(mctx_->backend.get(), mctx_->gf) == GGML_STATUS_SUCCESS);
 
-            // if (config.dtype == GGML_TYPE_F16) {
-            //     std::cout << "dtype " << config.dtype << '\n';
-            //     auto ref_cpu = ggml_new_tensor_like(ctx.get(), c.ref);
-            //     ggml_backend_tensor_get(c.ref, ref_cpu->data, 0, ggml_nbytes(c.ref));
-            //     auto out_cpu = ggml_new_tensor_like(ctx.get(), out);
-            //     ggml_backend_tensor_get(out, out_cpu->data, 0, ggml_nbytes(out));
-            //     auto weight_cpu = ggml_new_tensor_like(ctx.get(), model.weight);
-            //     ggml_backend_tensor_get(model.weight, weight_cpu->data, 0, ggml_nbytes(model.weight));
-
-            //     std::cout << "c.ref " << to_string(ref_cpu) << '\n'
-            //             << "out   " << to_string(out_cpu) << '\n'
-            //             << "weight " << to_string(weight_cpu) << '\n';
-            // }
             expect_all_close(c.ref, out, config.atol, config.rtol);
         }
     }
