@@ -1249,8 +1249,7 @@ void ChatGLM2ForCausalLM::load_state_dict(const StateDict &sd) {
     void *sd_buf_base = ggml_backend_buffer_get_base(sd.buf.get());
     const size_t sd_buf_size = ggml_backend_buffer_get_size(sd.buf.get());
     if (ggml_backend_is_cpu(mctx_->backend.get())) {
-        mctx_->buf_w = unique_ggml_backend_buffer_t(ggml_backend_cpu_buffer_from_ptr(
-            ggml_backend_buffer_get_base(sd.buf.get()), ggml_backend_buffer_get_size(sd.buf.get())));
+        mctx_->buf_w = unique_ggml_backend_buffer_t(ggml_backend_cpu_buffer_from_ptr(sd_buf_base, sd_buf_size));
     }
 #ifdef GGML_USE_METAL
     else if (ggml_backend_is_metal(mctx_->backend.get())) {

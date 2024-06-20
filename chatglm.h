@@ -303,7 +303,8 @@ using unique_ggml_backend_buffer_t = std::unique_ptr<ggml_backend_buffer, ggml_b
 template <typename T>
 struct no_init {
     T value;
-    no_init() { /* do nothing */ }
+    no_init() { /* do nothing */
+    }
 };
 
 struct ModelContext {
