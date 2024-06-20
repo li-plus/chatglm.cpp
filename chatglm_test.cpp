@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <random>
 
 #ifdef GGML_USE_CUDA
 #include <cuda_runtime.h>
@@ -31,6 +32,7 @@ static inline void expect_all_close(ggml_tensor *a, ggml_tensor *b, float atol =
     for (int64_t i = 0; i < numel; i++) {
         float ai = a_buf[i];
         float bi = b_buf[i];
+        EXPECT_TRUE(std::isfinite(ai) && std::isfinite(bi));
         float abs_diff = std::abs(ai - bi);
         max_abs_diff = std::max(max_abs_diff, abs_diff);
         if (abs_diff >= atol + rtol * std::abs(bi)) {
@@ -54,33 +56,55 @@ static inline void read_backend_tensor_data(std::istream &is, ggml_tensor *tenso
     ggml_backend_tensor_set(tensor, buf.data(), 0, buf.size());
 }
 
+static inline void _fill(ggml_tensor *tensor, const std::vector<float> &values) {
+    switch (tensor->type) {
+    case GGML_TYPE_F32: {
+        ggml_backend_tensor_set(tensor, values.data(), 0, sizeof(float) * values.size());
+    } break;
+    case GGML_TYPE_F16: {
+        std::vector<ggml_fp16_t> fp16_buf(values.size());
+        ggml_fp32_to_fp16_row(values.data(), fp16_buf.data(), fp16_buf.size());
+        ggml_backend_tensor_set(tensor, fp16_buf.data(), 0, fp16_buf.size());
+    } break;
+    case GGML_TYPE_Q4_0:
+    case GGML_TYPE_Q4_1:
+    case GGML_TYPE_Q5_0:
+    case GGML_TYPE_Q5_1:
+    case GGML_TYPE_Q8_0: { 
+        std::vector<no_init<char>> q_buf(ggml_nbytes(tensor));
+        ggml_quantize_chunk(tensor->type, values.data(), q_buf.data(), 0, ggml_nelements(tensor) / tensor->ne[0], tensor->ne[0], nullptr);
+        ggml_backend_tensor_set(tensor, q_buf.data(), 0, ggml_nbytes(tensor));
+    } break;
+    default:
+        CHATGLM_THROW << "unsupported dtype " << tensor->type;
+    }
+}
+
 static inline float random() { return rand() / (float)RAND_MAX; }
 
 static inline float random(float lo, float hi) { return lo + random() * (hi - lo); }
 
-static inline void random_fill(ggml_tensor *tensor) {
+static inline void random_(ggml_tensor *tensor) {
     std::vector<float> values(ggml_nelements(tensor));
     for (float &v : values) {
         v = random();
     }
+    _fill(tensor, values);
+}
 
-    if (tensor->type == GGML_TYPE_F32) {
-        ggml_backend_tensor_set(tensor, values.data(), 0, sizeof(float) * values.size());
-    } else {
-        CHATGLM_THROW << "unsupported dtype " << tensor->type;
+static inline float randn() { 
+    thread_local std::random_device rd{};
+    thread_local std::mt19937 gen{rd()};
+    std::normal_distribution<float> d;
+    return d(gen);
+}
+
+static inline void randn_(ggml_tensor *tensor) {
+    std::vector<float> values(ggml_nelements(tensor));
+    for (float &v : values) {
+        v = randn();
     }
-
-    // if (tensor->type == GGML_TYPE_F16) {
-    //     ggml_fp32_to_fp16_row(values.data(), (ggml_fp16_t *)tensor->data, values.size());
-    // } else if (tensor->type == GGML_TYPE_Q8_0) {
-    //     ggml_quantize_q8_0(values.data(), tensor->data, ggml_nelements(tensor), tensor->ne[0], hist);
-    // } else if (tensor->type == GGML_TYPE_Q4_0) {
-    //     ggml_quantize_q4_0(values.data(), tensor->data, ggml_nelements(tensor), tensor->ne[0], hist);
-    // } else if (tensor->type == GGML_TYPE_Q4_1) {
-    //     ggml_quantize_q4_1(values.data(), tensor->data, ggml_nelements(tensor), tensor->ne[0], hist);
-    // } else {
-    //     CHATGLM_THROW << "unsupported dtype " << ggml_type_name(tensor->type);
-    // }
+    _fill(tensor, values);
 }
 
 // return elapsed time in milliseconds
@@ -103,18 +127,6 @@ static inline float timeit(std::function<void()> fn, int warmup, int active) {
 
     float elapsed_ms = (end_us - start_us) / 1000.f;
     return elapsed_ms / active;
-}
-
-static bool equal(const std::vector<int> &a, const std::vector<int> &b) {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < a.size(); i++) {
-        if (a[i] != b[i]) {
-            return false;
-        }
-    }
-    return true;
 }
 
 static std::vector<int> extract_sorted_ids(std::vector<TokenIdScore> &token_scores) {
@@ -199,7 +211,7 @@ TEST(Sampling, TopK) {
     token_scores.resize(top_k);
 
     // sort & compare
-    EXPECT_TRUE(equal(extract_sorted_ids(token_scores), extract_sorted_ids(target)));
+    EXPECT_EQ(extract_sorted_ids(token_scores), extract_sorted_ids(target));
 }
 
 static void reference_top_p(std::vector<TokenIdScore> &token_scores, float top_p) {
@@ -236,7 +248,7 @@ TEST(Sampling, TopP) {
         // sort & compare
         auto output_ids = extract_sorted_ids(token_scores);
         auto target_ids = extract_sorted_ids(target);
-        EXPECT_TRUE(equal(output_ids, target_ids)) << "size " << output_ids.size() << " vs " << target_ids.size();
+        EXPECT_EQ(output_ids, target_ids);
     }
 }
 
@@ -468,20 +480,28 @@ TEST_F(ChatGLMTest, Linear) {
 
 TEST_F(ChatGLMTest, BenchmarkLinear) {
     constexpr int M = 64, N = 1024, K = 1024 * 3;
-    mctx_->dtype = GGML_TYPE_F32;
-    Linear m(mctx_.get(), K, N);
-    ggml_tensor *x = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, K, M);
+   std::vector<ggml_type> dtypes { GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0};
+    for (ggml_type dtype : dtypes) {
+        mctx_ = std::make_unique<ModelContext>(dtype);
 
-    ggml_tensor *y = m.forward(mctx_.get(), x);
-    ggml_build_forward_expand(mctx_->gf, y);
-    CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
+        Linear m(mctx_.get(), K, N);
+        ggml_tensor *x = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, K, M);
 
-    std::vector<ggml_tensor *> all_tensors{m.weight, m.bias, x};
-    for (auto tensor : all_tensors) {
-        random_fill(tensor);
+        ggml_tensor *y = m.forward(mctx_.get(), x);
+        ggml_build_forward_expand(mctx_->gf, y);
+        CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
+
+        std::vector<ggml_tensor *> all_tensors{m.weight, m.bias, x};
+        for (auto tensor : all_tensors) {
+            randn_(tensor);
+        }
+
+        std::cout << "[Benchmark] Linear " << ggml_type_name(mctx_->dtype) << " time: " << perf_graph_compute() << " ms\n";
+
+        // for (int i =  ggml_nelements(y); i >= 0  ; i--) {
+        //     CHATGLM_CHECK(std::isfinite(((float *)y->data)[i])) << i;
+        // }
     }
-
-    std::cout << "[Benchmark] Linear " << ggml_type_name(mctx_->dtype) << " time: " << perf_graph_compute() << " ms\n";
 }
 
 TEST_F(ChatGLMTest, LayerNorm) {
@@ -525,7 +545,7 @@ TEST_F(ChatGLMTest, BenchmarkLayerNorm) {
 
     std::vector<ggml_tensor *> all_tensors{m.weight, m.bias, x};
     for (auto tensor : all_tensors) {
-        random_fill(tensor);
+        random_(tensor);
     }
 
     ggml_tensor *y = m.forward(mctx_.get(), x);
@@ -576,7 +596,7 @@ TEST_F(ChatGLMTest, BenchmarkRMSNorm) {
 
     std::vector<ggml_tensor *> all_tensors{m.weight, x};
     for (auto tensor : all_tensors) {
-        random_fill(tensor);
+        random_(tensor);
     }
 
     ggml_tensor *y = m.forward(mctx_.get(), x);
@@ -926,7 +946,7 @@ static void check_tokenizer(const BaseTokenizer *tokenizer, const std::vector<To
     for (const auto &c : cases) {
         // encode
         std::vector<int> input_ids = tokenizer->encode(c.prompt, 2048);
-        EXPECT_TRUE(equal(input_ids, c.input_ids));
+        EXPECT_EQ(input_ids, c.input_ids);
         if (!c.skip_decode) {
             // decode
             std::string output = tokenizer->decode(c.input_ids);
@@ -1202,7 +1222,8 @@ TEST(Pipeline, ChatGLM3) {
         {
             ChatMessage output = pipeline.chat(messages, gen_config);
             EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
-            EXPECT_EQ(output.content, "根据您的要求，我使用随机数生成器API生成了一个随机数。根据API返回的结果，生成的随机数为22。");
+            EXPECT_EQ(output.content,
+                      "根据您的要求，我使用随机数生成器API生成了一个随机数。根据API返回的结果，生成的随机数为22。");
         }
     }
 
