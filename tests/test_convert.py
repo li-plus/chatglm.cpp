@@ -190,9 +190,9 @@ def make_data_embedding():
 
 
 def make_data_linear():
-    w = torch.randn(16, 32)
-    b = torch.randn(16)
-    x = torch.randn(2, 32)
+    w = torch.randn(32, 64)
+    b = torch.randn(32)
+    x = torch.randn(2, 64)
     y = F.linear(x, w, b)
 
     vec_x = x[0]

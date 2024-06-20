@@ -148,7 +148,8 @@ class ModelConfig {
                       num_virtual_tokens, rec.max_length, rec.bos_token_id, rec.eos_token_id, rec.pad_token_id,
                       rec.sep_token_id, {}) {}
 
-    ModelConfig(ModelType model_type, const ConfigRecordV1GQA &rec, float norm_eps, float rope_theta, int num_virtual_tokens)
+    ModelConfig(ModelType model_type, const ConfigRecordV1GQA &rec, float norm_eps, float rope_theta,
+                int num_virtual_tokens)
         : ModelConfig(model_type, rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads, rec.num_kv_heads,
                       rec.num_hidden_layers, rec.intermediate_size, norm_eps, rope_theta, num_virtual_tokens,
                       rec.max_length, rec.bos_token_id, rec.eos_token_id, rec.pad_token_id, rec.sep_token_id, {}) {}

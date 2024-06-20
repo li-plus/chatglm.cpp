@@ -70,9 +70,10 @@ static inline void _fill(ggml_tensor *tensor, const std::vector<float> &values) 
     case GGML_TYPE_Q4_1:
     case GGML_TYPE_Q5_0:
     case GGML_TYPE_Q5_1:
-    case GGML_TYPE_Q8_0: { 
+    case GGML_TYPE_Q8_0: {
         std::vector<no_init<char>> q_buf(ggml_nbytes(tensor));
-        ggml_quantize_chunk(tensor->type, values.data(), q_buf.data(), 0, ggml_nelements(tensor) / tensor->ne[0], tensor->ne[0], nullptr);
+        ggml_quantize_chunk(tensor->type, values.data(), q_buf.data(), 0, ggml_nelements(tensor) / tensor->ne[0],
+                            tensor->ne[0], nullptr);
         ggml_backend_tensor_set(tensor, q_buf.data(), 0, ggml_nbytes(tensor));
     } break;
     default:
@@ -92,7 +93,7 @@ static inline void random_(ggml_tensor *tensor) {
     _fill(tensor, values);
 }
 
-static inline float randn() { 
+static inline float randn() {
     thread_local std::random_device rd{};
     thread_local std::mt19937 gen{rd()};
     std::normal_distribution<float> d;
@@ -480,7 +481,8 @@ TEST_F(ChatGLMTest, Linear) {
 
 TEST_F(ChatGLMTest, BenchmarkLinear) {
     constexpr int M = 64, N = 1024, K = 1024 * 3;
-   std::vector<ggml_type> dtypes { GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0};
+    std::vector<ggml_type> dtypes{GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_Q8_0, GGML_TYPE_Q5_1,
+                                  GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0};
     for (ggml_type dtype : dtypes) {
         mctx_ = std::make_unique<ModelContext>(dtype);
 
@@ -496,11 +498,8 @@ TEST_F(ChatGLMTest, BenchmarkLinear) {
             randn_(tensor);
         }
 
-        std::cout << "[Benchmark] Linear " << ggml_type_name(mctx_->dtype) << " time: " << perf_graph_compute() << " ms\n";
-
-        // for (int i =  ggml_nelements(y); i >= 0  ; i--) {
-        //     CHATGLM_CHECK(std::isfinite(((float *)y->data)[i])) << i;
-        // }
+        std::cout << "[Benchmark] Linear " << ggml_type_name(mctx_->dtype) << " time: " << perf_graph_compute()
+                  << " ms\n";
     }
 }
 

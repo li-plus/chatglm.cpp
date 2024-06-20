@@ -1,11 +1,11 @@
 #include "chatglm.h"
-#include <ggml-quants.h>
 #include <algorithm>
 #include <codecvt>
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
 #include <functional>
+#include <ggml-quants.h>
 #include <google/protobuf/stubs/strutil.h>
 #include <iomanip>
 #include <iostream>
@@ -67,7 +67,7 @@ static std::string strides_to_string(ggml_tensor *tensor) {
 
 std::string to_string(ggml_tensor *tensor, bool with_data) {
     std::vector<char> buf(ggml_nbytes(tensor));
-    if (tensor->buffer ) {
+    if (tensor->buffer) {
         ggml_backend_tensor_get(tensor, buf.data(), 0, buf.size());
     } else {
         memcpy(buf.data(), tensor->data, buf.size());
@@ -80,25 +80,25 @@ std::string to_string(ggml_tensor *tensor, bool with_data) {
         memcpy(float_buf.data(), buf.data(), buf.size());
         break;
     case GGML_TYPE_F16:
-        ggml_fp16_to_fp32_row((const ggml_fp16_t*)buf.data(), float_buf.data(), ggml_nelements(tensor));
+        ggml_fp16_to_fp32_row((ggml_fp16_t *)buf.data(), float_buf.data(), ggml_nelements(tensor));
         break;
     case GGML_TYPE_Q4_0:
-        dequantize_row_q4_0((block_q4_0*)buf.data(), float_buf.data(), ggml_nelements(tensor));
+        dequantize_row_q4_0((block_q4_0 *)buf.data(), float_buf.data(), ggml_nelements(tensor));
         break;
     case GGML_TYPE_Q4_1:
-        dequantize_row_q4_1((block_q4_1*)buf.data(), float_buf.data(), ggml_nelements(tensor));
+        dequantize_row_q4_1((block_q4_1 *)buf.data(), float_buf.data(), ggml_nelements(tensor));
         break;
     case GGML_TYPE_Q5_0:
-        dequantize_row_q5_0((block_q5_0*)buf.data(), float_buf.data(), ggml_nelements(tensor));
+        dequantize_row_q5_0((block_q5_0 *)buf.data(), float_buf.data(), ggml_nelements(tensor));
         break;
     case GGML_TYPE_Q5_1:
-        dequantize_row_q5_1((block_q5_1*)buf.data(), float_buf.data(), ggml_nelements(tensor));
+        dequantize_row_q5_1((block_q5_1 *)buf.data(), float_buf.data(), ggml_nelements(tensor));
         break;
     case GGML_TYPE_Q8_0:
-        dequantize_row_q8_0((block_q8_0*)buf.data(), float_buf.data(), ggml_nelements(tensor));
+        dequantize_row_q8_0((block_q8_0 *)buf.data(), float_buf.data(), ggml_nelements(tensor));
         break;
     default:
-        CHATGLM_THROW <<  "Unsupported dtype " << tensor->type;
+        CHATGLM_THROW << "Unsupported dtype " << tensor->type;
     }
 
     std::ostringstream oss;
@@ -118,7 +118,7 @@ std::string to_string(ggml_tensor *tensor, bool with_data) {
                     oss << (i1 > 0 ? ",\n[" : "[");
                     for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
                         oss << (i0 > 0 ? ", " : "");
-                        const int i = ((i3 * tensor->ne[2]  + i2 ) * tensor->ne[1] + i1) * tensor->ne[0] + i0;
+                        const int i = ((i3 * tensor->ne[2] + i2) * tensor->ne[1] + i1) * tensor->ne[0] + i0;
                         oss << std::setw(7) << std::fixed << std::setprecision(4) << float_buf[i];
                     }
                     oss << "]";
@@ -548,8 +548,8 @@ static ggml_tensor *apply_rotary_emb_basic(ModelContext *mctx, ggml_tensor *laye
     }
 #endif
     const int head_size = layer->ne[0];
-    layer = ggml_rope_ext_inplace(ctx, layer, position_ids, nullptr, head_size, (int)rope_type, 0, rope_theta,
-                                  1.0f, 0.0f, 1.0f, 0.0f, 0.0f); // [s, #h, d]
+    layer = ggml_rope_ext_inplace(ctx, layer, position_ids, nullptr, head_size, (int)rope_type, 0, rope_theta, 1.0f,
+                                  0.0f, 1.0f, 0.0f, 0.0f); // [s, #h, d]
     return layer;
 }
 
