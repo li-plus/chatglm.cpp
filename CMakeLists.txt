@@ -74,8 +74,6 @@ file(GLOB CPP_SOURCES
     ${PROJECT_SOURCE_DIR}/*.cpp
     ${PROJECT_SOURCE_DIR}/tests/*.cpp)
 
-set_source_files_properties(${CPP_SOURCES} PROPERTIES COMPILE_FLAGS "-pedantic-errors")
-
 add_library(chatglm STATIC chatglm.cpp)
 target_link_libraries(chatglm PUBLIC ggml sentencepiece-static re2)
 

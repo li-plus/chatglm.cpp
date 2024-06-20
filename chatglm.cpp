@@ -1,4 +1,5 @@
 #include "chatglm.h"
+#include <ggml-quants.h>
 #include <algorithm>
 #include <codecvt>
 #include <cstring>
@@ -65,50 +66,70 @@ static std::string strides_to_string(ggml_tensor *tensor) {
 }
 
 std::string to_string(ggml_tensor *tensor, bool with_data) {
-    std::vector<no_init<char>> buf(ggml_nbytes(tensor));
-    ggml_backend_tensor_get(tensor, buf.data(), 0, buf.size());
+    std::vector<char> buf(ggml_nbytes(tensor));
+    if (tensor->buffer ) {
+        ggml_backend_tensor_get(tensor, buf.data(), 0, buf.size());
+    } else {
+        memcpy(buf.data(), tensor->data, buf.size());
+    }
+
+    std::vector<float> float_buf(ggml_nelements(tensor));
+
+    switch (tensor->type) {
+    case GGML_TYPE_F32:
+        memcpy(float_buf.data(), buf.data(), buf.size());
+        break;
+    case GGML_TYPE_F16:
+        ggml_fp16_to_fp32_row((const ggml_fp16_t*)buf.data(), float_buf.data(), ggml_nelements(tensor));
+        break;
+    case GGML_TYPE_Q4_0:
+        dequantize_row_q4_0((block_q4_0*)buf.data(), float_buf.data(), ggml_nelements(tensor));
+        break;
+    case GGML_TYPE_Q4_1:
+        dequantize_row_q4_1((block_q4_1*)buf.data(), float_buf.data(), ggml_nelements(tensor));
+        break;
+    case GGML_TYPE_Q5_0:
+        dequantize_row_q5_0((block_q5_0*)buf.data(), float_buf.data(), ggml_nelements(tensor));
+        break;
+    case GGML_TYPE_Q5_1:
+        dequantize_row_q5_1((block_q5_1*)buf.data(), float_buf.data(), ggml_nelements(tensor));
+        break;
+    case GGML_TYPE_Q8_0:
+        dequantize_row_q8_0((block_q8_0*)buf.data(), float_buf.data(), ggml_nelements(tensor));
+        break;
+    default:
+        CHATGLM_THROW <<  "Unsupported dtype " << tensor->type;
+    }
 
     std::ostringstream oss;
     oss << "ggml_tensor(";
 
     if (with_data) {
-        if (ggml_n_dims(tensor) > 3)
+        const int n_dims = ggml_n_dims(tensor);
+        if (n_dims > 3)
             oss << "[";
         for (int i3 = 0; i3 < tensor->ne[3]; i3++) {
-            if (ggml_n_dims(tensor) > 2)
+            if (n_dims > 2)
                 oss << (i3 > 0 ? ",\n\n[" : "[");
             for (int i2 = 0; i2 < tensor->ne[2]; i2++) {
-                if (ggml_n_dims(tensor) > 1)
+                if (n_dims > 1)
                     oss << (i2 > 0 ? ",\n\n[" : "[");
                 for (int i1 = 0; i1 < tensor->ne[1]; i1++) {
                     oss << (i1 > 0 ? ",\n[" : "[");
                     for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
-                        char *ptr = (char *)buf.data() + i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] +
-                                    i0 * tensor->nb[0];
                         oss << (i0 > 0 ? ", " : "");
-                        if (tensor->type == GGML_TYPE_I32) {
-                            oss << *(int *)ptr;
-                        } else {
-                            float val;
-                            if (tensor->type == GGML_TYPE_F32) {
-                                val = *(float *)ptr;
-                            } else if (tensor->type == GGML_TYPE_F16) {
-                                val = ggml_fp16_to_fp32(*(ggml_fp16_t *)ptr);
-                            } else {
-                                CHATGLM_THROW << "unimplemented";
-                            }
-                            oss << std::setw(7) << std::fixed << std::setprecision(4) << val;
-                        }
+                        const int i = ((i3 * tensor->ne[2]  + i2 ) * tensor->ne[1] + i1) * tensor->ne[0] + i0;
+                        oss << std::setw(7) << std::fixed << std::setprecision(4) << float_buf[i];
                     }
                     oss << "]";
                 }
-                if (ggml_n_dims(tensor) > 1)
+                if (n_dims > 1)
                     oss << "]";
             }
-            if (ggml_n_dims(tensor) > 2)
+            if (n_dims > 2)
                 oss << "]";
         }
-        if (ggml_n_dims(tensor) > 3)
+        if (n_dims > 3)
             oss << "]";
         oss << ", ";
     }
@@ -731,6 +752,7 @@ ggml_tensor *BaseModelForCausalLM::forward_graph_compute(const std::vector<int> 
     ggml_set_input(curr_input_ids);
 
     ggml_tensor *lm_logits = forward(mctx_.get(), curr_input_ids, n_past, n_ctx, is_decoding);
+    ggml_set_output(lm_logits);
 
     ggml_build_forward_expand(mctx_->gf, lm_logits);
     CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
