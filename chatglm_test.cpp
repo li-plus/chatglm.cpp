@@ -958,15 +958,11 @@ static void check_chat_format(const Pipeline &pipeline) {
     GenerationConfig gen_config;
     gen_config.max_new_tokens = 1;
     EXPECT_THROW(
-        {
-            pipeline.chat({{ChatMessage::ROLE_USER, "user"}, {ChatMessage::ROLE_USER, "user"}}, gen_config);
-        },
+        { pipeline.chat({{ChatMessage::ROLE_USER, "user"}, {ChatMessage::ROLE_USER, "user"}}, gen_config); },
         std::runtime_error);
     EXPECT_THROW({ pipeline.chat({{ChatMessage::ROLE_ASSISTANT, "assistant"}}, gen_config); }, std::runtime_error);
     EXPECT_THROW(
-        {
-            pipeline.chat({{ChatMessage::ROLE_USER, "user"}, {ChatMessage::ROLE_ASSISTANT, "assistant"}}, gen_config);
-        },
+        { pipeline.chat({{ChatMessage::ROLE_USER, "user"}, {ChatMessage::ROLE_ASSISTANT, "assistant"}}, gen_config); },
         std::runtime_error);
     // never throw with system prompt
     pipeline.chat({{ChatMessage::ROLE_SYSTEM, "system"}, {ChatMessage::ROLE_USER, "user"}}, gen_config);

@@ -9,10 +9,6 @@
 #include <sstream>
 #include <unordered_map>
 
-// #ifdef GGML_USE_METAL
-// #include <ggml-metal.h>
-// #endif
-
 namespace chatglm {
 
 // ===== common =====
@@ -303,24 +299,11 @@ struct ggml_backend_buffer_deleter_t {
 
 using unique_ggml_backend_buffer_t = std::unique_ptr<ggml_backend_buffer, ggml_backend_buffer_deleter_t>;
 
-#ifdef GGML_USE_METAL
-struct ggml_metal_context_deleter_t {
-    void operator()(ggml_metal_context *ctx) const noexcept { ggml_metal_free(ctx); }
-};
-
-using unique_ggml_metal_context_t = std::unique_ptr<ggml_metal_context, ggml_metal_context_deleter_t>;
-
-static inline unique_ggml_metal_context_t make_unique_ggml_metal_context(int n_cb) {
-    return unique_ggml_metal_context_t(ggml_metal_init(n_cb));
-}
-#endif
-
 // reference: https://github.com/ggerganov/llama.cpp/blob/master/llama.cpp
 template <typename T>
 struct no_init {
     T value;
-    no_init() { /* do nothing */
-    }
+    no_init() { /* do nothing */ }
 };
 
 struct ModelContext {
