@@ -231,10 +231,10 @@ CUDA accelerates model inference on NVIDIA GPU. Add the CMake flag `-DGGML_CUDA=
 cmake -B build -DGGML_CUDA=ON && cmake --build build -j
 ```
 
-By default, all kernels will be compiled for all possible CUDA architectures and it takes some time. To run on a specific type of device, you may specify `GGML_CUDA_ARCHITECTURES` to speed up the nvcc compilation. For example:
+By default, all kernels will be compiled for all possible CUDA architectures and it takes some time. To run on a specific type of device, you may specify `CMAKE_CUDA_ARCHITECTURES` to speed up the nvcc compilation. For example:
 ```sh
-cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_ARCHITECTURES="80"       # for A100
-cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_ARCHITECTURES="70;75"    # compatible with both V100 and T4
+cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="80"       # for A100
+cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="70;75"    # compatible with both V100 and T4
 ```
 
 To find out the CUDA architecture of your GPU device, see [Your GPU Compute Capability](https://developer.nvidia.com/cuda-gpus).
@@ -481,7 +481,7 @@ For CUDA support, make sure [nvidia-docker](https://github.com/NVIDIA/nvidia-doc
 ```sh
 docker build . --network=host -t chatglm.cpp-cuda \
     --build-arg BASE_IMAGE=nvidia/cuda:12.2.0-devel-ubuntu20.04 \
-    --build-arg CMAKE_ARGS="-DGGML_CUDA=ON -DGGML_CUDA_ARCHITECTURES=80"
+    --build-arg CMAKE_ARGS="-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=80"
 docker run -it --rm --gpus all -v $PWD/models:/chatglm.cpp/models chatglm.cpp-cuda \
     ./build/bin/main -m models/chatglm-ggml.bin -p "你好"
 ```

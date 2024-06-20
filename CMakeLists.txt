@@ -39,7 +39,7 @@ if (GGML_CUDA)
     if (CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL "11.8")
         set(CUDA_ARCH_LIST "${CUDA_ARCH_LIST};89;90")
     endif ()
-    set(GGML_CUDA_ARCHITECTURES ${CUDA_ARCH_LIST} CACHE STRING "chatglm: cuda architectures to compile")
+    set(CMAKE_CUDA_ARCHITECTURES ${CUDA_ARCH_LIST} CACHE STRING "")
 endif ()
 
 include_directories(third_party/ggml/include/ggml third_party/ggml/src)
