@@ -49,9 +49,6 @@ class ModelType(Enum):
     CHATGLM2 = 2
     CHATGLM3 = 3
     CHATGLM4 = 4
-    BAICHUAN7B = 1024
-    BAICHUAN13B = 1025
-    INTERNLM = 1280
 
 
 def quantize_q8_0(tensor: torch.Tensor) -> torch.Tensor:
@@ -387,142 +384,6 @@ class ChatGLM4Converter(ChatGLM2Converter):
         f.write(vocab_text)
 
 
-class BaichuanConverter(BaseConverter):
-    @classmethod
-    def dump_config(cls, f, config, ggml_type):
-        assert config.hidden_act == "silu", "unimplemented: hidden_act must be silu"
-
-        config_version = 1
-        config_values = [
-            ggml_type.value,
-            config.vocab_size,
-            config.hidden_size,
-            config.num_attention_heads,
-            config.num_hidden_layers,
-            config.intermediate_size,
-            config.model_max_length,
-            config.bos_token_id if config.bos_token_id is not None else -1,
-            config.eos_token_id if config.eos_token_id is not None else -1,
-            config.pad_token_id if config.pad_token_id is not None else -1,
-            config.sep_token_id if config.sep_token_id is not None else -1,
-        ]
-
-        f.write(struct.pack("i" * (1 + len(config_values)), config_version, *config_values))
-
-    @staticmethod
-    def dump_tokenizer(f, tokenizer):
-        serialized_model_proto = tokenizer.sp_model.serialized_model_proto()
-        f.write(struct.pack("i", len(serialized_model_proto)))
-        f.write(serialized_model_proto)
-
-    @staticmethod
-    def dump_model(f, model, ggml_type):
-        weight_names = ["model.embed_tokens.weight"]
-        for i in range(model.config.num_hidden_layers):
-            weight_names += [
-                f"model.layers.{i}.input_layernorm.weight",
-                f"model.layers.{i}.self_attn.W_pack.weight",
-                f"model.layers.{i}.self_attn.o_proj.weight",
-                f"model.layers.{i}.post_attention_layernorm.weight",
-                f"model.layers.{i}.mlp.gate_proj.weight",
-                f"model.layers.{i}.mlp.down_proj.weight",
-                f"model.layers.{i}.mlp.up_proj.weight",
-            ]
-        weight_names += [
-            "model.norm.weight",
-            "lm_head.weight",
-        ]
-
-        if model.config.vocab_size == 125696:
-            # For Baichuan2, normalize lm_head weight
-            model.lm_head.weight.data = F.normalize(model.lm_head.weight.data)
-
-        dump_state_dict(f, weight_names, model.state_dict(), quantization_bit=None, ggml_type=ggml_type)
-
-
-class Baichuan7BConverter(BaichuanConverter):
-    MODEL_TYPE = ModelType.BAICHUAN7B
-
-
-class Baichuan13BConverter(BaichuanConverter):
-    MODEL_TYPE = ModelType.BAICHUAN13B
-
-
-class InternLMConverter(BaseConverter):
-    MODEL_TYPE = ModelType.INTERNLM
-
-    @staticmethod
-    def dump_config(f, config, ggml_type):
-        assert config.hidden_act == "silu", "unimplemented: hidden_act must be silu"
-
-        config_version = 1
-        config_values = [
-            ggml_type.value,
-            config.vocab_size,
-            config.hidden_size,
-            config.num_attention_heads,
-            config.num_hidden_layers,
-            config.intermediate_size,
-            config.max_position_embeddings,
-            config.bos_token_id if config.bos_token_id is not None else -1,
-            config.eos_token_id if config.eos_token_id is not None else -1,
-            config.pad_token_id if config.pad_token_id is not None else -1,
-            config.sep_token_id if config.sep_token_id is not None else -1,
-        ]
-
-        f.write(struct.pack("i" * (1 + len(config_values)), config_version, *config_values))
-
-    @staticmethod
-    def dump_tokenizer(f, tokenizer):
-        serialized_model_proto = tokenizer.sp_model.serialized_model_proto()
-        f.write(struct.pack("i", len(serialized_model_proto)))
-        f.write(serialized_model_proto)
-
-    @staticmethod
-    def dump_model(f, model, ggml_type):
-        state_dict = model.state_dict()
-        for i in range(model.config.num_hidden_layers):
-            state_dict[f"model.layers.{i}.self_attn.qkv_proj.weight"] = torch.cat(
-                (
-                    state_dict[f"model.layers.{i}.self_attn.q_proj.weight"],
-                    state_dict[f"model.layers.{i}.self_attn.k_proj.weight"],
-                    state_dict[f"model.layers.{i}.self_attn.v_proj.weight"],
-                ),
-                dim=0,
-            )
-            if model.config.bias:
-                state_dict[f"model.layers.{i}.self_attn.qkv_proj.bias"] = torch.cat(
-                    (
-                        state_dict[f"model.layers.{i}.self_attn.q_proj.bias"],
-                        state_dict[f"model.layers.{i}.self_attn.k_proj.bias"],
-                        state_dict[f"model.layers.{i}.self_attn.v_proj.bias"],
-                    ),
-                    dim=0,
-                )
-
-        weight_names = ["model.embed_tokens.weight"]
-        for i in range(model.config.num_hidden_layers):
-            optional_qkv_proj_bias = [f"model.layers.{i}.self_attn.qkv_proj.bias"] if model.config.bias else []
-            optional_o_proj_bias = [f"model.layers.{i}.self_attn.o_proj.bias"] if model.config.bias else []
-            weight_names += [
-                f"model.layers.{i}.input_layernorm.weight",
-                f"model.layers.{i}.self_attn.qkv_proj.weight",
-                *optional_qkv_proj_bias,
-                f"model.layers.{i}.self_attn.o_proj.weight",
-                *optional_o_proj_bias,
-                f"model.layers.{i}.post_attention_layernorm.weight",
-                f"model.layers.{i}.mlp.gate_proj.weight",
-                f"model.layers.{i}.mlp.up_proj.weight",
-                f"model.layers.{i}.mlp.down_proj.weight",
-            ]
-        weight_names += [
-            "model.norm.weight",
-            "lm_head.weight",
-        ]
-
-        dump_state_dict(f, weight_names, state_dict, quantization_bit=None, ggml_type=ggml_type)
-
-
 def convert(f: BinaryIO, model_name_or_path: str, lora_model_name_or_path: Optional[str] = None, dtype: str = "q4_0"):
     ggml_type = GGMLType[dtype.upper()]
 
@@ -561,13 +422,6 @@ def convert(f: BinaryIO, model_name_or_path: str, lora_model_name_or_path: Optio
                 ChatGLM2Converter.convert(f, model, tokenizer, ggml_type)
         else:
             ChatGLMConverter.convert(f, model, tokenizer, ggml_type)
-    elif model.config.model_type == "baichuan":
-        if model.config.hidden_size == 5120:
-            Baichuan13BConverter.convert(f, model, tokenizer, ggml_type)
-        else:
-            Baichuan7BConverter.convert(f, model, tokenizer, ggml_type)
-    elif model.config.model_type == "internlm":
-        InternLMConverter.convert(f, model, tokenizer, ggml_type)
     else:
         raise RuntimeError(f"Unknown model type {model.config.model_type}")
 

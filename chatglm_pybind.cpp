@@ -26,12 +26,18 @@ class PyBaseModelForCausalLM : public BaseModelForCausalLM {
   public:
     using BaseModelForCausalLM::BaseModelForCausalLM;
 
-    void load(ModelLoader &loader) override { PYBIND11_OVERLOAD_PURE(void, PyBaseModelForCausalLM, load, loader); }
+    void load_state_dict(const StateDict &sd) override {
+        PYBIND11_OVERLOAD_PURE(void, PyBaseModelForCausalLM, load_state_dict, sd);
+    }
 
     ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx,
                          bool is_decoding) const override {
         PYBIND11_OVERLOAD_PURE(ggml_tensor *, PyBaseModelForCausalLM, forward, ctx, input_ids, n_past, n_ctx,
                                is_decoding)
+    }
+
+    void set_graph_inputs(int qlen, int n_past, int n_ctx) const override {
+        PYBIND11_OVERLOAD_PURE(void, PyBaseModelForCausalLM, set_graph_inputs, qlen, n_past, n_ctx);
     }
 };
 
@@ -49,10 +55,7 @@ PYBIND11_MODULE(_C, m) {
         .value("CHATGLM", ModelType::CHATGLM)
         .value("CHATGLM2", ModelType::CHATGLM2)
         .value("CHATGLM3", ModelType::CHATGLM3)
-        .value("CHATGLM4", ModelType::CHATGLM4)
-        .value("BAICHUAN7B", ModelType::BAICHUAN7B)
-        .value("BAICHUAN13B", ModelType::BAICHUAN13B)
-        .value("INTERNLM", ModelType::INTERNLM);
+        .value("CHATGLM4", ModelType::CHATGLM4);
 
     py::class_<ModelConfig>(m, "ModelConfig")
         .def_readonly("model_type", &ModelConfig::model_type)
@@ -73,9 +76,9 @@ PYBIND11_MODULE(_C, m) {
         .def_property_readonly("model_type_name", &ModelConfig::model_type_name);
 
     py::class_<GenerationConfig>(m, "GenerationConfig")
-        .def(py::init<int, int, int, bool, int, float, float, float, int>(), "max_length"_a = 2048,
-             "max_new_tokens"_a = -1, "max_context_length"_a = 512, "do_sample"_a = true, "top_k"_a = 0,
-             "top_p"_a = 0.7, "temperature"_a = 0.95, "repetition_penalty"_a = 1.0, "num_threads"_a = 0)
+        .def(py::init<int, int, int, bool, int, float, float, float>(), "max_length"_a = 2048, "max_new_tokens"_a = -1,
+             "max_context_length"_a = 512, "do_sample"_a = true, "top_k"_a = 0, "top_p"_a = 0.7, "temperature"_a = 0.95,
+             "repetition_penalty"_a = 1.0)
         .def_readwrite("max_length", &GenerationConfig::max_length)
         .def_readwrite("max_new_tokens", &GenerationConfig::max_new_tokens)
         .def_readwrite("max_context_length", &GenerationConfig::max_context_length)
@@ -83,8 +86,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("top_k", &GenerationConfig::top_k)
         .def_readwrite("top_p", &GenerationConfig::top_p)
         .def_readwrite("temperature", &GenerationConfig::temperature)
-        .def_readwrite("repetition_penalty", &GenerationConfig::repetition_penalty)
-        .def_readwrite("num_threads", &GenerationConfig::num_threads);
+        .def_readwrite("repetition_penalty", &GenerationConfig::repetition_penalty);
 
     py::class_<FunctionMessage>(m, "FunctionMessage")
         .def("__repr__", &to_string<FunctionMessage>)
@@ -147,20 +149,6 @@ PYBIND11_MODULE(_C, m) {
     // ===== ChatGLM4 =====
 
     py::class_<ChatGLM4Tokenizer, BaseTokenizer>(m, "ChatGLM4Tokenizer");
-
-    // ===== Baichuan7B/13B =====
-
-    py::class_<BaichuanTokenizer, BaseTokenizer>(m, "BaichuanTokenizer");
-
-    py::class_<Baichuan7BForCausalLM, BaseModelForCausalLM>(m, "Baichuan7BForCausalLM");
-
-    py::class_<Baichuan13BForCausalLM, BaseModelForCausalLM>(m, "Baichuan13BForCausalLM");
-
-    // ===== InternLM =====
-
-    py::class_<InternLMTokenizer, BaseTokenizer>(m, "InternLMTokenizer");
-
-    py::class_<InternLMForCausalLM, BaseModelForCausalLM>(m, "InternLMForCausalLM");
 
     // ===== Pipeline ====
 

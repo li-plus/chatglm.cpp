@@ -9,7 +9,6 @@ struct Args {
     std::string corpus_path = "data/wikitext-2-raw/wiki.test.raw";
     int max_length = 1024;
     int stride = 512;
-    int num_threads = 0;
 };
 
 static void usage(const std::string &prog) {
@@ -21,7 +20,6 @@ options:
   -f, --file            path to the corpus
   -l, --max_length N    max total length including prompt and output
   -s, --stride N        stride size of the sliding window
-  -t, --threads N       number of threads for inference
 )";
 }
 
@@ -42,8 +40,6 @@ static Args parse_args(const std::vector<std::string> &argv) {
             args.max_length = std::stoi(argv.at(++i));
         } else if (arg == "-s" || arg == "--stride") {
             args.stride = std::stoi(argv.at(++i));
-        } else if (arg == "-t" || arg == "--threads") {
-            args.num_threads = std::stoi(argv.at(++i));
         } else {
             std::cerr << "Unknown argument: " << arg << std::endl;
             usage(argv.at(0));
@@ -59,7 +55,7 @@ static Args parse_args(int argc, char **argv) {
     return parse_args(argv_vec);
 }
 
-static std::string read_text(std::string path) {
+static std::string read_text(const std::string &path) {
     std::ifstream fin(path);
     CHATGLM_CHECK(fin) << "cannot open file " << path;
     std::ostringstream oss;
@@ -68,8 +64,8 @@ static std::string read_text(std::string path) {
 }
 
 static float cross_entropy(const ggml_tensor *input, const ggml_tensor *target) {
-    CHATGLM_CHECK(ggml_is_contiguous(input) && input->n_dims == 2 && input->type == GGML_TYPE_F32);
-    CHATGLM_CHECK(ggml_is_contiguous(target) && target->n_dims == 1 && target->type == GGML_TYPE_I32);
+    CHATGLM_CHECK(ggml_is_contiguous(input) && ggml_n_dims(input) == 2 && input->type == GGML_TYPE_F32);
+    CHATGLM_CHECK(ggml_is_contiguous(target) && ggml_n_dims(target) == 1 && target->type == GGML_TYPE_I32);
     CHATGLM_CHECK(input->ne[1] == target->ne[0]);
 
     const int num_classes = input->ne[0];
@@ -108,7 +104,7 @@ static void perplexity(Args &args) {
     float total_loss = 0.f;
     size_t num_samples = 0;
 
-    std::vector<chatglm::uninitialized_char> buf;
+    std::vector<chatglm::no_init<char>> buf;
 
     size_t prev_end = 0;
     for (size_t begin = 0; begin < corpus_ids.size(); begin += args.stride) {
@@ -117,15 +113,20 @@ static void perplexity(Args &args) {
         size_t target_len = std::min(end - prev_end, size_t(args.max_length - 1));
         std::vector<int> input_ids(corpus_ids.begin() + begin, corpus_ids.begin() + end);
 
-        ggml_tensor *lm_logits = pipeline.model->forward_graph_compute(input_ids, 0, 0, args.num_threads, false);
+        ggml_tensor *lm_logits = pipeline.model->forward_graph_compute(input_ids, 0, 0, false);
 
         const auto clk_fwd = std::chrono::system_clock::now();
 
-        buf.resize(ggml_nbytes(lm_logits) + 16 * chatglm::MB);
+        buf.resize(ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE + ggml_nbytes(lm_logits) +
+                   target_len * ggml_type_size(GGML_TYPE_I32));
 
         auto ctx = chatglm::make_unique_ggml_context(buf.size(), buf.data(), false);
-        ggml_tensor *next_lm_logits = ggml_view_2d(ctx.get(), lm_logits, lm_logits->ne[0], target_len, lm_logits->nb[1],
-                                                   (input_ids.size() - target_len - 1) * lm_logits->nb[1]);
+        ggml_tensor *lm_logits_cpu = ggml_new_tensor(ctx.get(), lm_logits->type, ggml_n_dims(lm_logits), lm_logits->ne);
+        ggml_backend_tensor_get(lm_logits, lm_logits_cpu->data, 0, ggml_nbytes(lm_logits));
+        ggml_tensor *next_lm_logits =
+            ggml_view_2d(ctx.get(), lm_logits_cpu, lm_logits_cpu->ne[0], target_len, lm_logits_cpu->nb[1],
+                         (input_ids.size() - target_len - 1) * lm_logits_cpu->nb[1]);
+
         ggml_tensor *next_input_ids = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, target_len);
         memcpy(next_input_ids->data, input_ids.data() + input_ids.size() - target_len, target_len * sizeof(int));
 

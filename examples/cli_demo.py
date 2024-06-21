@@ -52,7 +52,6 @@ def main() -> None:
     parser.add_argument("--top_p", default=0.7, type=float, help="top-p sampling")
     parser.add_argument("--temp", default=0.95, type=float, help="temperature")
     parser.add_argument("--repeat_penalty", default=1.0, type=float, help="penalize repeat sequence of tokens")
-    parser.add_argument("-t", "--threads", default=0, type=int, help="number of threads for inference")
     args = parser.parse_args()
 
     prompt = args.prompt

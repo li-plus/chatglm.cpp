@@ -18,7 +18,6 @@ logging.basicConfig(level=logging.INFO, format=r"%(asctime)s - %(module)s - %(le
 class Settings(BaseSettings):
     model: str = "models/chatglm3-ggml.bin"
     max_length: int = 4096
-    num_threads: int = 0
 
 
 class ToolCallFunction(BaseModel):
@@ -146,7 +145,6 @@ def stream_chat(messages, body):
         do_sample=body.temperature > 0,
         top_p=body.top_p,
         temperature=body.temperature,
-        num_threads=settings.num_threads,
         stream=True,
     ):
         yield ChatCompletionResponse(

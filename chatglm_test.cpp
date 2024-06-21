@@ -1,8 +1,10 @@
 #include "chatglm.h"
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <random>
 
-#ifdef GGML_USE_CUBLAS
+#ifdef GGML_USE_CUDA
 #include <cuda_runtime.h>
 #include <ggml-cuda.h>
 #endif
@@ -11,64 +13,99 @@ namespace chatglm {
 
 namespace fs = std::filesystem;
 
-static inline int get_num_threads() {
-    const char *chatglm_num_threads_env = getenv("CHATGLM_NUM_THREADS");
-    int num_threads = chatglm_num_threads_env ? std::stoi(chatglm_num_threads_env) : get_default_num_threads();
-    return num_threads;
-}
-
 static inline void expect_all_close(ggml_tensor *a, ggml_tensor *b, float atol = 1e-5f, float rtol = 0.f) {
     ASSERT_EQ(a->type, b->type);
     ASSERT_EQ(a->type, GGML_TYPE_F32);
     ASSERT_EQ(ggml_nelements(a), ggml_nelements(b));
+
     int64_t numel = ggml_nelements(a);
+
+    std::vector<float> a_buf(numel);
+    ggml_backend_tensor_get(a, a_buf.data(), 0, numel * sizeof(float));
+
+    std::vector<float> b_buf(numel);
+    ggml_backend_tensor_get(b, b_buf.data(), 0, numel * sizeof(float));
+
     float max_abs_diff = 0.f;
+    float max_rel_diff = 0.f;
     int64_t num_mismatch = 0;
     for (int64_t i = 0; i < numel; i++) {
-        float ai = ((float *)a->data)[i];
-        float bi = ((float *)b->data)[i];
+        float ai = a_buf[i];
+        float bi = b_buf[i];
+        EXPECT_TRUE(std::isfinite(ai) && std::isfinite(bi));
         float abs_diff = std::abs(ai - bi);
         max_abs_diff = std::max(max_abs_diff, abs_diff);
         if (abs_diff >= atol + rtol * std::abs(bi)) {
             num_mismatch++;
         }
+        float rel_diff = abs_diff / std::abs(bi);
+        max_rel_diff = std::max(max_rel_diff, rel_diff);
     }
-    EXPECT_EQ(num_mismatch, 0) << "Tensors are not close!\n\n"
-                               << "Mismatched elements: " << num_mismatch << " / " << numel << " ("
-                               << num_mismatch * 100 / numel << "%)\n"
-                               << "Greatest absolute difference: " << max_abs_diff << " (up to " << std::scientific
-                               << atol << " allowed)\n";
+    EXPECT_TRUE(num_mismatch == 0) << "Tensors are not close!\n\n"
+                                   << "Mismatched elements: " << num_mismatch << " / " << numel << " ("
+                                   << num_mismatch * 100 / numel << "%)\n"
+                                   << "Greatest absolute difference: " << max_abs_diff << " (up to " << std::scientific
+                                   << atol << std::defaultfloat << " allowed)\n"
+                                   << "Greatest relative difference: " << max_rel_diff << " (up to " << std::scientific
+                                   << rtol << std::defaultfloat << " allowed)\n";
 }
 
-static inline char *read_tensor_data(char *ptr, ggml_tensor *tensor) {
-    memcpy(tensor->data, ptr, ggml_nbytes(tensor));
-    return ptr + ggml_nbytes(tensor);
+static inline void read_backend_tensor_data(std::istream &is, ggml_tensor *tensor) {
+    std::vector<no_init<char>> buf(ggml_nbytes(tensor));
+    is.read((char *)buf.data(), buf.size());
+    ggml_backend_tensor_set(tensor, buf.data(), 0, buf.size());
+}
+
+static inline void _fill(ggml_tensor *tensor, const std::vector<float> &values) {
+    switch (tensor->type) {
+    case GGML_TYPE_F32: {
+        ggml_backend_tensor_set(tensor, values.data(), 0, sizeof(float) * values.size());
+    } break;
+    case GGML_TYPE_F16: {
+        std::vector<ggml_fp16_t> fp16_buf(values.size());
+        ggml_fp32_to_fp16_row(values.data(), fp16_buf.data(), fp16_buf.size());
+        ggml_backend_tensor_set(tensor, fp16_buf.data(), 0, fp16_buf.size());
+    } break;
+    case GGML_TYPE_Q4_0:
+    case GGML_TYPE_Q4_1:
+    case GGML_TYPE_Q5_0:
+    case GGML_TYPE_Q5_1:
+    case GGML_TYPE_Q8_0: {
+        std::vector<no_init<char>> q_buf(ggml_nbytes(tensor));
+        ggml_quantize_chunk(tensor->type, values.data(), q_buf.data(), 0, ggml_nelements(tensor) / tensor->ne[0],
+                            tensor->ne[0], nullptr);
+        ggml_backend_tensor_set(tensor, q_buf.data(), 0, ggml_nbytes(tensor));
+    } break;
+    default:
+        CHATGLM_THROW << "unsupported dtype " << tensor->type;
+    }
 }
 
 static inline float random() { return rand() / (float)RAND_MAX; }
 
 static inline float random(float lo, float hi) { return lo + random() * (hi - lo); }
 
-static inline void random_fill(ggml_tensor *tensor) {
+static inline void random_(ggml_tensor *tensor) {
     std::vector<float> values(ggml_nelements(tensor));
     for (float &v : values) {
         v = random();
     }
-    int64_t hist[16]{};
+    _fill(tensor, values);
+}
 
-    if (tensor->type == GGML_TYPE_F32) {
-        memcpy(tensor->data, values.data(), sizeof(float) * values.size());
-    } else if (tensor->type == GGML_TYPE_F16) {
-        ggml_fp32_to_fp16_row(values.data(), (ggml_fp16_t *)tensor->data, values.size());
-    } else if (tensor->type == GGML_TYPE_Q8_0) {
-        ggml_quantize_q8_0(values.data(), tensor->data, ggml_nelements(tensor), tensor->ne[0], hist);
-    } else if (tensor->type == GGML_TYPE_Q4_0) {
-        ggml_quantize_q4_0(values.data(), tensor->data, ggml_nelements(tensor), tensor->ne[0], hist);
-    } else if (tensor->type == GGML_TYPE_Q4_1) {
-        ggml_quantize_q4_1(values.data(), tensor->data, ggml_nelements(tensor), tensor->ne[0], hist);
-    } else {
-        CHATGLM_THROW << "unsupported dtype " << ggml_type_name(tensor->type);
+static inline float randn() {
+    thread_local std::random_device rd{};
+    thread_local std::mt19937 gen{rd()};
+    std::normal_distribution<float> d;
+    return d(gen);
+}
+
+static inline void randn_(ggml_tensor *tensor) {
+    std::vector<float> values(ggml_nelements(tensor));
+    for (float &v : values) {
+        v = randn();
     }
+    _fill(tensor, values);
 }
 
 // return elapsed time in milliseconds
@@ -77,32 +114,20 @@ static inline float timeit(std::function<void()> fn, int warmup, int active) {
         fn();
     }
 
-#ifdef GGML_USE_CUBLAS
+#ifdef GGML_USE_CUDA
     CHATGLM_CHECK_CUDA(cudaDeviceSynchronize());
 #endif
     int64_t start_us = ggml_time_us();
     for (int i = 0; i < active; i++) {
         fn();
     }
-#ifdef GGML_USE_CUBLAS
+#ifdef GGML_USE_CUDA
     CHATGLM_CHECK_CUDA(cudaDeviceSynchronize());
 #endif
     int64_t end_us = ggml_time_us();
 
     float elapsed_ms = (end_us - start_us) / 1000.f;
     return elapsed_ms / active;
-}
-
-static bool equal(const std::vector<int> &a, const std::vector<int> &b) {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < a.size(); i++) {
-        if (a[i] != b[i]) {
-            return false;
-        }
-    }
-    return true;
 }
 
 static std::vector<int> extract_sorted_ids(std::vector<TokenIdScore> &token_scores) {
@@ -187,7 +212,7 @@ TEST(Sampling, TopK) {
     token_scores.resize(top_k);
 
     // sort & compare
-    EXPECT_TRUE(equal(extract_sorted_ids(token_scores), extract_sorted_ids(target)));
+    EXPECT_EQ(extract_sorted_ids(token_scores), extract_sorted_ids(target));
 }
 
 static void reference_top_p(std::vector<TokenIdScore> &token_scores, float top_p) {
@@ -224,149 +249,116 @@ TEST(Sampling, TopP) {
         // sort & compare
         auto output_ids = extract_sorted_ids(token_scores);
         auto target_ids = extract_sorted_ids(target);
-        EXPECT_TRUE(equal(output_ids, target_ids)) << "size " << output_ids.size() << " vs " << target_ids.size();
+        EXPECT_EQ(output_ids, target_ids);
     }
+}
+
+static inline ggml_tensor *ggml_new_tensor_like(ggml_context *ctx, ggml_tensor *tensor) {
+    return ggml_new_tensor(ctx, tensor->type, ggml_n_dims(tensor), tensor->ne);
 }
 
 class ChatGLMTest : public ::testing::Test {
   protected:
-    ModelContext ctx;
+    std::unique_ptr<ModelContext> mctx_;
 
-    void SetUp() override {
-        ctx.dtype = GGML_TYPE_F32;
-        ctx.ctx_w = make_unique_ggml_context(1024 * MB, nullptr, false);
-        ctx.ctx_kv = make_unique_ggml_context(512 * MB, nullptr, false);
-        ctx.ctx_b = make_unique_ggml_context(512 * MB, nullptr, false);
-        ctx.scratch_buffer.resize(1 * MB);
-        ctx.scratch = {0, ctx.scratch_buffer.size(), ctx.scratch_buffer.data()};
-#ifdef GGML_USE_CUBLAS
-        ggml_cuda_set_scratch_size(ctx.scratch_buffer.size());
-#endif
-        ctx.init_device_context();
+    void SetUp() override { mctx_ = std::make_unique<ModelContext>(GGML_TYPE_F32); }
 
-        reset_cgraph();
-    }
-
-    void TearDown() override {
-#ifdef GGML_USE_CUBLAS
-        ggml_cuda_free_scratch();
-#endif
-    }
-
-    void reset_cgraph() { ctx.gf = {}; }
-
-    void cpu_graph_compute(int n_threads) { ggml_graph_compute_helper(ctx.work_buffer, &ctx.gf, n_threads); }
-
-    void device_graph_compute(int n_threads) {
-#ifdef GGML_USE_METAL
-        // ggml_metal_set_n_cb(ctx.ctx_metal.get(), n_threads);
-        ggml_metal_graph_compute(ctx.ctx_metal.get(), &ctx.gf);
-        // ggml_metal_get_tensor(ctx.ctx_metal.get(), output);
-#else
-        cpu_graph_compute(n_threads);
-#endif
-    }
-
-    template <bool FALLBACK_CPU>
-    float _perf_graph_compute_impl() {
-        int num_threads = get_num_threads();
-        auto fn = [this, num_threads] {
-            if constexpr (FALLBACK_CPU) {
-                cpu_graph_compute(num_threads);
-            } else {
-                device_graph_compute(num_threads);
-            }
+    float perf_graph_compute() {
+        auto fn = [this] {
+            CHATGLM_CHECK(ggml_backend_graph_compute(mctx_->backend.get(), mctx_->gf) == GGML_STATUS_SUCCESS);
         };
-#if defined(GGML_USE_CUBLAS) || defined(GGML_USE_METAL)
-        return timeit(fn, 10, 100);
-#else
-        return timeit(fn, 1, 3);
-#endif
+        if (ggml_backend_is_cpu(mctx_->backend.get())) {
+            return timeit(fn, 1, 3);
+        } else {
+            return timeit(fn, 10, 100);
+        }
     }
 
-    float perf_cpu_graph_compute() { return _perf_graph_compute_impl<true>(); }
-    float perf_device_graph_compute() { return _perf_graph_compute_impl<false>(); }
+    template <typename Model>
+    static void set_graph_inputs(ggml_cgraph *gf, int qlen, int n_past, int n_ctx) {
+        static_assert(std::is_same_v<Model, ChatGLMModel> || std::is_same_v<Model, ChatGLM2Model>,
+                      "invalid model type");
+        if (std::is_same_v<Model, ChatGLMModel>) {
+            ChatGLMForCausalLM::set_graph_inputs(gf, qlen, n_past, n_ctx);
+        } else {
+            ChatGLM2ForCausalLM::set_graph_inputs(gf, qlen, n_past, n_ctx);
+        }
+    }
 
     template <typename Model>
     void test_model(Model &model, const ModelConfig &config, const fs::path &data_path, int seq_len,
                     const std::vector<ggml_tensor *> &all_weights) {
         ASSERT_EQ(config.num_hidden_layers, 1);
 
-        MappedFile mapped_file(data_path.string());
-        char *ptr = mapped_file.data;
+        std::ifstream ifs(data_path, std::ios::binary);
+        ASSERT_TRUE(ifs) << "cannot open file " << data_path;
 
-        ggml_tensor *x1 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, seq_len);
-        ggml_tensor *ref_y1 = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size, seq_len);
-        ggml_tensor *x2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
-        ggml_tensor *ref_y2 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
-        ggml_tensor *x3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 1);
-        ggml_tensor *ref_y3 = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
+        ggml_tensor *x1 = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_I32, seq_len);
+        ggml_tensor *ref_y1 = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, config.hidden_size, seq_len);
+        ggml_tensor *x2 = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_I32, 1);
+        ggml_tensor *ref_y2 = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
+        ggml_tensor *x3 = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_I32, 1);
+        ggml_tensor *ref_y3 = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_F32, config.hidden_size);
 
         std::vector<ggml_tensor *> all_tensors = all_weights;
         all_tensors.insert(all_tensors.end(), {x1, ref_y1, x2, ref_y2, x3, ref_y3});
 
-        std::vector<ggml_tensor *> cpu_tensors{model.word_embeddings.weight, x1, x2, x3};
-
+        ggml_tensor *past_key_values = nullptr;
         if (config.num_virtual_tokens > 0) {
             const int head_size = config.hidden_size / config.num_attention_heads;
-            ggml_tensor *past_key_values =
-                ggml_new_tensor_4d(ctx.ctx_b.get(), GGML_TYPE_F16, head_size, config.num_virtual_tokens,
+            past_key_values =
+                ggml_new_tensor_4d(mctx_->ctx_b.get(), GGML_TYPE_F16, head_size, config.num_virtual_tokens,
                                    config.num_kv_heads, config.num_hidden_layers * 2); // [l * 2, #h, v, d]
-            ptr = read_tensor_data(ptr, past_key_values);
+        }
+
+        auto buf_b =
+            unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_b.get(), mctx_->backend.get()));
+        auto buf_w =
+            unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_w.get(), mctx_->backend.get()));
+
+        if (config.num_virtual_tokens > 0) {
+            read_backend_tensor_data(ifs, past_key_values);
             model.load_prefix_cache(config, past_key_values);
         }
 
-        tensor_to_device(model.layers[0].attention.k_cache);
-        tensor_to_device(model.layers[0].attention.v_cache);
-
         for (auto tensor : all_tensors) {
-            ptr = read_tensor_data(ptr, tensor);
-            if (std::find(cpu_tensors.begin(), cpu_tensors.end(), tensor) == cpu_tensors.end()) {
-                tensor_to_device(tensor);
-            }
+            read_backend_tensor_data(ifs, tensor);
         }
-
-        ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
+        ASSERT_TRUE(ifs.peek() == EOF);
 
         // self attention
         {
-            reset_cgraph();
-            ggml_tensor *out_y1 = model.forward(&ctx, x1, 0, seq_len);
-            EXPECT_EQ(out_y1->backend, ref_y1->backend);
-            out_y1->backend = GGML_BACKEND_CPU;
-            ggml_build_forward_expand(&ctx.gf, out_y1);
-            device_graph_compute(1);
+            ggml_graph_clear(mctx_->gf);
+            ggml_tensor *out_y1 = model.forward(mctx_.get(), x1, 0);
+            ggml_build_forward_expand(mctx_->gf, out_y1);
+            CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
+            set_graph_inputs<Model>(mctx_->gf, seq_len, 0, seq_len);
+            CHATGLM_CHECK(ggml_backend_graph_compute(mctx_->backend.get(), mctx_->gf) == GGML_STATUS_SUCCESS);
 
             expect_all_close(ref_y1, out_y1, 5e-4);
         }
 
         // cross attention
         {
-            reset_cgraph();
-            ggml_tensor *out_y2 = model.forward(&ctx, x2, seq_len, seq_len);
-            EXPECT_EQ(out_y2->backend, ref_y2->backend);
-            out_y2->backend = GGML_BACKEND_CPU;
-            ggml_build_forward_expand(&ctx.gf, out_y2);
-            device_graph_compute(1);
+            ggml_graph_clear(mctx_->gf);
+            ggml_tensor *out_y2 = model.forward(mctx_.get(), x2, seq_len);
+            ggml_build_forward_expand(mctx_->gf, out_y2);
+            CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
+            set_graph_inputs<Model>(mctx_->gf, 1, seq_len, seq_len);
+            CHATGLM_CHECK(ggml_backend_graph_compute(mctx_->backend.get(), mctx_->gf) == GGML_STATUS_SUCCESS);
 
             expect_all_close(ref_y2, out_y2, 5e-4);
         }
         {
-            reset_cgraph();
-            ggml_tensor *out_y3 = model.forward(&ctx, x3, seq_len + 1, seq_len);
-            EXPECT_EQ(out_y3->backend, ref_y3->backend);
-            out_y3->backend = GGML_BACKEND_CPU;
-            ggml_build_forward_expand(&ctx.gf, out_y3);
-            device_graph_compute(1);
+            ggml_graph_clear(mctx_->gf);
+            ggml_tensor *out_y3 = model.forward(mctx_.get(), x3, seq_len + 1);
+            ggml_build_forward_expand(mctx_->gf, out_y3);
+            CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
+            set_graph_inputs<Model>(mctx_->gf, 1, seq_len + 1, seq_len);
+            CHATGLM_CHECK(ggml_backend_graph_compute(mctx_->backend.get(), mctx_->gf) == GGML_STATUS_SUCCESS);
 
             expect_all_close(ref_y3, out_y3, 5e-4);
         }
-
-        for (auto tensor : all_tensors) {
-            tensor_to_cpu(tensor);
-        }
-        tensor_to_cpu(model.layers[0].attention.k_cache);
-        tensor_to_cpu(model.layers[0].attention.v_cache);
     }
 };
 
@@ -377,50 +369,56 @@ TEST_F(ChatGLMTest, Embedding) {
     float y_data[]{0.5684,  -1.0845, -1.3986, -0.4033, -0.5966, 0.1820,  1.5410, -0.2934,
                    -2.1788, 0.4033,  0.8380,  -0.7193, -0.4033, -0.5966, 0.1820};
 
-    ggml_tensor *x = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_I32, 5);
-    memcpy(x->data, x_data, sizeof(x_data));
-    Embedding model(&ctx, 4, 3);
-    memcpy(model.weight->data, w_data, sizeof(w_data));
-    ggml_tensor *ref = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 3, 5);
-    ref->data = y_data;
+    ggml_tensor *x = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_I32, 5);
+    Embedding model(mctx_.get(), 4, 3);
+    ggml_tensor *ref = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, 3, 5);
 
-    ggml_tensor *out = model.forward(&ctx, x);
+    auto buf_b = unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_b.get(), mctx_->backend.get()));
+    auto buf_w = unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_w.get(), mctx_->backend.get()));
 
-    ggml_build_forward_expand(&ctx.gf, out);
-    cpu_graph_compute(1);
+    ggml_backend_tensor_set(x, x_data, 0, sizeof(x_data));
+    ggml_backend_tensor_set(model.weight, w_data, 0, sizeof(w_data));
+    ggml_backend_tensor_set(ref, y_data, 0, sizeof(y_data));
+
+    ggml_tensor *out = model.forward(mctx_.get(), x);
+
+    ggml_build_forward_expand(mctx_->gf, out);
+    CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
+    CHATGLM_CHECK(ggml_backend_graph_compute(mctx_->backend.get(), mctx_->gf) == GGML_STATUS_SUCCESS);
 
     expect_all_close(ref, out);
 }
 
 TEST_F(ChatGLMTest, Linear) {
     fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/linear.data";
-    MappedFile mapped_file(test_path.string());
-    char *ptr = mapped_file.data;
+    std::ifstream ifs(test_path, std::ios::binary);
+    ASSERT_TRUE(ifs) << "cannot open file " << test_path;
 
-    ggml_tensor *w = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 32, 16);
-    ptr = read_tensor_data(ptr, w);
-    ggml_tensor *b = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, 16);
-    ptr = read_tensor_data(ptr, b);
-    ggml_tensor *x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 32, 2);
-    ptr = read_tensor_data(ptr, x);
-    ggml_tensor *ref = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 16, 2);
-    ptr = read_tensor_data(ptr, ref);
-    ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
+    ggml_tensor *w = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, 64, 32);
+    ggml_tensor *b = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_F32, 32);
+    ggml_tensor *x = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, 64, 2);
+    ggml_tensor *ref = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, 32, 2);
 
-    // GEMV data
-    ggml_tensor *vx = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, 32);
-    memcpy(vx->data, x->data, 32 * sizeof(float));
-    ggml_tensor *vref = ggml_new_tensor_1d(ctx.ctx_b.get(), GGML_TYPE_F32, 16);
-    memcpy(vref->data, ref->data, 16 * sizeof(float));
+    ggml_tensor *vec_x = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_F32, 64);
+    ggml_tensor *vec_ref = ggml_new_tensor_1d(mctx_->ctx_b.get(), GGML_TYPE_F32, 32);
 
-    tensor_to_device(x);
-    tensor_to_device(vx);
+    auto buf_b = unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_b.get(), mctx_->backend.get()));
+
+    read_backend_tensor_data(ifs, w);
+    read_backend_tensor_data(ifs, b);
+    read_backend_tensor_data(ifs, x);
+    read_backend_tensor_data(ifs, ref);
+
+    read_backend_tensor_data(ifs, vec_x);
+    read_backend_tensor_data(ifs, vec_ref);
+
+    ASSERT_TRUE(ifs.peek() == EOF);
 
     struct TestCase {
         ggml_tensor *x;
         ggml_tensor *ref;
     };
-    std::vector<TestCase> cases{{x, ref}, {vx, vref}};
+    std::vector<TestCase> cases{{x, ref}, {vec_x, vec_ref}};
 
     struct TestConfig {
         ggml_type dtype;
@@ -428,175 +426,169 @@ TEST_F(ChatGLMTest, Linear) {
         float rtol;
     };
     std::vector<TestConfig> test_configs{
-        {GGML_TYPE_F32, 1e-5, 0},
-        {GGML_TYPE_F16, 1e-2, 5e-4},
-        {GGML_TYPE_Q4_0, 1.0, 0.2},
+        {GGML_TYPE_F32, 1e-5, 0},   {GGML_TYPE_F16, 1e-2, 5e-4}, {GGML_TYPE_Q8_0, 0.2, 5e-4},
+        {GGML_TYPE_Q5_0, 1.5, 0.1}, {GGML_TYPE_Q5_1, 1.5, 0.1},  {GGML_TYPE_Q4_1, 2.0, 0.2},
+        {GGML_TYPE_Q4_0, 2.0, 0.2},
     };
 
     for (const auto &config : test_configs) {
-        ctx.dtype = config.dtype;
-        Linear model(&ctx, 32, 16);
+        mctx_->dtype = config.dtype;
+        Linear model(mctx_.get(), 64, 32);
+        auto buf_w =
+            unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_w.get(), mctx_->backend.get()));
 
+        auto ctx = make_unique_ggml_context(1024 * 1024, nullptr, false);
+        ggml_tensor *w_cpu = ggml_new_tensor_like(ctx.get(), w);
+        ggml_backend_tensor_get(w, w_cpu->data, 0, ggml_nbytes(w));
+
+        ggml_tensor *wq_cpu = ggml_new_tensor_2d(ctx.get(), config.dtype, w_cpu->ne[0], w_cpu->ne[1]);
         if (config.dtype == GGML_TYPE_F32) {
-            model.weight->data = w->data;
+            wq_cpu = w_cpu;
         } else if (config.dtype == GGML_TYPE_F16) {
-            ggml_fp32_to_fp16_row((float *)w->data, (ggml_fp16_t *)model.weight->data, ggml_nelements(model.weight));
-        } else if (config.dtype == GGML_TYPE_Q4_0) {
-            int64_t hist[16]{};
-            ggml_quantize_q4_0((float *)w->data, model.weight->data, ggml_nelements(w), w->ne[0], hist);
+            ggml_fp32_to_fp16_row((float *)w_cpu->data, (ggml_fp16_t *)wq_cpu->data, ggml_nelements(w_cpu));
         } else {
-            CHATGLM_THROW << "unsupported dtype " << config.dtype;
+            ggml_quantize_chunk(config.dtype, (float *)w_cpu->data, wq_cpu->data, 0, w_cpu->ne[1], w_cpu->ne[0],
+                                nullptr);
         }
-        model.bias->data = b->data;
-        tensor_to_device(model.weight);
-        tensor_to_device(model.bias);
+        ggml_backend_tensor_set(model.weight, wq_cpu->data, 0, ggml_nbytes(model.weight));
+        ggml_backend_tensor_copy(b, model.bias);
 
         for (const auto &c : cases) {
-            reset_cgraph();
-            ggml_tensor *out = model.forward(&ctx, c.x);
-            EXPECT_EQ(out->backend, c.x->backend);
-            out->backend = GGML_BACKEND_CPU;
+            ggml_graph_clear(mctx_->gf);
+            ggml_tensor *out = model.forward(mctx_.get(), c.x);
 
-            ggml_build_forward_expand(&ctx.gf, out);
-            device_graph_compute(get_num_threads());
+            ggml_build_forward_expand(mctx_->gf, out);
+            CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
+            CHATGLM_CHECK(ggml_backend_graph_compute(mctx_->backend.get(), mctx_->gf) == GGML_STATUS_SUCCESS);
 
-            EXPECT_EQ(out->type, GGML_TYPE_F32);
             expect_all_close(c.ref, out, config.atol, config.rtol);
         }
-
-        tensor_to_cpu(model.weight);
-        tensor_to_cpu(model.bias);
     }
-    tensor_to_cpu(x);
-    tensor_to_cpu(vx);
 }
 
 TEST_F(ChatGLMTest, BenchmarkLinear) {
     constexpr int M = 64, N = 1024, K = 1024 * 3;
-    ctx.dtype = GGML_TYPE_F32;
-    Linear m(&ctx, K, N);
-    ggml_tensor *x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, K, M);
+    std::vector<ggml_type> dtypes{GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_Q8_0, GGML_TYPE_Q5_1,
+                                  GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0};
+    for (ggml_type dtype : dtypes) {
+        mctx_ = std::make_unique<ModelContext>(dtype);
 
-    std::vector<ggml_tensor *> all_tensors{m.weight, m.bias, x};
-    for (auto tensor : all_tensors) {
-        random_fill(tensor);
-        tensor_to_device(tensor);
-    }
+        Linear m(mctx_.get(), K, N);
+        ggml_tensor *x = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, K, M);
 
-    ggml_tensor *y = m.forward(&ctx, x);
-    ggml_build_forward_expand(&ctx.gf, y);
-    std::cout << "[Benchmark] Linear " << ggml_type_name(ctx.dtype) << " time: " << perf_device_graph_compute()
-              << " ms\n";
+        ggml_tensor *y = m.forward(mctx_.get(), x);
+        ggml_build_forward_expand(mctx_->gf, y);
+        CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
 
-    for (auto tensor : all_tensors) {
-        tensor_to_cpu(tensor);
+        std::vector<ggml_tensor *> all_tensors{m.weight, m.bias, x};
+        for (auto tensor : all_tensors) {
+            randn_(tensor);
+        }
+
+        std::cout << "[Benchmark] Linear " << ggml_type_name(mctx_->dtype) << " time: " << perf_graph_compute()
+                  << " ms\n";
     }
 }
 
 TEST_F(ChatGLMTest, LayerNorm) {
     fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/layer_norm.data";
-    MappedFile mapped_file(test_path.string());
-    char *ptr = mapped_file.data;
+    std::ifstream ifs(test_path, std::ios::binary);
+    ASSERT_TRUE(ifs) << "cannot open file " << test_path;
 
-    LayerNorm model(&ctx, 64);
-    ggml_tensor *x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 64, 3);
-    ggml_tensor *ref = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 64, 3);
+    LayerNorm model(mctx_.get(), 64);
+    ggml_tensor *x = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, 64, 3);
+    ggml_tensor *ref = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, 64, 3);
+
+    auto buf_b = unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_b.get(), mctx_->backend.get()));
+    auto buf_w = unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_w.get(), mctx_->backend.get()));
 
     std::vector<ggml_tensor *> all_tensors{model.weight, model.bias, x, ref};
     for (auto tensor : all_tensors) {
-        ptr = read_tensor_data(ptr, tensor);
-        tensor_to_device(tensor);
+        read_backend_tensor_data(ifs, tensor);
     }
-    ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
+    ASSERT_TRUE(ifs.peek() == EOF);
 
-    ggml_tensor *out = model.forward(&ctx, x);
-    EXPECT_EQ(out->backend, x->backend);
-    out->backend = GGML_BACKEND_CPU;
+    ggml_tensor *out = model.forward(mctx_.get(), x);
 
-    ggml_build_forward_expand(&ctx.gf, out);
-    device_graph_compute(get_num_threads());
+    ggml_build_forward_expand(mctx_->gf, out);
+    CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
+    CHATGLM_CHECK(ggml_backend_graph_compute(mctx_->backend.get(), mctx_->gf) == GGML_STATUS_SUCCESS);
 
     expect_all_close(ref, out);
-
-    for (auto tensor : all_tensors) {
-        tensor_to_cpu(tensor);
-    }
 }
 
 TEST_F(ChatGLMTest, BenchmarkLayerNorm) {
     constexpr int seq_len = 64;
     constexpr int hidden = 1024;
 
-    LayerNorm m(&ctx, hidden);
-    ggml_tensor *x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden, seq_len);
+    LayerNorm m(mctx_.get(), hidden);
+    ggml_tensor *x = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, hidden, seq_len);
+
+    auto buffer =
+        unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_b.get(), mctx_->backend.get()));
+    auto buffer_w =
+        unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_w.get(), mctx_->backend.get()));
 
     std::vector<ggml_tensor *> all_tensors{m.weight, m.bias, x};
     for (auto tensor : all_tensors) {
-        random_fill(tensor);
-        tensor_to_device(tensor);
+        random_(tensor);
     }
 
-    ggml_tensor *y = m.forward(&ctx, x);
-    ggml_build_forward_expand(&ctx.gf, y);
-    std::cout << "[Benchmark] LayerNorm " << ggml_type_name(ctx.dtype) << " time: " << perf_device_graph_compute()
+    ggml_tensor *y = m.forward(mctx_.get(), x);
+    ggml_build_forward_expand(mctx_->gf, y);
+    CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
+    std::cout << "[Benchmark] LayerNorm " << ggml_type_name(mctx_->dtype) << " time: " << perf_graph_compute()
               << " ms\n";
-
-    for (auto tensor : all_tensors) {
-        tensor_to_cpu(tensor);
-    }
 }
 
 TEST_F(ChatGLMTest, RMSNorm) {
     fs::path test_path = fs::path(__FILE__).parent_path() / "tests/data/rms_norm.data";
-    MappedFile mapped_file(test_path.string());
-    char *ptr = mapped_file.data;
+    std::ifstream ifs(test_path, std::ios::binary);
+    ASSERT_TRUE(ifs) << "cannot open file " << test_path;
 
-    RMSNorm model(&ctx, 64);
-    ggml_tensor *x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 64, 3);
-    ggml_tensor *ref = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 64, 3);
+    RMSNorm model(mctx_.get(), 64);
+    ggml_tensor *x = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, 64, 3);
+    ggml_tensor *ref = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, 64, 3);
+
+    auto buf_b = unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_b.get(), mctx_->backend.get()));
+    auto buf_w = unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_w.get(), mctx_->backend.get()));
 
     std::vector<ggml_tensor *> all_tensors{model.weight, x, ref};
     for (auto tensor : all_tensors) {
-        ptr = read_tensor_data(ptr, tensor);
-        tensor_to_device(tensor);
+        read_backend_tensor_data(ifs, tensor);
     }
-    ASSERT_EQ(ptr, mapped_file.data + mapped_file.size);
+    ASSERT_TRUE(ifs.peek() == EOF);
 
-    ggml_tensor *out = model.forward(&ctx, x);
-    EXPECT_EQ(out->backend, x->backend);
-    out->backend = GGML_BACKEND_CPU;
+    ggml_tensor *out = model.forward(mctx_.get(), x);
 
-    ggml_build_forward_expand(&ctx.gf, out);
-    device_graph_compute(get_num_threads());
+    ggml_build_forward_expand(mctx_->gf, out);
+    CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
+    CHATGLM_CHECK(ggml_backend_graph_compute(mctx_->backend.get(), mctx_->gf) == GGML_STATUS_SUCCESS);
 
     expect_all_close(ref, out);
-
-    for (auto tensor : all_tensors) {
-        tensor_to_cpu(tensor);
-    }
 }
 
 TEST_F(ChatGLMTest, BenchmarkRMSNorm) {
     constexpr int seq_len = 64;
     constexpr int hidden = 1024;
 
-    RMSNorm m(&ctx, hidden);
-    ggml_tensor *x = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, hidden, seq_len);
+    RMSNorm m(mctx_.get(), hidden);
+    ggml_tensor *x = ggml_new_tensor_2d(mctx_->ctx_b.get(), GGML_TYPE_F32, hidden, seq_len);
+
+    auto buffer =
+        unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_b.get(), mctx_->backend.get()));
+    auto buffer_w =
+        unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx_->ctx_w.get(), mctx_->backend.get()));
 
     std::vector<ggml_tensor *> all_tensors{m.weight, x};
     for (auto tensor : all_tensors) {
-        random_fill(tensor);
-        tensor_to_device(tensor);
+        random_(tensor);
     }
 
-    ggml_tensor *y = m.forward(&ctx, x);
-    ggml_build_forward_expand(&ctx.gf, y);
-    std::cout << "[Benchmark] RMSNorm " << ggml_type_name(ctx.dtype) << " time: " << perf_device_graph_compute()
-              << " ms\n";
-
-    for (auto tensor : all_tensors) {
-        tensor_to_cpu(tensor);
-    }
+    ggml_tensor *y = m.forward(mctx_.get(), x);
+    ggml_build_forward_expand(mctx_->gf, y);
+    CHATGLM_CHECK(ggml_gallocr_alloc_graph(mctx_->allocr.get(), mctx_->gf));
+    std::cout << "[Benchmark] RMSNorm " << ggml_type_name(mctx_->dtype) << " time: " << perf_graph_compute() << " ms\n";
 }
 
 TEST_F(ChatGLMTest, GLMModel) {
@@ -605,16 +597,14 @@ TEST_F(ChatGLMTest, GLMModel) {
     ModelConfig config(
         ModelType::CHATGLM, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
         /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/128, /*norm_eps=*/1e-5f,
-        /*hidden_act=*/ActivationType::GELU, /*use_qkv_bias=*/true, /*use_dense_bias=*/true,
-        /*interleaved_qkv=*/true, /*use_alibi=*/false, /*rope_type=*/RopeType::CHATGLM, /*rope_theta=*/10000.f,
-        /*rope_dim_scale=*/-1,
-        /*attn_mask_type=*/AttentionMaskType::CHATGLM, /*num_virtual_tokens=*/0,
+        /*rope_theta=*/10000.f,
+        /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
 
     constexpr int seq_len = 3;
 
-    ChatGLMModel model(&ctx, config);
+    ChatGLMModel model(mctx_.get(), config);
 
     std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
                                            model.layers[0].input_layernorm.weight,
@@ -641,16 +631,14 @@ TEST_F(ChatGLMTest, GLMPTuningV2Model) {
     ModelConfig config(
         ModelType::CHATGLM, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
         /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/128, /*norm_eps=*/1e-5f,
-        /*hidden_act=*/ActivationType::GELU, /*use_qkv_bias=*/true, /*use_dense_bias=*/true,
-        /*interleaved_qkv=*/true, /*use_alibi=*/false, /*rope_type=*/RopeType::CHATGLM, /*rope_theta=*/10000.f,
-        /*rope_dim_scale=*/-1,
-        /*attn_mask_type=*/AttentionMaskType::CHATGLM, /*num_virtual_tokens=*/5,
+        /*rope_theta=*/10000.f,
+        /*num_virtual_tokens=*/5,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
 
     constexpr int seq_len = 3;
 
-    ChatGLMModel model(&ctx, config);
+    ChatGLMModel model(mctx_.get(), config);
 
     std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
                                            model.layers[0].input_layernorm.weight,
@@ -677,16 +665,14 @@ TEST_F(ChatGLMTest, GLM2Model) {
     ModelConfig config(
         ModelType::CHATGLM2, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
         /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
-        /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/false,
-        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_theta=*/10000.f,
-        /*rope_dim_scale=*/2,
-        /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
+        /*rope_theta=*/10000.f,
+        /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
 
     constexpr int seq_len = 3;
 
-    ChatGLM2Model model(&ctx, config);
+    ChatGLM2Model model(mctx_.get(), config);
 
     std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
                                            model.layers[0].input_layernorm.weight,
@@ -708,16 +694,14 @@ TEST_F(ChatGLMTest, GLM3Model) {
     ModelConfig config(
         ModelType::CHATGLM3, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
         /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
-        /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/false,
-        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_theta=*/10000.f,
-        /*rope_dim_scale=*/2,
-        /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
+        /*rope_theta=*/10000.f,
+        /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
 
     constexpr int seq_len = 3;
 
-    ChatGLM3Model model(&ctx, config);
+    ChatGLM3Model model(mctx_.get(), config);
 
     std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
                                            model.layers[0].input_layernorm.weight,
@@ -739,16 +723,14 @@ TEST_F(ChatGLMTest, GLM3PTuningV2Model) {
     ModelConfig config(
         ModelType::CHATGLM3, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
         /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
-        /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/false,
-        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_theta=*/10000.f,
-        /*rope_dim_scale=*/2,
-        /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/5,
+        /*rope_theta=*/10000.f,
+        /*num_virtual_tokens=*/5,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
 
     constexpr int seq_len = 3;
 
-    ChatGLM3Model model(&ctx, config);
+    ChatGLM3Model model(mctx_.get(), config);
 
     std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
                                            model.layers[0].input_layernorm.weight,
@@ -770,114 +752,20 @@ TEST_F(ChatGLMTest, GLM4Model) {
     ModelConfig config(
         ModelType::CHATGLM4, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
         /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
-        /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/false,
-        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::GPTJ, /*rope_theta=*/10000.f,
-        /*rope_dim_scale=*/2,
-        /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
+        /*rope_theta=*/10000.f,
+        /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
         /*extra_eos_token_ids=*/{});
 
     constexpr int seq_len = 3;
 
-    ChatGLM4Model model(&ctx, config);
+    ChatGLM4Model model(mctx_.get(), config);
 
     std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
                                            model.layers[0].input_layernorm.weight,
                                            model.layers[0].attention.query_key_value.weight,
                                            model.layers[0].attention.query_key_value.bias,
                                            model.layers[0].attention.dense.weight,
-                                           model.layers[0].post_attention_layernorm.weight,
-                                           model.layers[0].mlp.gate_proj.weight,
-                                           model.layers[0].mlp.up_proj.weight,
-                                           model.layers[0].mlp.down_proj.weight,
-                                           model.final_layernorm.weight};
-
-    test_model(model, config, data_path, seq_len, all_weights);
-}
-
-TEST_F(ChatGLMTest, Baichuan7BModel) {
-    fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/baichuan7b_model.data";
-
-    ModelConfig config(
-        ModelType::BAICHUAN7B, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
-        /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/32 * 3, /*norm_eps=*/1e-6f,
-        /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/false, /*use_dense_bias=*/false,
-        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::NEOX, /*rope_theta=*/10000.f,
-        /*rope_dim_scale=*/1,
-        /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
-        /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
-        /*extra_eos_token_ids=*/{});
-
-    constexpr int seq_len = 3;
-
-    Baichuan7BModel model(&ctx, config);
-
-    std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
-                                           model.layers[0].input_layernorm.weight,
-                                           model.layers[0].attention.query_key_value.weight,
-                                           model.layers[0].attention.dense.weight,
-                                           model.layers[0].post_attention_layernorm.weight,
-                                           model.layers[0].mlp.gate_proj.weight,
-                                           model.layers[0].mlp.down_proj.weight,
-                                           model.layers[0].mlp.up_proj.weight,
-                                           model.final_layernorm.weight};
-
-    test_model(model, config, data_path, seq_len, all_weights);
-}
-
-TEST_F(ChatGLMTest, Baichuan13BModel) {
-    fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/baichuan13b_model.data";
-
-    ModelConfig config(
-        ModelType::BAICHUAN13B, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
-        /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/32 * 3, /*norm_eps=*/1e-6f,
-        /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/false, /*use_dense_bias=*/false,
-        /*interleaved_qkv=*/false, /*use_alibi=*/true, /*rope_type=*/RopeType::DISABLED, /*rope_theta=*/10000.f,
-        /*rope_dim_scale=*/-1,
-        /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
-        /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
-        /*extra_eos_token_ids=*/{});
-
-    constexpr int seq_len = 3;
-
-    Baichuan13BModel model(&ctx, config);
-
-    std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
-                                           model.layers[0].input_layernorm.weight,
-                                           model.layers[0].attention.query_key_value.weight,
-                                           model.layers[0].attention.dense.weight,
-                                           model.layers[0].post_attention_layernorm.weight,
-                                           model.layers[0].mlp.gate_proj.weight,
-                                           model.layers[0].mlp.down_proj.weight,
-                                           model.layers[0].mlp.up_proj.weight,
-                                           model.final_layernorm.weight};
-
-    test_model(model, config, data_path, seq_len, all_weights);
-}
-
-TEST_F(ChatGLMTest, InternLMModel) {
-    fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/internlm_model.data";
-
-    ModelConfig config(
-        ModelType::INTERNLM, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
-        /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/32 * 3, /*norm_eps=*/1e-6f,
-        /*hidden_act=*/ActivationType::SILU, /*use_qkv_bias=*/true, /*use_dense_bias=*/true,
-        /*interleaved_qkv=*/false, /*use_alibi=*/false, /*rope_type=*/RopeType::NEOX, /*rope_theta=*/10000.f,
-        /*rope_dim_scale=*/1,
-        /*attn_mask_type=*/AttentionMaskType::CAUSAL, /*num_virtual_tokens=*/0,
-        /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
-        /*extra_eos_token_ids=*/{});
-
-    constexpr int seq_len = 3;
-
-    InternLMModel model(&ctx, config);
-
-    std::vector<ggml_tensor *> all_weights{model.word_embeddings.weight,
-                                           model.layers[0].input_layernorm.weight,
-                                           model.layers[0].attention.query_key_value.weight,
-                                           model.layers[0].attention.query_key_value.bias,
-                                           model.layers[0].attention.dense.weight,
-                                           model.layers[0].attention.dense.bias,
                                            model.layers[0].post_attention_layernorm.weight,
                                            model.layers[0].mlp.gate_proj.weight,
                                            model.layers[0].mlp.up_proj.weight,
@@ -888,8 +776,7 @@ TEST_F(ChatGLMTest, InternLMModel) {
 }
 
 TEST_F(ChatGLMTest, quantize) {
-    GTEST_SKIP() << "Skipping quantization data generation";
-    float src_data[]{
+    const float src_data[]{
         -1.1258e+00, -1.1524e+00, -2.5058e-01, -4.3388e-01, 8.4871e-01,  6.9201e-01,  -3.1601e-01, -2.1152e+00,
         3.2227e-01,  -1.2633e+00, 3.4998e-01,  3.0813e-01,  1.1984e-01,  1.2377e+00,  1.1168e+00,  -2.4728e-01,
         -1.3527e+00, -1.6959e+00, 5.6665e-01,  7.9351e-01,  5.9884e-01,  -1.5551e+00, -3.4136e-01, 1.8530e+00,
@@ -923,68 +810,115 @@ TEST_F(ChatGLMTest, quantize) {
         -1.4777e+00, -1.7557e+00, 7.6166e-02,  -1.0786e+00, 1.4403e+00,  -1.1059e-01, 5.7686e-01,  -1.6917e-01,
         -6.4025e-02, 1.0384e+00,  9.0682e-01,  -4.7551e-01, -8.7074e-01, 1.4474e-01,  1.9029e+00,  3.9040e-01};
 
-    ggml_tensor *src = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_F32, 128, 2);
+    const int q8_ref[]{
+        68,  36,   -68, -69,  -15, -26,  51,  42,  -19, -127, 19,  -76, 21,  19,  7,   74,  67,   -15,  -81, -102, 34,
+        48,  36,   -93, -20,  111, 45,   -35, -10, 11,  83,   95,  57,  -51, -32, 38,  -23, 1,    -18,  9,   16,   4,
+        24,  16,   -4,  30,   -11, 2,    19,  86,  -55, -59,  -25, 33,  39,  7,   -9,  -15, 20,   -15,  -17, 28,   57,
+        127, -57,  -46, 68,   -21, 45,   37,  -28, 46,  55,   64,  -73, 127, -23, 17,  -81, -27,  -24,  -25, -53,  55,
+        -7,  40,   -5,  34,   -41, 0,    42,  -20, 51,  18,   -12, 114, -93, -2,  -52, -47, 2,    35,   69,  37,   80,
+        -66, 17,   25,  -127, -82, -11,  14,  12,  4,   16,   22,  22,  -42, 38,  -45, -11, -118, -4,   -2,  47,   17,
+        -45, -3,   -30, -23,  93,  -20,  6,   57,  45,  67,   -35, 35,  -58, -27, -52, 37,  40,   30,   127, -69,  -5,
+        8,   -39,  -81, -7,   -67, -20,  16,  -17, 8,   16,   76,  19,  25,  -13, -8,  13,  -50,  -124, 9,   -46,  20,
+        10,  25,   88,  34,   78,  -80,  24,  -9,  81,  -40,  61,  50,  25,  17,  -10, 29,  -25,  -87,  19,  -113, -5,
+        -29, -126, -29, 87,   11,  127,  63,  -87, -58, 119,  22,  54,  -80, -96, -97, 45,  33,   -55,  53,  40,   39,
+        17,  87,   -28, 101,  -7,  -108, 39,  59,  66,  -119, 60,  -54, 116, 10,  95,  83,  -124, 98,   -49, -127, 95,
+        127, -66,  56,  28,   -3,  -105, -11, -84, 35,  -23,  105, 13,  25,  -10, 43,  -19, -89,  -9,   -36, -35,  57,
+        -59, 56,   77,  -118, -99, -117, 5,   -72, 96,  -7,   38,  -11, -4,  69,  61,  -32, -58,  10,   127, 26};
+
+    const int q4_0_ref[]{59,   52,   52,   36,   -89,  -74,  -85,  43,   119,  -16,  -71,  99,   121,  -103, -40, -19,
+                         -52,  87,   -46,  -74,  -87,  104,  105,  -121, -105, -104, 118,  -105, -104, 102,  73,  8,
+                         -57,  -77,  75,   -100, 34,   -75,  -118, 101,  -75,  -124, 93,   -112, 89,   119,  -99, 26,
+                         -23,  -118, -69,  -75,  -120, 101,  58,   53,   125,  20,   -119, -118, -80,  -109, 87,  -119,
+                         105,  120,  -23,  121,  -119, -59,  -70,  -59,  -50,  -77,  -100, -118, 123,  54,   117, 102,
+                         -112, -116, 120,  -72,  -6,   125,  -72,  124,  121,  103,  75,   -78,  -125, -83,  -10, -87,
+                         51,   123,  4,    69,   -42,  -57,  25,   118,  90,   -35,  -25,  -17,  34,   -79,  27,  117,
+                         37,   54,   -9,   35,   -70,  -14,  40,   15,   -58,  68,   100,  -113, -12,  -101, -99, -77,
+                         -23,  -15,  -121, -42,  41,   -123, 105,  -98,  -119, 74,   74,   -92,  -52,  116,  3,   111};
+
+    const int q4_1_ref[]{60,   52,   59,   -64,  52,  36,   -89,  -74,  -85,  43,   119,  -16,  -71,  99,   121, -103,
+                         -40,  -19,  -52,  87,   85,  53,   89,   -66,  51,   117,  -125, 86,   70,   69,   103, 70,
+                         52,   119,  -108, -11,  6,   28,   -96,  48,   -65,  52,   -121, -65,  100,  -103, 74,  107,
+                         -111, 95,   -91,  -121, 97,  -28,  5,    101,  51,   58,   102,  -103, -42,  52,   58,  -63,
+                         -114, 20,   -118, -102, -64, -93,  104,  -118, 121,  121,  -6,   122,  -102, -58,  -53, -42,
+                         28,   52,   -102, -65,  100, -122, -124, -54,  -102, -103, 127,  115,  -121, 72,   5,   -125,
+                         87,   -109, -122, -104, -80, 50,   63,   -66,  124,  99,   9,    103,  -36,  -123, -5,  -70,
+                         41,   72,   -9,   -103, -74, 50,   41,   33,   122,  49,   34,   -67,  -28,  -117, -38, -54,
+                         9,    -35,  86,   13,   -41, -15,  74,   -69,  -101, 112,  27,   116,  -47,  51,   11,  -65,
+                         22,   14,   -120, 57,   -41, 122,  -90,  114,  119,  -75,  -75,  91,   68,   -117, -4,  -112};
+
+    const int q5_0_ref[]{
+        59,  48,  48,  125,  -100, 121, 103, 55,   78,   109,  86,   69,  -34, -32, 98,  -58, -13, 18,   -79,  -55,
+        120, -82, -46, -78,  7,    -51, -79, -79,  51,   -64,  -78,  -1,  30,  47,  -35, 46,  32,  -36,  -111, 0,
+        126, 101, 119, 55,   34,   -79, 81,  95,   45,   125,  20,   -54, 89,  8,   -71, 32,  -93, -18,  42,   35,
+        -61, 3,   119, 105,  1,    -53, 58,  49,   -115, 95,   -68,  -12, -6,  24,  2,   3,   96,  38,   -81,  2,
+        -62, -48, -62, -29,  19,   123, 101, -118, -50,  -81,  -121, 125, -63, 22,  39,  -13, -25, 107,  -21,  -36,
+        32,  25,  -31, 111,  -11,  -6,  97,  -40,  -13,  -34,  75,   -82, 42,  -76, 15,  -29, 22,  74,   -3,   65,
+        86,  -11, 8,   -118, -67,  126, 17,  -36,  -109, -85,  -50,  -50, 34,  -83, 65,  -93, -48, -28,  23,   -7,
+        75,  107, -2,  69,   100,  -13, 65,  14,   -117, -103, -56,  15,  -40, 23,  -99, -81, -47, -105, -85,  25,
+        -61, -13, -2,  -99,  65,   27,  -78, 27,   17,   116,  -124, 73,  119, -7,  6,   -33};
+
+    const int q5_1_ref[]{25,   48,   59,   -64, 48,   125,  -100, 121,  104,  56,   95,  125,  87,   70,  -18,  -16,
+                         99,   -57,  -13,  35,  -79,  -38,  -119, -81,  41,   49,   89,  -66,  0,    32,  4,    76,
+                         102,  -6,   7,    -69, -115, 123,  -34,  125,  121,  -17,  56,  -6,   13,   40,  81,   96,
+                         -104, 48,   -121, -65, 46,   -96,  -46,  -126, -55,  36,   117, -42,  51,   -81, 74,   15,
+                         -78,  -39,  10,   -38, 102,  101,  -36,  35,   -82,  48,   58,  -63,  -51,  95,  -67,  -12,
+                         13,   25,   20,   37,  -128, 70,   -64,  20,   -28,  -14,  -12, -11,  53,   -84, -121, -68,
+                         -13,  47,   -102, -65, 120,  -126, 62,   -23,  -40,  12,   25,  -108, 36,   35,  -17,  -25,
+                         31,   -112, 11,   5,   -82,  39,   29,   33,   121,  46,   63,  -66,  -43,  75,  -16,  28,
+                         -7,   -58,  2,    -50, -87,  27,   -9,   118,  83,   -126, -18, 35,   108,  101, 66,   66,
+                         76,   45,   34,   -67, -66,  92,   47,   27,   -23,  22,   -76, -92,  2,    -70, -84,  12,
+                         -65,  -14,  116,  103, 55,   -15,  55,   -23,  -112, 47,   11,  -65,  46,   104, 84,   -26,
+                         44,   12,   1,    98,  -66,  -28,  77,   -44,  -18,  -118, 122, -74,  -121, 6,   -7,   32};
+
+    auto ctx = make_unique_ggml_context(1024 * 1024, nullptr, false);
+
+    ggml_tensor *src = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, 128, 2);
     memcpy(src->data, src_data, sizeof(src_data));
+
+    [[maybe_unused]] auto qtensor_to_string = [](ggml_tensor *tensor) {
+        std::ostringstream oss;
+        oss << "Q8: [";
+        for (size_t i = 0; i < ggml_nbytes(tensor); i++) {
+            oss << (i > 0 ? ", " : "") << (int)((char *)tensor->data)[i];
+        }
+        oss << "]";
+        return oss.str();
+    };
 
     // q8_0
     {
-        ggml_tensor *q8_dst = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_Q8_0, 128, 2);
-        int64_t hist[16]{};
-        ggml_quantize_q8_0((float *)src->data, q8_dst->data, ggml_nelements(src), src->ne[0], hist);
-
-        std::cout << "Q8: [";
-        for (size_t i = 0; i < ggml_nbytes(q8_dst); i++) {
-            std::cout << (i > 0 ? ", " : "") << (int)((char *)q8_dst->data)[i];
-        }
-        std::cout << "]\n";
+        ggml_tensor *q8_dst = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_Q8_0, 128, 2);
+        ggml_quantize_chunk(GGML_TYPE_Q8_0, (float *)src->data, q8_dst->data, 0, src->ne[1], src->ne[0], nullptr);
+        // std::cout << qtensor_to_string(q8_dst) << '\n';
+        EXPECT_TRUE(memcmp(q8_dst->data, q8_ref, sizeof(q8_ref)));
     }
     // q4_0
     {
-        ggml_tensor *q4_dst = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_Q4_0, 128, 2);
-        int64_t hist[16]{};
-        ggml_quantize_q4_0((float *)src->data, q4_dst->data, ggml_nelements(src), src->ne[0], hist);
-
-        std::cout << "Q4_0: [";
-        for (size_t i = 0; i < ggml_nbytes(q4_dst); i++) {
-            std::cout << (i > 0 ? ", " : "") << (int)((char *)q4_dst->data)[i];
-        }
-        std::cout << "]\n";
+        ggml_tensor *q4_dst = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_Q4_0, 128, 2);
+        ggml_quantize_chunk(GGML_TYPE_Q4_0, (float *)src->data, q4_dst->data, 0, src->ne[1], src->ne[0], nullptr);
+        // std::cout << qtensor_to_string(q4_dst) << '\n';
+        EXPECT_TRUE(memcmp(q4_dst->data, q4_0_ref, sizeof(q4_0_ref)));
     }
     // q4_1
     {
-        ggml_tensor *q4_dst = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_Q4_1, 128, 2);
-        int64_t hist[16]{};
-        ggml_quantize_q4_1((float *)src->data, q4_dst->data, ggml_nelements(src), src->ne[0], hist);
-
-        std::cout << "Q4_1: [";
-        for (size_t i = 0; i < ggml_nbytes(q4_dst); i++) {
-            std::cout << (i > 0 ? ", " : "") << (int)((char *)q4_dst->data)[i];
-        }
-        std::cout << "]\n";
+        ggml_tensor *q4_dst = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_Q4_1, 128, 2);
+        ggml_quantize_chunk(GGML_TYPE_Q4_1, (float *)src->data, q4_dst->data, 0, src->ne[1], src->ne[0], nullptr);
+        // std::cout << qtensor_to_string(q4_dst) << '\n';
+        EXPECT_TRUE(memcmp(q4_dst->data, q4_1_ref, sizeof(q4_1_ref)));
     }
     // q5_0
     {
-        ggml_tensor *q5_dst = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_Q5_0, 128, 2);
-        int64_t hist[16]{};
-        ggml_quantize_q5_0((float *)src->data, q5_dst->data, ggml_nelements(src), src->ne[0], hist);
-
-        std::cout << "Q5_0: [";
-        for (size_t i = 0; i < ggml_nbytes(q5_dst); i++) {
-            std::cout << (i > 0 ? ", " : "") << (int)((char *)q5_dst->data)[i];
-        }
-        std::cout << "]\n";
+        ggml_tensor *q5_dst = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_Q5_0, 128, 2);
+        ggml_quantize_chunk(GGML_TYPE_Q5_0, (float *)src->data, q5_dst->data, 0, src->ne[1], src->ne[0], nullptr);
+        // std::cout << qtensor_to_string(q5_dst) << '\n';
+        EXPECT_TRUE(memcmp(q5_dst->data, q5_0_ref, sizeof(q5_0_ref)));
     }
     // q5_1
     {
-        ggml_tensor *q5_dst = ggml_new_tensor_2d(ctx.ctx_b.get(), GGML_TYPE_Q5_1, 128, 2);
-        int64_t hist[16]{};
-        ggml_quantize_q5_1((float *)src->data, q5_dst->data, ggml_nelements(src), src->ne[0], hist);
-
-        std::cout << "Q5_1: [";
-        for (size_t i = 0; i < ggml_nbytes(q5_dst); i++) {
-            std::cout << (i > 0 ? ", " : "") << (int)((char *)q5_dst->data)[i];
-        }
-        std::cout << "]\n";
+        ggml_tensor *q5_dst = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_Q5_1, 128, 2);
+        ggml_quantize_chunk(GGML_TYPE_Q5_1, (float *)src->data, q5_dst->data, 0, src->ne[1], src->ne[0], nullptr);
+        // std::cout << qtensor_to_string(q5_dst) << '\n';
+        EXPECT_TRUE(memcmp(q5_dst->data, q5_1_ref, sizeof(q5_1_ref)));
     }
 }
 
@@ -998,7 +932,7 @@ static void check_tokenizer(const BaseTokenizer *tokenizer, const std::vector<To
     for (const auto &c : cases) {
         // encode
         std::vector<int> input_ids = tokenizer->encode(c.prompt, 2048);
-        EXPECT_TRUE(equal(input_ids, c.input_ids));
+        EXPECT_EQ(input_ids, c.input_ids);
         if (!c.skip_decode) {
             // decode
             std::string output = tokenizer->decode(c.input_ids);
@@ -1156,8 +1090,10 @@ TEST(Pipeline, ChatGLM2) {
 }
 
 static inline std::string read_text(const fs::path &path) {
-    MappedFile mapped_file(path.string());
-    return std::string(mapped_file.data, mapped_file.size);
+    std::ifstream ifs(path);
+    std::ostringstream oss;
+    oss << ifs.rdbuf();
+    return oss.str();
 }
 
 TEST(Pipeline, ChatGLM3) {
@@ -1273,7 +1209,7 @@ TEST(Pipeline, ChatGLM3) {
             ChatMessage output = pipeline.chat(messages, gen_config);
             EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
             EXPECT_EQ(output.content,
-                      "根据API调用结果，我为您生成了一个随机数，随机数的范围在0到100之间。这个随机数是22。");
+                      "根据您的要求，我使用随机数生成器API生成了一个随机数。根据API返回的结果，生成的随机数为22。");
         }
     }
 
@@ -1290,12 +1226,12 @@ TEST(Pipeline, ChatGLM3) {
             EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
             EXPECT_EQ(output.content, R"(好的，我会为您列出100以内的所有质数。
 
-质数是指只能被1和它本身整除的正整数。例如，2、3、5、7等都是质数。
+质数是指只能被1和它本身整除的大于1的整数。例如，2、3、5、7等都是质数。
 
 让我们开始吧！)");
             EXPECT_EQ(output.tool_calls.front().code.input, R"(```python
-# Function to check if a number is prime
 def is_prime(n):
+    """Check if a number is prime."""
     if n <= 1:
         return False
     if n <= 3:
@@ -1310,8 +1246,8 @@ def is_prime(n):
     return True
 
 # Get all prime numbers up to 100
-primes_up_to_100 = [i for i in range(2, 101) if is_prime(i)]
-primes_up_to_100
+primes_upto_100 = [i for i in range(2, 101) if is_prime(i)]
+primes_upto_100
 ```)");
             messages.emplace_back(std::move(output));
         }
@@ -1500,226 +1436,18 @@ TEST(Pipeline, CodeGeeX2) {
         std::string prompt = "# language: Python\n# write a bubble sort function\n";
         std::string target = R"(
 
-def bubble_sort(lst):
-    for i in range(len(lst) - 1):
-        for j in range(len(lst) - 1 - i):
-            if lst[j] > lst[j + 1]:
-                lst[j], lst[j + 1] = lst[j + 1], lst[j]
-    return lst
+def bubble_sort(list):
+    for i in range(len(list) - 1):
+        for j in range(len(list) - 1 - i):
+            if list[j] > list[j + 1]:
+                list[j], list[j + 1] = list[j + 1], list[j]
+    return list
 
 
 print(bubble_sort([5, 4, 3, 2, 1])))";
 
         std::string output = pipeline.generate(prompt, gen_config);
         EXPECT_EQ(output, target);
-    }
-}
-
-TEST(Pipeline, Baichuan13B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "models/baichuan-13b-chat-ggml.bin";
-    if (!fs::exists(model_path)) {
-        GTEST_SKIP() << "Skipping Baichuan13B e2e test (ggml model not found)";
-    }
-    Pipeline pipeline(model_path.string());
-    EXPECT_TRUE(dynamic_cast<Baichuan13BForCausalLM *>(pipeline.model.get()));
-
-    // tokenizer
-    {
-        std::vector<TokenizerTestCase> cases{
-            {"你是谁", {9875, 21797}},
-            {"我是百川大模型，是由百川智能的工程师们创造的大语言模型，我可以和人类进行自然交流、解答问题、协助创作，帮"
-             "助大众轻松、普惠的获得世界知识和专业服务。如果你有任何问题，可以随时向我提问",
-             {6323,  31161, 31745, 32213, 31175, 14830, 72,    16347, 31745, 32213, 6358,  31135, 14823, 31212, 8823,
-              5114,  7234,  14830, 72,    31182, 1231,  31188, 8627,  1696,  3823,  5536,  76,    17133, 1766,  76,
-              16345, 11769, 72,    4090,  13169, 8385,  76,    31840, 32195, 31135, 4137,  2781,  3317,  31188, 2285,
-              1910,  73,    6011,  31169, 4315,  1766,  72,    1231,  11533, 31490, 31182, 21934}}};
-        check_tokenizer(pipeline.tokenizer.get(), cases);
-
-        std::vector<ChatMessage> messages{
-            {ChatMessage::ROLE_USER, "你好呀"},
-            {ChatMessage::ROLE_ASSISTANT, "你好！很高兴和你交流。请问有什么我可以帮助你的吗？"},
-            {ChatMessage::ROLE_USER, "你叫什么名字？"},
-        };
-        std::vector<int> input_ids = pipeline.tokenizer->apply_chat_template(messages, 2048);
-        std::vector<int> target_input_ids{195,   9875, 31213, 32889, 196,  9875,  31213, 74,   17318, 31906,
-                                          14822, 5536, 73,    20389, 7713, 31182, 1231,  4090, 2689,  31763,
-                                          75,    195,  9875,  32177, 1534, 10240, 75,    196};
-        EXPECT_TRUE(equal(input_ids, target_input_ids));
-    }
-
-    // memory test
-    {
-        GenerationConfig gen_config;
-        gen_config.max_length = 512;
-        gen_config.max_context_length = gen_config.max_length - 1;
-        gen_config.do_sample = false;
-
-        std::vector<int> input_ids(gen_config.max_context_length, 128);
-        pipeline.generate(input_ids, gen_config);
-    }
-
-    // chat
-    {
-        check_chat_format(pipeline);
-        GenerationConfig gen_config;
-        gen_config.do_sample = false;
-        gen_config.repetition_penalty = 1.1;
-        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好呀"}};
-        ChatMessage output = pipeline.chat(messages, gen_config);
-        EXPECT_EQ(output.content, "你好！很高兴见到你。请问有什么我可以帮助你的吗？");
-    }
-}
-
-TEST(Pipeline, Baichuan2_7B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "models/baichuan2-7b-chat-ggml.bin";
-    if (!fs::exists(model_path)) {
-        GTEST_SKIP() << "Skipping Baichuan2-7B e2e test (ggml model not found)";
-    }
-    Pipeline pipeline(model_path.string());
-    EXPECT_TRUE(dynamic_cast<Baichuan7BForCausalLM *>(pipeline.model.get()));
-
-    // tokenizer
-    {
-        std::vector<TokenizerTestCase> cases{
-            {"你是谁", {92067}},
-            {"我是百川大模型，是由百川智能的工程师们创造的大语言模型，我可以和人类进行自然交流、解答问题、协助创作，帮"
-             "助大众轻松、普惠的获得世界知识和专业服务。如果你有任何问题，可以随时向我提问",
-             {6461, 70335, 92366, 9528, 65,    10879, 70335, 3932, 92333, 8832,  92414, 5034,
-              3133, 5002,  9528,  65,   28756, 92385, 5243,  1697, 2559,  3341,  69,    10474,
-              1754, 69,    9036,  7356, 65,    2716,  7499,  4892, 69,    24816, 92333, 2693,
-              2089, 23672, 1940,  1760, 66,    4173,  23181, 1754, 65,    65351, 39975, 14590}}};
-        check_tokenizer(pipeline.tokenizer.get(), cases);
-
-        std::vector<ChatMessage> messages{
-            {ChatMessage::ROLE_USER, "你好呀"},
-            {ChatMessage::ROLE_ASSISTANT, "你好！很高兴和你交流。请问有什么问题我可以帮助你解决吗？"},
-            {ChatMessage::ROLE_USER, "你叫什么名字？"},
-        };
-        std::vector<int> input_ids = pipeline.tokenizer->apply_chat_template(messages, 2048);
-        std::vector<int> target_input_ids{195, 16829, 94278, 196,   16829, 67,    52160, 10329, 3341,
-                                          66,  23216, 5817,  1754,  92392, 21777, 92430, 2740,  93122,
-                                          68,  195,   92430, 93410, 1747,  6642,  68,    196};
-        EXPECT_TRUE(equal(input_ids, target_input_ids));
-    }
-
-    // memory test
-    {
-        GenerationConfig gen_config;
-        gen_config.max_length = 2048;
-        gen_config.max_context_length = gen_config.max_length - 1;
-        gen_config.do_sample = false;
-
-        std::vector<int> input_ids(gen_config.max_context_length, 128);
-        pipeline.generate(input_ids, gen_config);
-    }
-
-    // chat
-    {
-        check_chat_format(pipeline);
-        GenerationConfig gen_config;
-        gen_config.do_sample = false;
-        gen_config.repetition_penalty = 1.05;
-        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好呀"}};
-        ChatMessage output = pipeline.chat(messages, gen_config);
-        EXPECT_EQ(output.content, "你好！很高兴为你服务。请问有什么问题我可以帮助你解决？");
-    }
-}
-
-TEST(Pipeline, Baichuan2_13B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "models/baichuan2-13b-chat-ggml.bin";
-    if (!fs::exists(model_path)) {
-        GTEST_SKIP() << "Skipping Baichuan2-13B e2e test (ggml model not found)";
-    }
-    Pipeline pipeline(model_path.string());
-    EXPECT_TRUE(dynamic_cast<Baichuan13BForCausalLM *>(pipeline.model.get()));
-
-    // tokenizer
-    {
-        std::vector<TokenizerTestCase> cases{
-            {"你是谁", {92067}},
-            {"我是百川大模型，是由百川智能的工程师们创造的大语言模型，我可以和人类进行自然交流、解答问题、协助创作，帮"
-             "助大众轻松、普惠的获得世界知识和专业服务。如果你有任何问题，可以随时向我提问",
-             {6461, 70335, 92366, 9528, 65,    10879, 70335, 3932, 92333, 8832,  92414, 5034,
-              3133, 5002,  9528,  65,   28756, 92385, 5243,  1697, 2559,  3341,  69,    10474,
-              1754, 69,    9036,  7356, 65,    2716,  7499,  4892, 69,    24816, 92333, 2693,
-              2089, 23672, 1940,  1760, 66,    4173,  23181, 1754, 65,    65351, 39975, 14590}}};
-        check_tokenizer(pipeline.tokenizer.get(), cases);
-
-        std::vector<ChatMessage> messages{
-            {ChatMessage::ROLE_USER, "你好呀"},
-            {ChatMessage::ROLE_ASSISTANT, "你好！很高兴和你交流。请问有什么我可以帮助你的吗？"},
-            {ChatMessage::ROLE_USER, "你叫什么名字？"},
-        };
-        std::vector<int> input_ids = pipeline.tokenizer->apply_chat_template(messages, 2048);
-        std::vector<int> target_input_ids{195,   16829, 94278, 196,   16829, 67,  52160, 10329, 3341, 66,   23216, 5817,
-                                          92392, 21777, 2193,  93122, 68,    195, 92430, 93410, 1747, 6642, 68,    196};
-        EXPECT_TRUE(equal(input_ids, target_input_ids));
-    }
-
-    // chat
-    {
-        check_chat_format(pipeline);
-        GenerationConfig gen_config;
-        gen_config.do_sample = false;
-        gen_config.repetition_penalty = 1.05;
-        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好呀"}};
-        ChatMessage output = pipeline.chat(messages, gen_config);
-        EXPECT_EQ(output.content, "你好！很高兴见到你。请问有什么我可以帮助你的吗？");
-    }
-}
-
-TEST(Pipeline, InternLM) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "models/internlm-chat-7b-ggml.bin";
-    if (!fs::exists(model_path)) {
-        GTEST_SKIP() << "Skipping InternLM e2e test (ggml model not found)";
-    }
-    Pipeline pipeline(model_path.string());
-    EXPECT_TRUE(dynamic_cast<InternLMForCausalLM *>(pipeline.model.get()));
-
-    // tokenizer
-    {
-        std::vector<TokenizerTestCase> cases{
-            {"你好", {1, 76379}},
-            {"<|User|>:你好<eoh>\n<|Bot|>:你好，有什么我可以帮助你的吗？<eoa>\n<|User|>:晚上睡不着应该怎么办<eoh>\n<|"
-             "Bot|>:",
-             {1,     333,   352,   1621,  352,   27232,  76379, 103027, 364,    333,   352, 23845, 352,  27232,
-              76379, 98899, 68408, 73159, 67566, 67513,  61056, 99050,  103028, 364,   333, 352,   1621, 352,
-              27232, 67891, 76046, 67551, 68573, 103027, 364,   333,    352,    23845, 352, 27232},
-             true}};
-        check_tokenizer(pipeline.tokenizer.get(), cases);
-    }
-
-    // prompter
-    {
-        EXPECT_EQ(InternLMTokenizer::build_prompt({{ChatMessage::ROLE_USER, "你好"}}), "<|User|>:你好<eoh>\n<|Bot|>:");
-        EXPECT_EQ(InternLMTokenizer::build_prompt({
-                      {ChatMessage::ROLE_USER, "你好"},
-                      {ChatMessage::ROLE_ASSISTANT, "你好，有什么我可以帮助你的吗？"},
-                      {ChatMessage::ROLE_USER, "晚上睡不着应该怎么办"},
-                  }),
-                  "<|User|>:你好<eoh>\n<|Bot|>:你好，有什么我可以帮助你的吗？<eoa>\n<|User|>:晚上睡不着应该怎么办<eoh>"
-                  "\n<|Bot|>:");
-    }
-
-    // memory test
-    {
-        GenerationConfig gen_config;
-        gen_config.max_length = 2048;
-        gen_config.max_context_length = gen_config.max_length - 1;
-        gen_config.do_sample = false;
-
-        std::vector<int> input_ids(gen_config.max_context_length, 128);
-        pipeline.generate(input_ids, gen_config);
-    }
-
-    // chat
-    {
-        check_chat_format(pipeline);
-        GenerationConfig gen_config;
-        gen_config.do_sample = false;
-        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
-        ChatMessage output = pipeline.chat(messages, gen_config);
-        EXPECT_EQ(output.content, "你好！有什么我可以帮助你的吗？");
     }
 }
 
@@ -1742,7 +1470,6 @@ static void run_benchmark(const fs::path &model_path) {
 
     GenerationConfig gen_config;
     gen_config.do_sample = false;
-    gen_config.num_threads = get_num_threads();
 
     PerfStreamer streamer;
     start_ms = ggml_time_ms();
@@ -1750,7 +1477,6 @@ static void run_benchmark(const fs::path &model_path) {
     int64_t gen_s = (ggml_time_ms() - start_ms) / 1000.f;
 
     std::cout << "======== benchmark results for " << model_path.filename() << " ========\n"
-              << "using #threads: " << gen_config.num_threads << "\n"
               << "model loaded within: " << load_model_ms << " ms\n"
               << "generation finished within: " << gen_s << " s\n"
               << streamer.to_string() << "\n"
@@ -1769,26 +1495,6 @@ TEST(Benchmark, ChatGLM2) {
 
 TEST(Benchmark, ChatGLM4) {
     fs::path model_path = fs::path(__FILE__).parent_path() / "models/chatglm4-ggml.bin";
-    run_benchmark(model_path);
-}
-
-TEST(Benchmark, Baichuan2_7B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "models/baichuan2-7b-chat-ggml.bin";
-    run_benchmark(model_path);
-}
-
-TEST(Benchmark, Baichuan2_13B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "models/baichuan2-13b-chat-ggml.bin";
-    run_benchmark(model_path);
-}
-
-TEST(Benchmark, InternLM7B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "models/internlm-chat-7b-ggml.bin";
-    run_benchmark(model_path);
-}
-
-TEST(Benchmark, InternLM20B) {
-    fs::path model_path = fs::path(__FILE__).parent_path() / "models/internlm-chat-20b-ggml.bin";
     run_benchmark(model_path);
 }
 

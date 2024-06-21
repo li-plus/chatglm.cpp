@@ -179,18 +179,6 @@ CHATGLM2_MODEL_PATH = Path(
     "~/.cache/huggingface/hub/models--THUDM--chatglm2-6b/snapshots/b1502f4f75c71499a3d566b14463edd62620ce9f"
 ).expanduser()
 
-BAICHUAN7B_MODEL_PATH = Path(
-    "~/.cache/huggingface/hub/models--baichuan-inc--Baichuan2-7B-Chat/snapshots/229e4eb1fab7f6aef90a2344c07085b680487597"
-).expanduser()
-
-BAICHUAN13B_MODEL_PATH = Path(
-    "~/.cache/huggingface/hub/models--baichuan-inc--Baichuan-13B-Chat/snapshots/a4a558127068f2ce965aa56aeb826bf501a68970"
-).expanduser()
-
-INTERNLM_MODEL_PATH = Path(
-    "~/.cache/huggingface/hub/models--internlm--internlm-chat-7b-v1_1/snapshots/1359d2199215552bd0a0cb138e21c6e97d538c0e"
-).expanduser()
-
 
 def make_data_embedding():
     m = torch.nn.Embedding(4, 3)
@@ -202,16 +190,21 @@ def make_data_embedding():
 
 
 def make_data_linear():
-    w = torch.randn(16, 32)
-    b = torch.randn(16)
-    x = torch.randn(2, 32)
+    w = torch.randn(32, 64)
+    b = torch.randn(32)
+    x = torch.randn(2, 64)
     y = F.linear(x, w, b)
+
+    vec_x = x[0]
+    vec_y = F.linear(vec_x, w, b)
 
     with open(HERE / "data/linear.data", "wb") as f:
         w.numpy().tofile(f)
         b.numpy().tofile(f)
         x.numpy().tofile(f)
         y.numpy().tofile(f)
+        vec_x.numpy().tofile(f)
+        vec_y.numpy().tofile(f)
 
 
 def make_data_layernorm():
@@ -612,8 +605,11 @@ def make_data_glm4_model():
     config.torch_dtype = torch.float32
 
     m = ChatGLMModel(config).float().eval()
+    for param in m.parameters():
+        param.data.uniform_(-0.5, 0.5)
 
     seq_len = 3
+
     x1, y1, x2, y2, x3, y3 = _forward_steps(m, seq_len)
 
     print(m)
@@ -637,161 +633,59 @@ def make_data_glm4_model():
         y3.numpy().tofile(f)
 
 
-def _make_data_baichuan_model(model_path, out_name):
-    sys.path.append(str(model_path))
-    from modeling_baichuan import BaichuanModel
-    from transformers import AutoConfig
+def make_glm4_pipeline_data():
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-    config.hidden_size = 32
-    config.num_attention_heads = 8
-    config.intermediate_size = config.hidden_size * 3
-    config.num_hidden_layers = 1
-    config.torch_dtype = torch.float32
-    config.vocab_size = 5
+    tokenizer = AutoTokenizer.from_pretrained("THUDM/glm-4-9b-chat", trust_remote_code=True)
 
-    m = BaichuanModel(config).eval()
-    for param in m.parameters():
-        param.data.uniform_(-0.5, 0.5)
+    # tiktoken
+    chktxt = "\n \n\n \n\n\n \t \t\t \t\n  \n   \n    \n     \n🚀 (normal) 😶\u200d🌫️ (multiple emojis concatenated) ✅ 🦙🦙 3 33 333 3333 33333 333333 3333333 33333333 3.3 3..3 3...3 កាន់តែពិសេសអាច😁 ?我想在apple工作1314151天～ ------======= нещо на Български ''''''```````\"\"\"\"......!!!!!!?????? I've been 'told he's there, 'RE you sure? 'M not sure I'll make it, 'D you like some tea? We'Ve a'lL"
+    print("tiktoken:", tokenizer.tokenizer.encode(chktxt, disallowed_special=()))
 
-    seq_len = 3
+    # tokenizer
+    inputs = tokenizer("你好")
+    print(f"encode: {inputs=}")
 
-    # self attention
-    x1 = torch.arange(seq_len, dtype=torch.int64)[None, :]
-    attn_mask = torch.ones(1, seq_len, dtype=torch.int64)
-    with torch.no_grad():
-        out = m(x1, attention_mask=attn_mask, use_cache=True)
-        y1 = out.last_hidden_state
-        kv_cache = out.past_key_values
+    conversation = [{"role": "user", "content": "你好"}]
+    inputs = tokenizer.apply_chat_template(
+        conversation,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_tensors="pt",
+        return_dict=True,
+    )
+    print(f"apply_chat_template: {conversation=} {inputs=}")
 
-    # cross attention
-    x2 = torch.tensor([[seq_len]], dtype=torch.int64)
-    attn_mask = torch.ones(1, seq_len + 1, dtype=torch.int64)
-    with torch.no_grad():
-        out = m(x2, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True)
-        y2 = out.last_hidden_state
-        kv_cache = out.past_key_values
+    # round 1
+    inputs = inputs.to("cuda")
+    model = AutoModelForCausalLM.from_pretrained(
+        "THUDM/glm-4-9b-chat",
+        torch_dtype=torch.bfloat16,
+        low_cpu_mem_usage=True,
+        trust_remote_code=True,
+        device_map="auto",
+    ).eval()
 
-    # cross attention
-    x3 = torch.tensor([[seq_len + 1]], dtype=torch.int64)
-    attn_mask = torch.ones(1, seq_len + 2, dtype=torch.int64)
-    with torch.no_grad():
-        out = m(x3, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True)
-        y3 = out.last_hidden_state
-        kv_cache = out.past_key_values
+    outputs = model.generate(**inputs, do_sample=False)
+    outputs = outputs[:, inputs["input_ids"].shape[1] :]
+    response = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+    print(f"generate: {response=}")
 
-    print(m)
+    conversation += [{"role": "assistant", "content": response}, {"role": "user", "content": "晚上睡不着应该怎么办"}]
+    inputs = tokenizer.apply_chat_template(
+        conversation,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_tensors="pt",
+        return_dict=True,
+    )
+    print(f"apply_chat_template: {conversation=} {inputs=}")
 
-    with open(HERE / f"data/{out_name}", "wb") as f:
-        m.embed_tokens.weight.data.numpy().tofile(f)
-        m.layers[0].input_layernorm.weight.data.numpy().tofile(f)
-        m.layers[0].self_attn.W_pack.weight.data.numpy().tofile(f)
-        m.layers[0].self_attn.o_proj.weight.data.numpy().tofile(f)
-        m.layers[0].post_attention_layernorm.weight.data.numpy().tofile(f)
-        m.layers[0].mlp.gate_proj.weight.data.numpy().tofile(f)
-        m.layers[0].mlp.down_proj.weight.data.numpy().tofile(f)
-        m.layers[0].mlp.up_proj.weight.data.numpy().tofile(f)
-        m.norm.weight.data.numpy().tofile(f)
-
-        x1.int().numpy().tofile(f)
-        y1.numpy().tofile(f)
-        x2.int().numpy().tofile(f)
-        y2.numpy().tofile(f)
-        x3.int().numpy().tofile(f)
-        y3.numpy().tofile(f)
-
-
-def make_data_baichuan7b_model():
-    _make_data_baichuan_model(BAICHUAN7B_MODEL_PATH, "baichuan7b_model.data")
-
-
-def make_data_baichuan13b_model():
-    _make_data_baichuan_model(BAICHUAN13B_MODEL_PATH, "baichuan13b_model.data")
-
-
-def make_internlm_model():
-    sys.path.append(str(INTERNLM_MODEL_PATH))
-    from modeling_internlm import InternLMModel
-    from transformers import AutoConfig
-
-    config = AutoConfig.from_pretrained(INTERNLM_MODEL_PATH, trust_remote_code=True)
-    config.hidden_size = 32
-    config.num_attention_heads = 8
-    config.intermediate_size = config.hidden_size * 3
-    config.num_hidden_layers = 1
-    config.torch_dtype = torch.float32
-    config.vocab_size = 5
-
-    m = InternLMModel(config).float().eval()
-    for param in m.parameters():
-        param.data.uniform_(-0.5, 0.5)
-
-    seq_len = 3
-
-    # self attention
-    x1 = torch.arange(seq_len, dtype=torch.int64)[None, :]
-    attn_mask = torch.ones(1, seq_len, dtype=torch.int64)
-    position_ids = torch.arange(seq_len, dtype=torch.int64)[None, :]
-    with torch.no_grad():
-        out = m(x1, attention_mask=attn_mask, position_ids=position_ids, use_cache=True)
-        y1 = out.last_hidden_state
-        kv_cache = out.past_key_values
-
-    # cross attention
-    x2 = torch.tensor([[seq_len]], dtype=torch.int64)
-    attn_mask = torch.ones(1, seq_len + 1, dtype=torch.int64)
-    position_ids = torch.tensor([[seq_len]], dtype=torch.int64)
-    with torch.no_grad():
-        out = m(x2, attention_mask=attn_mask, position_ids=position_ids, past_key_values=kv_cache, use_cache=True)
-        y2 = out.last_hidden_state
-        kv_cache = out.past_key_values
-
-    # cross attention
-    x3 = torch.tensor([[seq_len + 1]], dtype=torch.int64)
-    attn_mask = torch.ones(1, seq_len + 2, dtype=torch.int64)
-    position_ids = torch.tensor([[seq_len + 1]], dtype=torch.int64)
-    with torch.no_grad():
-        out = m(x3, attention_mask=attn_mask, position_ids=position_ids, past_key_values=kv_cache, use_cache=True)
-        y3 = out.last_hidden_state
-        kv_cache = out.past_key_values
-
-    print(m)
-
-    with open(HERE / f"data/internlm_model.data", "wb") as f:
-        m.embed_tokens.weight.data.numpy().tofile(f)
-        m.layers[0].input_layernorm.weight.data.numpy().tofile(f)
-        qkv_proj = torch.cat(
-            (
-                m.layers[0].self_attn.q_proj.weight.data,
-                m.layers[0].self_attn.k_proj.weight.data,
-                m.layers[0].self_attn.v_proj.weight.data,
-            ),
-            dim=0,
-        )
-        qkv_proj.numpy().tofile(f)
-        qkv_bias = torch.cat(
-            (
-                m.layers[0].self_attn.q_proj.bias.data,
-                m.layers[0].self_attn.k_proj.bias.data,
-                m.layers[0].self_attn.v_proj.bias.data,
-            ),
-            dim=0,
-        )
-        qkv_bias.numpy().tofile(f)
-        m.layers[0].self_attn.o_proj.weight.data.numpy().tofile(f)
-        m.layers[0].self_attn.o_proj.bias.data.numpy().tofile(f)
-        m.layers[0].post_attention_layernorm.weight.data.numpy().tofile(f)
-        m.layers[0].mlp.gate_proj.weight.data.numpy().tofile(f)
-        m.layers[0].mlp.up_proj.weight.data.numpy().tofile(f)
-        m.layers[0].mlp.down_proj.weight.data.numpy().tofile(f)
-        m.norm.weight.data.numpy().tofile(f)
-
-        x1.int().numpy().tofile(f)
-        y1.numpy().tofile(f)
-        x2.int().numpy().tofile(f)
-        y2.numpy().tofile(f)
-        x3.int().numpy().tofile(f)
-        y3.numpy().tofile(f)
+    # round 2
+    outputs = model.generate(**inputs, do_sample=False)
+    outputs = outputs[:, inputs["input_ids"].shape[1] :]
+    response = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+    print(f"generate: {response=}")
 
 
 def make_glm4_pipeline_data():
@@ -874,9 +768,6 @@ def main():
     # make_data_glm_model()
     # make_data_glm2_model()
     # make_data_glm3_model()
-    # make_data_baichuan7b_model()
-    # make_data_baichuan13b_model()
-    # make_internlm_model()
     # make_data_glm4_model()
     make_glm4_pipeline_data()
 
