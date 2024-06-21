@@ -1110,6 +1110,7 @@ void ChatGLMForCausalLM::load_state_dict(const StateDict &sd) {
         const std::string &name = item.first;
         ggml_tensor *self_weight = item.second;
         ggml_tensor *ckpt_weight = sd.kv.at(name);
+        CHATGLM_CHECK(ggml_nbytes(self_weight) == ggml_nbytes(ckpt_weight));
         if (ggml_backend_is_cpu(mctx_->backend.get()) || ggml_cpu_has_metal()) {
             ggml_backend_tensor_alloc(mctx_->buf_w.get(), self_weight, ckpt_weight->data);
         } else {
@@ -1300,6 +1301,7 @@ void ChatGLM2ForCausalLM::load_state_dict(const StateDict &sd) {
         } else {
             // normal weight
             ggml_tensor *self_weight = self_sd.kv.at(name);
+            CHATGLM_CHECK(ggml_nbytes(self_weight) == ggml_nbytes(ckpt_weight));
             if (ggml_backend_is_cpu(mctx_->backend.get()) || ggml_cpu_has_metal()) {
                 ggml_backend_tensor_alloc(mctx_->buf_w.get(), self_weight, ckpt_weight->data);
             } else {

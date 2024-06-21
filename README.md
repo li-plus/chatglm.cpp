@@ -6,7 +6,7 @@
 ![Python](https://img.shields.io/pypi/pyversions/chatglm-cpp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [ChatGLM3](https://github.com/THUDM/ChatGLM3), [GLM-4](https://github.com/THUDM/GLM-4) for real-time chatting on your MacBook.
+C++ implementation of [ChatGLM-6B](https://github.com/THUDM/ChatGLM-6B), [ChatGLM2-6B](https://github.com/THUDM/ChatGLM2-6B), [ChatGLM3](https://github.com/THUDM/ChatGLM3) and [GLM-4](https://github.com/THUDM/GLM-4) for real-time chatting on your MacBook.
 
 ![demo](docs/demo.gif)
 
