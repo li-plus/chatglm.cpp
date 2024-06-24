@@ -63,7 +63,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readonly("vocab_size", &ModelConfig::vocab_size)
         .def_readonly("hidden_size", &ModelConfig::hidden_size)
         .def_readonly("num_attention_heads", &ModelConfig::num_attention_heads)
-        .def_readonly("num_kv_heads", &ModelConfig::num_kv_heads)
+        .def_readonly("num_key_value_heads", &ModelConfig::num_key_value_heads)
         .def_readonly("num_hidden_layers", &ModelConfig::num_hidden_layers)
         .def_readonly("intermediate_size", &ModelConfig::intermediate_size)
         .def_readonly("norm_eps", &ModelConfig::norm_eps)

@@ -65,7 +65,7 @@ struct ConfigRecordV1 {
 
 // For compatibility
 struct ConfigRecordV1GQA : public ConfigRecordV1 {
-    int num_kv_heads;
+    int num_key_value_heads;
 };
 
 // TODO: use json to serialize config
@@ -109,15 +109,15 @@ class ModelConfig {
     ModelConfig() = default;
 
     ModelConfig(ModelType model_type, ggml_type dtype, int vocab_size, int hidden_size, int num_attention_heads,
-                int num_kv_heads, int num_hidden_layers, int intermediate_size, float norm_eps, float rope_theta,
+                int num_key_value_heads, int num_hidden_layers, int intermediate_size, float norm_eps, float rope_theta,
                 int num_virtual_tokens, int max_length, int bos_token_id, int eos_token_id, int pad_token_id,
                 int sep_token_id, std::vector<int> extra_eos_token_ids)
         : model_type(model_type), dtype(dtype), vocab_size(vocab_size), hidden_size(hidden_size),
-          num_attention_heads(num_attention_heads), num_kv_heads(num_kv_heads), num_hidden_layers(num_hidden_layers),
-          intermediate_size(intermediate_size), norm_eps(norm_eps), rope_theta(rope_theta),
-          num_virtual_tokens(num_virtual_tokens), max_length(max_length), bos_token_id(bos_token_id),
-          eos_token_id(eos_token_id), pad_token_id(pad_token_id), sep_token_id(sep_token_id),
-          extra_eos_token_ids(std::move(extra_eos_token_ids)) {
+          num_attention_heads(num_attention_heads), num_key_value_heads(num_key_value_heads),
+          num_hidden_layers(num_hidden_layers), intermediate_size(intermediate_size), norm_eps(norm_eps),
+          rope_theta(rope_theta), num_virtual_tokens(num_virtual_tokens), max_length(max_length),
+          bos_token_id(bos_token_id), eos_token_id(eos_token_id), pad_token_id(pad_token_id),
+          sep_token_id(sep_token_id), extra_eos_token_ids(std::move(extra_eos_token_ids)) {
         if (model_type == ModelType::CHATGLM) {
             hidden_act = ActivationType::GELU;
             use_qkv_bias = true;
@@ -146,9 +146,10 @@ class ModelConfig {
 
     ModelConfig(ModelType model_type, const ConfigRecordV1GQA &rec, float norm_eps, float rope_theta,
                 int num_virtual_tokens)
-        : ModelConfig(model_type, rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads, rec.num_kv_heads,
-                      rec.num_hidden_layers, rec.intermediate_size, norm_eps, rope_theta, num_virtual_tokens,
-                      rec.max_length, rec.bos_token_id, rec.eos_token_id, rec.pad_token_id, rec.sep_token_id, {}) {}
+        : ModelConfig(model_type, rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads,
+                      rec.num_key_value_heads, rec.num_hidden_layers, rec.intermediate_size, norm_eps, rope_theta,
+                      num_virtual_tokens, rec.max_length, rec.bos_token_id, rec.eos_token_id, rec.pad_token_id,
+                      rec.sep_token_id, {}) {}
 
     ModelConfig(ModelType model_type, const ConfigRecordV2 &rec)
         : ModelConfig(model_type, rec.dtype, rec.vocab_size, rec.hidden_size, rec.num_attention_heads,
@@ -158,13 +159,33 @@ class ModelConfig {
 
     std::string model_type_name() const { return to_string(model_type); }
 
+    friend std::ostream &operator<<(std::ostream &os, const ModelConfig &self) {
+        os << "ModelConfig(model_type=" << (int)self.model_type << ", dtype=" << self.dtype
+           << ", vocab_size=" << self.vocab_size << ", hidden_size=" << self.hidden_size
+           << ", num_attention_heads=" << self.num_attention_heads
+           << ", num_key_value_heads=" << self.num_key_value_heads << ", num_hidden_layers=" << self.num_hidden_layers
+           << ", intermediate_size=" << self.intermediate_size << ", norm_eps=" << self.norm_eps
+           << ", hidden_act=" << (int)self.hidden_act << ", use_qkv_bias=" << self.use_qkv_bias
+           << ", use_dense_bias=" << self.use_dense_bias << ", interleaved_qkv=" << self.interleaved_qkv
+           << ", tie_word_embeddings=" << self.tie_word_embeddings << ", rope_type=" << (int)self.rope_type
+           << ", rope_theta=" << self.rope_theta << ", attn_mask_type=" << (int)self.attn_mask_type
+           << ", num_virtual_tokens=" << self.num_virtual_tokens << ", max_length=" << self.max_length
+           << ", bos_token_id=" << self.bos_token_id << ", eos_token_id=" << self.eos_token_id
+           << ", pad_token_id=" << self.pad_token_id << ", sep_token_id=" << self.sep_token_id
+           << ", extra_eos_token_ids={";
+        for (size_t i = 0; i < self.extra_eos_token_ids.size(); i++) {
+            os << (i > 0 ? ", " : "") << self.extra_eos_token_ids[i];
+        }
+        return os << "})";
+    }
+
   public:
     ModelType model_type;
     ggml_type dtype;
     int vocab_size;
     int hidden_size;
     int num_attention_heads;
-    int num_kv_heads;
+    int num_key_value_heads;
     int num_hidden_layers;
     int intermediate_size;
     float norm_eps;
@@ -419,26 +440,26 @@ class BasicGLU {
 class BasicAttention {
   public:
     BasicAttention() = default;
-    BasicAttention(ModelContext *mctx, int hidden_size, int num_attention_heads, int num_kv_heads, int max_length,
-                   bool use_qkv_bias, bool use_dense_bias, bool interleaved_qkv, RopeType rope_type, float rope_theta,
-                   AttentionMaskType attn_mask_type, int num_virtual_tokens)
-        : num_attention_heads(num_attention_heads), num_kv_heads(num_kv_heads), interleaved_qkv(interleaved_qkv),
-          rope_type(rope_type), rope_theta(rope_theta), attn_mask_type(attn_mask_type),
-          num_virtual_tokens(num_virtual_tokens),
-          query_key_value(mctx, hidden_size, hidden_size + 2 * (hidden_size / num_attention_heads) * num_kv_heads,
-                          use_qkv_bias),
+    BasicAttention(ModelContext *mctx, int hidden_size, int num_attention_heads, int num_key_value_heads,
+                   int max_length, bool use_qkv_bias, bool use_dense_bias, bool interleaved_qkv, RopeType rope_type,
+                   float rope_theta, AttentionMaskType attn_mask_type, int num_virtual_tokens)
+        : num_attention_heads(num_attention_heads), num_key_value_heads(num_key_value_heads),
+          interleaved_qkv(interleaved_qkv), rope_type(rope_type), rope_theta(rope_theta),
+          attn_mask_type(attn_mask_type), num_virtual_tokens(num_virtual_tokens),
+          query_key_value(mctx, hidden_size,
+                          hidden_size + 2 * (hidden_size / num_attention_heads) * num_key_value_heads, use_qkv_bias),
           dense(mctx, hidden_size, hidden_size, use_dense_bias),
           k_cache(ggml_new_tensor_3d(mctx->ctx_kv.get(), GGML_TYPE_F16, hidden_size / num_attention_heads,
-                                     max_length + num_virtual_tokens, num_kv_heads)),
+                                     max_length + num_virtual_tokens, num_key_value_heads)),
           v_cache(ggml_new_tensor_3d(mctx->ctx_kv.get(), GGML_TYPE_F16, max_length + num_virtual_tokens,
-                                     hidden_size / num_attention_heads, num_kv_heads)) {}
+                                     hidden_size / num_attention_heads, num_key_value_heads)) {}
 
     ggml_tensor *forward(ModelContext *mctx, ggml_tensor *hidden_states, ggml_tensor *attention_mask,
                          ggml_tensor *position_ids, int n_past) const;
 
   public:
     int num_attention_heads;
-    int num_kv_heads;
+    int num_key_value_heads;
     bool interleaved_qkv;
     RopeType rope_type;
     float rope_theta;
@@ -454,13 +475,13 @@ template <typename Norm, typename MLP>
 class BasicBlock {
   public:
     BasicBlock() = default;
-    BasicBlock(ModelContext *mctx, int hidden_size, int num_attention_heads, int num_kv_heads, int intermediate_size,
-               int max_length, float norm_eps, ActivationType hidden_act, bool use_qkv_bias, bool use_dense_bias,
-               bool interleaved_qkv, RopeType rope_type, float rope_theta, AttentionMaskType attn_mask_type,
-               int num_virtual_tokens)
+    BasicBlock(ModelContext *mctx, int hidden_size, int num_attention_heads, int num_key_value_heads,
+               int intermediate_size, int max_length, float norm_eps, ActivationType hidden_act, bool use_qkv_bias,
+               bool use_dense_bias, bool interleaved_qkv, RopeType rope_type, float rope_theta,
+               AttentionMaskType attn_mask_type, int num_virtual_tokens)
         : input_layernorm(mctx, hidden_size, false, norm_eps),
-          attention(mctx, hidden_size, num_attention_heads, num_kv_heads, max_length, use_qkv_bias, use_dense_bias,
-                    interleaved_qkv, rope_type, rope_theta, attn_mask_type, num_virtual_tokens),
+          attention(mctx, hidden_size, num_attention_heads, num_key_value_heads, max_length, use_qkv_bias,
+                    use_dense_bias, interleaved_qkv, rope_type, rope_theta, attn_mask_type, num_virtual_tokens),
           post_attention_layernorm(mctx, hidden_size, false, norm_eps),
           mlp(mctx, hidden_size, intermediate_size, hidden_act) {}
 
@@ -572,20 +593,20 @@ class BasicModel {
             auto &attn = layers[i].attention;
             ggml_tensor *virtual_key =
                 ggml_view_3d(mctx.ctx_b.get(), past_key_values, head_size, config.num_virtual_tokens,
-                             config.num_kv_heads, past_key_values->nb[1], past_key_values->nb[2],
+                             config.num_key_value_heads, past_key_values->nb[1], past_key_values->nb[2],
                              i * 2 * past_key_values->nb[3]); // [#h, v, d]
             ggml_tensor *k_cache_view =
-                ggml_view_3d(mctx.ctx_b.get(), attn.k_cache, head_size, config.num_virtual_tokens, config.num_kv_heads,
-                             attn.k_cache->nb[1], attn.k_cache->nb[2], 0); // [#h, v, d]
+                ggml_view_3d(mctx.ctx_b.get(), attn.k_cache, head_size, config.num_virtual_tokens,
+                             config.num_key_value_heads, attn.k_cache->nb[1], attn.k_cache->nb[2], 0); // [#h, v, d]
             ggml_build_forward_expand(mctx.gf, ggml_cpy(mctx.ctx_b.get(), virtual_key, k_cache_view));
 
             ggml_tensor *virtual_value = ggml_view_3d(
-                mctx.ctx_b.get(), past_key_values, head_size, config.num_virtual_tokens, config.num_kv_heads,
+                mctx.ctx_b.get(), past_key_values, head_size, config.num_virtual_tokens, config.num_key_value_heads,
                 past_key_values->nb[1], past_key_values->nb[2], (i * 2 + 1) * past_key_values->nb[3]); // [#h, v, d]
             virtual_value = ggml_permute(mctx.ctx_b.get(), virtual_value, 1, 0, 2, 3);                 // [#h, d, v]
             ggml_tensor *v_cache_view =
-                ggml_view_3d(mctx.ctx_b.get(), attn.v_cache, config.num_virtual_tokens, head_size, config.num_kv_heads,
-                             attn.v_cache->nb[1], attn.v_cache->nb[2], 0); // [#h, d, v]
+                ggml_view_3d(mctx.ctx_b.get(), attn.v_cache, config.num_virtual_tokens, head_size,
+                             config.num_key_value_heads, attn.v_cache->nb[1], attn.v_cache->nb[2], 0); // [#h, d, v]
             ggml_build_forward_expand(mctx.gf, ggml_cpy(mctx.ctx_b.get(), virtual_value, v_cache_view));
         }
 
@@ -598,7 +619,7 @@ class BasicModel {
         std::vector<Block> layers;
         layers.reserve(config.num_hidden_layers);
         for (int layer_id = 0; layer_id < config.num_hidden_layers; layer_id++) {
-            layers.emplace_back(mctx, config.hidden_size, config.num_attention_heads, config.num_kv_heads,
+            layers.emplace_back(mctx, config.hidden_size, config.num_attention_heads, config.num_key_value_heads,
                                 config.intermediate_size, config.max_length, config.norm_eps, config.hidden_act,
                                 config.use_qkv_bias, config.use_dense_bias, config.interleaved_qkv, config.rope_type,
                                 config.rope_theta, config.attn_mask_type, config.num_virtual_tokens);
@@ -858,10 +879,10 @@ class ChatGLMTokenizer : public BaseTokenizer {
 class GLMBlock : public BasicBlock<LayerNorm, BasicMLP> {
   public:
     GLMBlock() = default;
-    GLMBlock(ModelContext *mctx, int hidden_size, int num_attention_heads, int num_kv_heads, int intermediate_size,
-             int max_length, float norm_eps, ActivationType hidden_act, bool use_qkv_bias, bool use_dense_bias,
-             bool interleaved_qkv, RopeType rope_type, float rope_theta, AttentionMaskType attn_mask_type,
-             int num_virtual_tokens)
+    GLMBlock(ModelContext *mctx, int hidden_size, int num_attention_heads, int num_key_value_heads,
+             int intermediate_size, int max_length, float norm_eps, ActivationType hidden_act, bool use_qkv_bias,
+             bool use_dense_bias, bool interleaved_qkv, RopeType rope_type, float rope_theta,
+             AttentionMaskType attn_mask_type, int num_virtual_tokens)
         : BasicBlock(LayerNorm(mctx, hidden_size, false, norm_eps),
                      BasicAttention(mctx, hidden_size, num_attention_heads, num_attention_heads, max_length,
                                     use_qkv_bias, use_dense_bias, interleaved_qkv, rope_type, rope_theta,

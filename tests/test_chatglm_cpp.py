@@ -76,7 +76,7 @@ def test_chatglm4_pipeline():
     check_pipeline(
         model_path=CHATGLM4_MODEL_PATH,
         prompt="你好",
-        target="你好👋！有什么可以帮助你的吗？",
+        target="你好👋！我是人工智能助手，很高兴见到你，有什么可以帮助你的吗？",
     )
 
 
@@ -85,12 +85,12 @@ def test_codegeex2_pipeline():
     prompt = "# language: Python\n# write a bubble sort function\n"
     target = """
 
-def bubble_sort(list):
-    for i in range(len(list) - 1):
-        for j in range(len(list) - 1 - i):
-            if list[j] > list[j + 1]:
-                list[j], list[j + 1] = list[j + 1], list[j]
-    return list
+def bubble_sort(lst):
+    for i in range(len(lst) - 1):
+        for j in range(len(lst) - 1 - i):
+            if lst[j] > lst[j + 1]:
+                lst[j], lst[j + 1] = lst[j + 1], lst[j]
+    return lst
 
 
 print(bubble_sort([5, 4, 3, 2, 1]))"""
@@ -117,7 +117,7 @@ def test_langchain_api():
     client = TestClient(app)
     response = client.post("/", json={"prompt": "你好", "temperature": 0})
     assert response.status_code == 200
-    assert response.json()["response"] == "你好👋！有什么可以帮助你的吗？"
+    assert response.json()["response"] == "你好👋！我是人工智能助手，很高兴见到你，有什么可以帮助你的吗？"
 
 
 @pytest.mark.skipif(not CHATGLM4_MODEL_PATH.exists(), reason="model file not found")
@@ -137,4 +137,4 @@ def test_openai_api():
     assert response.status_code == 200
     response_message = response.json()["choices"][0]["message"]
     assert response_message["role"] == "assistant"
-    assert response_message["content"] == "你好👋！有什么可以帮助你的吗？"
+    assert response_message["content"] == "你好👋！我是人工智能助手，很高兴见到你，有什么可以帮助你的吗？"

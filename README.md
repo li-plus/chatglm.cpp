@@ -59,13 +59,15 @@ The original model (`-i <model_name_or_path>`) can be a Hugging Face model name 
 * CodeGeeX2: `THUDM/codegeex2-6b`, `THUDM/codegeex2-6b-int4`
 
 You are free to try any of the below quantization types by specifying `-t <type>`:
-* `q4_0`: 4-bit integer quantization with fp16 scales.
-* `q4_1`: 4-bit integer quantization with fp16 scales and minimum values.
-* `q5_0`: 5-bit integer quantization with fp16 scales.
-* `q5_1`: 5-bit integer quantization with fp16 scales and minimum values.
-* `q8_0`: 8-bit integer quantization with fp16 scales.
-* `f16`: half precision floating point weights without quantization.
-* `f32`: single precision floating point weights without quantization.
+| type   | precision | symmetric |
+| ------ | --------- | --------- |
+| `q4_0` | int4      | true      |
+| `q4_1` | int4      | false     |
+| `q5_0` | int5      | true      |
+| `q5_1` | int5      | false     |
+| `q8_0` | int8      | true      |
+| `f16`  | half      |           |
+| `f32`  | float     |           |
 
 For LoRA models, add `-l <lora_model_name_or_path>` flag to merge your LoRA weights into the base model. For example, run `python3 chatglm_cpp/convert.py -i THUDM/chatglm3-6b -t q4_0 -o models/chatglm3-ggml-lora.bin -l shibing624/chatglm3-6b-csc-chinese-lora` to merge public LoRA weights from Hugging Face.
 
@@ -551,8 +553,8 @@ Download and unzip the dataset from [link](https://s3.amazonaws.com/research.met
 
 |                         | Q4_0  | Q4_1  | Q5_0  | Q5_1  | Q8_0  | F16   |
 |-------------------------|-------|-------|-------|-------|-------|-------|
-| [ChatGLM3-6B-Base][1]   | 6.215 | 6.184 | 5.997 | 6.015 | 5.965 | 5.971 |
-| [ChatGLM4-9B-Base][2]   | 6.851 | 6.793 | 6.652 | 6.635 | 6.582 | 6.586 |
+| [ChatGLM3-6B-Base][1]   | 6.215 | 6.188 | 6.006 | 6.022 | 5.971 | 5.972 |
+| [ChatGLM4-9B-Base][2]   | 6.834 | 6.780 | 6.645 | 6.624 | 6.576 | 6.577 |
 
 [1]: https://huggingface.co/THUDM/chatglm3-6b-base
 [2]: https://huggingface.co/THUDM/glm-4-9b
