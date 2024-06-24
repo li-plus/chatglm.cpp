@@ -104,7 +104,7 @@ class ModelConfig:
     def num_hidden_layers(self) -> int:
         ...
     @property
-    def num_kv_heads(self) -> int:
+    def num_key_value_heads(self) -> int:
         ...
     @property
     def pad_token_id(self) -> int:

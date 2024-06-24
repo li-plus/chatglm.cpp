@@ -209,13 +209,13 @@ class BaseConverter:
         cls.dump_model(f, model, ggml_type)
 
 
-def get_prefix_cache(prefix_encoder, pre_seq_len, num_layers, num_kv_heads, head_size):
+def get_prefix_cache(prefix_encoder, pre_seq_len, num_layers, num_key_value_heads, head_size):
     prefix_tokens = torch.arange(pre_seq_len, dtype=torch.long)
     with torch.no_grad():
         past_key_values = prefix_encoder(prefix_tokens)
     past_key_values = (
         past_key_values.to(torch.half)
-        .view(pre_seq_len, num_layers * 2, num_kv_heads, head_size)
+        .view(pre_seq_len, num_layers * 2, num_key_value_heads, head_size)
         .permute(1, 2, 0, 3)
         .contiguous()
     )

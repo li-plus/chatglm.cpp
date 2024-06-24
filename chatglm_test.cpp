@@ -308,7 +308,7 @@ class ChatGLMTest : public ::testing::Test {
             const int head_size = config.hidden_size / config.num_attention_heads;
             past_key_values =
                 ggml_new_tensor_4d(mctx_->ctx_b.get(), GGML_TYPE_F16, head_size, config.num_virtual_tokens,
-                                   config.num_kv_heads, config.num_hidden_layers * 2); // [l * 2, #h, v, d]
+                                   config.num_key_value_heads, config.num_hidden_layers * 2); // [l * 2, #h, v, d]
         }
 
         auto buf_b =
@@ -596,7 +596,7 @@ TEST_F(ChatGLMTest, GLMModel) {
 
     ModelConfig config(
         ModelType::CHATGLM, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
-        /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/128, /*norm_eps=*/1e-5f,
+        /*num_key_value_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/128, /*norm_eps=*/1e-5f,
         /*rope_theta=*/10000.f,
         /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
@@ -630,7 +630,7 @@ TEST_F(ChatGLMTest, GLMPTuningV2Model) {
 
     ModelConfig config(
         ModelType::CHATGLM, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
-        /*num_kv_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/128, /*norm_eps=*/1e-5f,
+        /*num_key_value_heads=*/8, /*num_hidden_layers=*/1, /*intermediate_size=*/128, /*norm_eps=*/1e-5f,
         /*rope_theta=*/10000.f,
         /*num_virtual_tokens=*/5,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
@@ -664,7 +664,7 @@ TEST_F(ChatGLMTest, GLM2Model) {
 
     ModelConfig config(
         ModelType::CHATGLM2, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
-        /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
+        /*num_key_value_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
         /*rope_theta=*/10000.f,
         /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
@@ -693,7 +693,7 @@ TEST_F(ChatGLMTest, GLM3Model) {
 
     ModelConfig config(
         ModelType::CHATGLM3, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
-        /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
+        /*num_key_value_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
         /*rope_theta=*/10000.f,
         /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
@@ -722,7 +722,7 @@ TEST_F(ChatGLMTest, GLM3PTuningV2Model) {
 
     ModelConfig config(
         ModelType::CHATGLM3, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
-        /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
+        /*num_key_value_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
         /*rope_theta=*/10000.f,
         /*num_virtual_tokens=*/5,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
@@ -751,7 +751,7 @@ TEST_F(ChatGLMTest, GLM4Model) {
 
     ModelConfig config(
         ModelType::CHATGLM4, GGML_TYPE_F32, /*vocab_size=*/5, /*hidden_size=*/32, /*num_attention_heads=*/8,
-        /*num_kv_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
+        /*num_key_value_heads=*/2, /*num_hidden_layers=*/1, /*intermediate_size=*/48, /*norm_eps=*/1e-5f,
         /*rope_theta=*/10000.f,
         /*num_virtual_tokens=*/0,
         /*max_length=*/8, /*bos_token_id=*/-1, /*eos_token_id=*/-1, /*pad_token_id=*/-1, /*sep_token_id=*/-1,
@@ -1208,8 +1208,7 @@ TEST(Pipeline, ChatGLM3) {
         {
             ChatMessage output = pipeline.chat(messages, gen_config);
             EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
-            EXPECT_EQ(output.content,
-                      "根据您的要求，我使用随机数生成器API生成了一个随机数。根据API返回的结果，生成的随机数为22。");
+            EXPECT_EQ(output.content, "根据您的要求，我使用随机数生成器API生成了一个在0和100之间的随机数，结果为22。");
         }
     }
 
@@ -1226,9 +1225,7 @@ TEST(Pipeline, ChatGLM3) {
             EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
             EXPECT_EQ(output.content, R"(好的，我会为您列出100以内的所有质数。
 
-质数是指只能被1和它本身整除的大于1的整数。例如，2、3、5、7等都是质数。
-
-让我们开始吧！)");
+(Note: 质数是指只能被1和它本身整除的正整数。))");
             EXPECT_EQ(output.tool_calls.front().code.input, R"(```python
 def is_prime(n):
     """Check if a number is prime."""
@@ -1245,7 +1242,6 @@ def is_prime(n):
         i += 6
     return True
 
-# Get all prime numbers up to 100
 primes_upto_100 = [i for i in range(2, 101) if is_prime(i)]
 primes_upto_100
 ```)");
@@ -1259,9 +1255,7 @@ primes_upto_100
             EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
             EXPECT_EQ(output.content, R"(100以内的所有质数为：
 
-$$
-2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97 
-$$)");
+$$2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97$$)");
         }
     }
 }
@@ -1406,7 +1400,7 @@ if __name__ == '__main__':
         gen_config.do_sample = false;
         std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "你好"}};
         ChatMessage output = pipeline.chat(messages, gen_config);
-        EXPECT_EQ(output.content, "你好👋！有什么可以帮助你的吗？");
+        EXPECT_EQ(output.content, "你好👋！我是人工智能助手，很高兴见到你，有什么可以帮助你的吗？");
     }
 }
 
@@ -1436,12 +1430,12 @@ TEST(Pipeline, CodeGeeX2) {
         std::string prompt = "# language: Python\n# write a bubble sort function\n";
         std::string target = R"(
 
-def bubble_sort(list):
-    for i in range(len(list) - 1):
-        for j in range(len(list) - 1 - i):
-            if list[j] > list[j + 1]:
-                list[j], list[j + 1] = list[j + 1], list[j]
-    return list
+def bubble_sort(lst):
+    for i in range(len(lst) - 1):
+        for j in range(len(lst) - 1 - i):
+            if lst[j] > lst[j + 1]:
+                lst[j], lst[j + 1] = lst[j + 1], lst[j]
+    return lst
 
 
 print(bubble_sort([5, 4, 3, 2, 1])))";

@@ -624,7 +624,7 @@ ggml_tensor *BasicAttention::forward(ModelContext *mctx, ggml_tensor *hidden_sta
     const int hidden_size = hidden_states->ne[0];
     const int qlen = hidden_states->ne[1];
     const int head_size = hidden_size / num_attention_heads;
-    const int num_shared_q_heads = num_attention_heads / num_kv_heads;
+    const int num_shared_q_heads = num_attention_heads / num_key_value_heads;
 
     ggml_tensor *qkv = query_key_value.forward(mctx, hidden_states); // [sq, (#h + 2 * #kvh) * d]
 
@@ -645,10 +645,11 @@ ggml_tensor *BasicAttention::forward(ModelContext *mctx, ggml_tensor *hidden_sta
     } else {
         query_layer = ggml_view_3d(ctx, qkv, head_size, num_attention_heads, qlen, head_size * ggml_element_size(qkv),
                                    qkv->nb[1], 0);
-        key_layer = ggml_view_3d(ctx, qkv, head_size, num_kv_heads, qlen, head_size * ggml_element_size(qkv),
+        key_layer = ggml_view_3d(ctx, qkv, head_size, num_key_value_heads, qlen, head_size * ggml_element_size(qkv),
                                  qkv->nb[1], hidden_size * ggml_element_size(qkv));
-        value_layer = ggml_view_3d(ctx, qkv, head_size, num_kv_heads, qlen, head_size * ggml_element_size(qkv),
-                                   qkv->nb[1], (hidden_size + head_size * num_kv_heads) * ggml_element_size(qkv));
+        value_layer =
+            ggml_view_3d(ctx, qkv, head_size, num_key_value_heads, qlen, head_size * ggml_element_size(qkv), qkv->nb[1],
+                         (hidden_size + head_size * num_key_value_heads) * ggml_element_size(qkv));
     }
 
     query_layer = apply_rotary_emb(mctx, query_layer, position_ids, rope_type, rope_theta);
@@ -657,7 +658,7 @@ ggml_tensor *BasicAttention::forward(ModelContext *mctx, ggml_tensor *hidden_sta
     query_layer = ggml_cont(ctx, ggml_permute(ctx, query_layer, 0, 2, 1, 3)); // [#h, s, d]
     if (num_shared_q_heads > 1) {
         query_layer = ggml_reshape_3d(ctx, query_layer, head_size, num_shared_q_heads * qlen,
-                                      num_kv_heads); // [#kvh, (#h/#kvh) * s, d]
+                                      num_key_value_heads); // [#kvh, (#h/#kvh) * s, d]
     }
 
     key_layer = ggml_permute(ctx, key_layer, 0, 2, 1, 3);     // [#kvh, s, d]
@@ -665,25 +666,25 @@ ggml_tensor *BasicAttention::forward(ModelContext *mctx, ggml_tensor *hidden_sta
 
     // store key & value to cache
     ggml_tensor *k_cache_view =
-        ggml_view_3d(ctx, k_cache, head_size, qlen, num_kv_heads, k_cache->nb[1], k_cache->nb[2],
+        ggml_view_3d(ctx, k_cache, head_size, qlen, num_key_value_heads, k_cache->nb[1], k_cache->nb[2],
                      (num_virtual_tokens + n_past) * head_size * ggml_element_size(k_cache)); // [#kvh, s, d]
     ggml_build_forward_expand(mctx->gf, ggml_cpy(ctx, key_layer, k_cache_view));
     ggml_tensor *v_cache_view =
-        ggml_view_3d(ctx, v_cache, qlen, head_size, num_kv_heads, v_cache->nb[1], v_cache->nb[2],
+        ggml_view_3d(ctx, v_cache, qlen, head_size, num_key_value_heads, v_cache->nb[1], v_cache->nb[2],
                      (num_virtual_tokens + n_past) * ggml_element_size(v_cache)); // [#kvh, d, s]
     ggml_build_forward_expand(mctx->gf, ggml_cpy(ctx, value_layer, v_cache_view));
 
     // concat key & value with past kv
-    key_layer = ggml_view_3d(ctx, k_cache, head_size, num_virtual_tokens + n_past + qlen, num_kv_heads, k_cache->nb[1],
-                             k_cache->nb[2],
+    key_layer = ggml_view_3d(ctx, k_cache, head_size, num_virtual_tokens + n_past + qlen, num_key_value_heads,
+                             k_cache->nb[1], k_cache->nb[2],
                              0); // [#kvh, kvs, d]
-    value_layer = ggml_view_3d(ctx, v_cache, num_virtual_tokens + n_past + qlen, head_size, num_kv_heads,
+    value_layer = ggml_view_3d(ctx, v_cache, num_virtual_tokens + n_past + qlen, head_size, num_key_value_heads,
                                v_cache->nb[1], v_cache->nb[2],
                                0); // [#kvh, d, kvs]
 
     // attention
+    query_layer = ggml_scale_inplace(ctx, query_layer, 1.f / std::sqrt(head_size));
     ggml_tensor *attn_scores = ggml_mul_mat(ctx, key_layer, query_layer); // [#kvh, (#h/#kvh) * s, kvs]
-    attn_scores = ggml_scale_inplace(ctx, attn_scores, 1.f / std::sqrt(head_size));
 
     if (n_past == 0) {
         // build attention mask for context input
@@ -701,7 +702,7 @@ ggml_tensor *BasicAttention::forward(ModelContext *mctx, ggml_tensor *hidden_sta
         if (num_shared_q_heads > 1) {
             attn_scores =
                 ggml_reshape_3d(ctx, attn_scores, num_virtual_tokens + n_past + qlen, num_shared_q_heads * qlen,
-                                num_kv_heads); // [#kvh, (#h/#kvh) * s, kvs]
+                                num_key_value_heads); // [#kvh, (#h/#kvh) * s, kvs]
         }
     }
 
