@@ -48,10 +48,6 @@
 #include <ggml-cuda.h>
 #endif
 
-#ifdef GGML_USE_METAL
-#include <ggml-metal.h>
-#endif
-
 namespace chatglm {
 
 static std::string shape_to_string(ggml_tensor *tensor) {

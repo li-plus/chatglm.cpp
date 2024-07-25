@@ -25,6 +25,8 @@ if (CHATGLM_ENABLE_PYBIND)
 endif ()
 
 # third-party libraries
+
+# ggml
 if (GGML_CUDA)
     add_compile_definitions(GGML_USE_CUDA)
     enable_language(CUDA)
@@ -42,9 +44,19 @@ if (GGML_CUDA)
     set(CMAKE_CUDA_ARCHITECTURES ${CUDA_ARCH_LIST} CACHE STRING "")
 endif ()
 
+if (GGML_METAL)
+    add_compile_definitions(GGML_USE_METAL)
+    set(GGML_METAL_EMBED_LIBRARY ON CACHE BOOL "" FORCE)
+endif ()
+
+if (GGML_PERF)
+    add_compile_definitions(GGML_PERF)
+endif ()
+
 include_directories(third_party/ggml/include/ggml third_party/ggml/src)
 add_subdirectory(third_party/ggml)
 
+# sentencepiece
 set(SPM_ENABLE_SHARED OFF CACHE BOOL "chatglm: disable sentencepiece shared libraries by default")
 set(SPM_ENABLE_TCMALLOC OFF CACHE BOOL "chatglm: disable tcmalloc by default")
 include_directories(third_party/sentencepiece/src)
@@ -52,22 +64,16 @@ add_subdirectory(third_party/sentencepiece)
 
 include_directories(third_party/sentencepiece/third_party/protobuf-lite)
 
+# absl
 set(ABSL_ENABLE_INSTALL ON CACHE BOOL "" FORCE)
 set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
 add_subdirectory(third_party/abseil-cpp)
 
+# re2
 add_subdirectory(third_party/re2)
 
+# stb
 include_directories(third_party/stb)
-
-if (GGML_METAL)
-    add_compile_definitions(GGML_USE_METAL)
-    configure_file(third_party/ggml/src/ggml-metal.metal ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/ggml-metal.metal COPYONLY)
-endif ()
-
-if (GGML_PERF)
-    add_compile_definitions(GGML_PERF)
-endif ()
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 

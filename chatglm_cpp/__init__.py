@@ -6,7 +6,7 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 import chatglm_cpp._C as _C
 from chatglm_cpp._C import ChatMessage, Image
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"
 
 
 @dataclass

@@ -9,6 +9,10 @@
 #include <sstream>
 #include <unordered_map>
 
+#ifdef GGML_USE_METAL
+#include <ggml-metal.h>
+#endif
+
 namespace chatglm {
 
 // ===== common =====
