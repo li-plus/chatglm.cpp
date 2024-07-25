@@ -1570,7 +1570,8 @@ TEST(Pipeline, ChatGLM4V) {
 
     // tokenizer
     {
-        Image image = Image::open(fs::path(__FILE__).parent_path() / "examples/03-Confusing-Pictures.jpg");
+        fs::path image_path = fs::path(__FILE__).parent_path() / "examples/03-Confusing-Pictures.jpg";
+        Image image = Image::open(image_path.string());
         std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "描述这张图片", image}};
         std::vector<int> target_ids{151331, 151333, 151336, 198,    151339, 151329,
                                     151340, 100395, 108627, 100736, 151337};
