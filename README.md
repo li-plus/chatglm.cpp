@@ -204,20 +204,21 @@ python3 chatglm_cpp/convert.py -i THUDM/glm-4v-9b -t q4_0 -vt q4_0 -o models/cha
 
 <tr>
 <td>
-
-```sh
+<pre>
+<code class="language-shell">
 ./build/bin/main -m models/chatglm4v-ggml.bin --image examples/03-Confusing-Pictures.jpg -p "这张图片有什么不寻常之处" --temp 0
 # 这张图片中不寻常的是，一个男人站在一辆黄色SUV的后备箱上，正在使用一个铁板熨烫衣物。通常情况下，熨衣是在室内进行的，使用的是家用电熨斗，而不是在户外使用汽车后备箱作为工作台。此外，他似乎是在一个繁忙的城市街道上，周围有行驶的车辆和建筑物，这增加了场景的荒谬性。
-```
-
+</code>
+</pre>
 </td>
-<td>
 
-```sh
+<td>
+<pre>
+<code class="language-shell">
 ./build/bin/main -m models/chatglm4v-ggml.bin --image examples/hmmm.jpg -p "这幅图像有什么好笑的？" --temp 0
 # 这幅图像的幽默之处在于它将现代技术与过时的技术并置。智能手机是现代技术的象征，但在这里，它却被连接到一个看起来像是旧式电脑串行端口的蓝色适配器上。这种组合出人意料，颇具幽默感，因为它将两个截然不同的技术时代混合在一起。
-```
-
+</code>
+</pre>
 </td>
 </tr>
 </table>
