@@ -354,8 +354,6 @@ struct Image {
 
     Image resize(size_t new_width, size_t new_height) const;
 
-    bool empty() const { return pixels.empty(); }
-
     void clear() {
         width = height = channels = 0;
         pixels.clear();

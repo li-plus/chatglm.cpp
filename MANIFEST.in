@@ -20,3 +20,7 @@ graft third_party/re2
 
 # absl
 graft third_party/abseil-cpp
+
+# stb
+include third_party/stb/stb_image.h
+include third_party/stb/stb_image_resize2.h
