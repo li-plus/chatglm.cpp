@@ -198,8 +198,8 @@ python3 chatglm_cpp/convert.py -i THUDM/glm-4v-9b -t q4_0 -vt q4_0 -o models/cha
 
 <table>
 <tr>
-<td><img src="examples/03-Confusing-Pictures.jpg"></td>
-<td><img src="examples/hmmm.jpg"></td>
+<td style="width: 50%;"><img src="examples/03-Confusing-Pictures.jpg"></td>
+<td style="width: 50%;"><img src="examples/hmmm.jpg"></td>
 </tr>
 
 <tr>
