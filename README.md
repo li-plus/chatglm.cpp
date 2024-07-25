@@ -203,7 +203,7 @@ python3 chatglm_cpp/convert.py -i THUDM/glm-4v-9b -t q4_0 -vt q4_0 -o models/cha
 </tr>
 
 <tr>
-<td>
+<td style="width: 50%;">
 <pre>
 <code class="language-shell">
 ./build/bin/main -m models/chatglm4v-ggml.bin --image examples/03-Confusing-Pictures.jpg -p "这张图片有什么不寻常之处" --temp 0
@@ -212,7 +212,7 @@ python3 chatglm_cpp/convert.py -i THUDM/glm-4v-9b -t q4_0 -vt q4_0 -o models/cha
 </pre>
 </td>
 
-<td>
+<td style="width: 50%;">
 <pre>
 <code class="language-shell">
 ./build/bin/main -m models/chatglm4v-ggml.bin --image examples/hmmm.jpg -p "这幅图像有什么好笑的？" --temp 0
