@@ -486,9 +486,11 @@ python3 examples/openai_client.py --base_url http://127.0.0.1:8000/v1 --tool_cal
 Request GLM4V with image inputs:
 ```sh
 # request with local image file
-python3 examples/openai_client.py --base_url http://127.0.0.1:8000/v1 --tool_call --prompt 描述这张图片 --image examples/03-Confusing-Pictures.jpg
+python3 examples/openai_client.py --base_url http://127.0.0.1:8000/v1 --prompt "描述这张图片" \
+    --image examples/03-Confusing-Pictures.jpg --temp 0
 # request with image url
-python3 examples/openai_client.py --base_url http://127.0.0.1:8000/v1 --tool_call --prompt 描述这张图片 --image https://www.barnorama.com/wp-content/uploads/2016/12/03-Confusing-Pictures.jpg
+python3 examples/openai_client.py --base_url http://127.0.0.1:8000/v1 --prompt "描述这张图片" \
+    --image https://www.barnorama.com/wp-content/uploads/2016/12/03-Confusing-Pictures.jpg --temp 0
 ```
 
 With this API server as backend, ChatGLM.cpp models can be seamlessly integrated into any frontend that uses OpenAI-style API, including [mckaywrigley/chatbot-ui](https://github.com/mckaywrigley/chatbot-ui), [fuergaosi233/wechat-chatgpt](https://github.com/fuergaosi233/wechat-chatgpt), [Yidadaa/ChatGPT-Next-Web](https://github.com/Yidadaa/ChatGPT-Next-Web), and more.
