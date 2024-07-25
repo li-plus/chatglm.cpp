@@ -37,6 +37,7 @@ def main() -> None:
         type=Path,
         help="path to the plain text file that stores the system message",
     )
+    parser.add_argument("--image", default=None, type=str, help="path to the input image for visual language models")
     parser.add_argument("-i", "--interactive", action="store_true", help="run in interactive mode")
     parser.add_argument(
         "-l", "--max_length", default=2048, type=int, help="max total length including prompt and output"
@@ -86,9 +87,16 @@ def main() -> None:
 
     messages = system_messages.copy()
 
+    image = None
+    if args.image is not None:
+        import numpy as np
+        from PIL import Image
+
+        image = chatglm_cpp.Image(np.asarray(Image.open(args.image).convert("RGB")))
+
     if not args.interactive:
         if args.mode == "chat":
-            messages.append(chatglm_cpp.ChatMessage(role="user", content=prompt))
+            messages.append(chatglm_cpp.ChatMessage(role="user", content=prompt, image=image))
             for chunk in pipeline.chat(messages, **generation_kwargs):
                 print(chunk.content, sep="", end="", flush=True)
         else:
@@ -107,6 +115,7 @@ def main() -> None:
     if system:
         print(f"{'System':{prompt_width}} > {system}")
 
+    prompt_image = image
     while True:
         if messages and messages[-1].tool_calls:
             (tool_call,) = messages[-1].tool_calls
@@ -135,10 +144,12 @@ def main() -> None:
         if prompt == "stop":
             break
         if prompt == "clear":
-            messages = system_messages
+            messages = system_messages.copy()
+            prompt_image = image
             continue
 
-        messages.append(chatglm_cpp.ChatMessage(role=role, content=prompt))
+        messages.append(chatglm_cpp.ChatMessage(role=role, content=prompt, image=prompt_image))
+        prompt_image = None
         print(f"{pipeline.model.config.model_type_name} > ", sep="", end="")
         chunks = []
         for chunk in pipeline.chat(messages, **generation_kwargs):

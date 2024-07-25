@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import io
 import json
 import logging
 import time
@@ -30,9 +32,24 @@ class ToolCall(BaseModel):
     type: Literal["function"]
 
 
+class ContentText(BaseModel):
+    type: Literal["text"] = "text"
+    text: str
+
+
+class ContentImageUrlData(BaseModel):
+    url: str
+    detail: str = "high"
+
+
+class ContentImageUrl(BaseModel):
+    type: Literal["image_url"] = "image_url"
+    image_url: ContentImageUrlData
+
+
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant"]
-    content: str
+    content: Union[str, List[Union[ContentText, ContentImageUrl]]]
     tool_calls: Optional[List[ToolCall]] = None
 
 
@@ -186,7 +203,32 @@ async def create_chat_completion(body: ChatCompletionRequest) -> ChatCompletionR
     if not body.messages:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "empty messages")
 
-    messages = [chatglm_cpp.ChatMessage(role=msg.role, content=msg.content) for msg in body.messages]
+    messages = []
+    for msg in body.messages:
+        if isinstance(msg.content, str):
+            messages.append(chatglm_cpp.ChatMessage(role=msg.role, content=msg.content))
+        else:
+            if not (len(msg.content) == 2 and msg.content[0].type == "text" and msg.content[1].type == "image_url"):
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "multimodal content must have a text item followed by an image_url item",
+                )
+
+            import numpy as np
+            from PIL import Image
+
+            text = msg.content[0].text
+            image_url = msg.content[1].image_url.url
+            if image_url.startswith("data:"):
+                image_bytes = base64.b64decode(image_url.split(",")[1])
+            else:
+                import requests
+
+                image_bytes = requests.get(image_url).content
+            image = chatglm_cpp.Image(np.asarray(Image.open(io.BytesIO(image_bytes))))
+
+            messages.append(chatglm_cpp.ChatMessage(role=msg.role, content=text, image=image))
+
     if body.tools:
         system_content = (
             "Answer the following questions as best as you can. You have access to the following tools:\n"

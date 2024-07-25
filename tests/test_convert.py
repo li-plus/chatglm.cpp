@@ -1,4 +1,6 @@
+import re
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import torch
@@ -175,8 +177,19 @@ def test_quantize_q5_1():
     assert (q_tensor == ggml_q_tensor).all()
 
 
+@contextmanager
+def relative_to_absolute_import(path):
+    code = Path(path).read_text()
+    fix_code = re.sub(r"(from )\.(.+ import)", r"\1\2", code)
+    Path(path).write_text(fix_code)
+    try:
+        yield
+    finally:
+        Path(path).write_text(code)
+
+
 CHATGLM2_MODEL_PATH = Path(
-    "~/.cache/huggingface/hub/models--THUDM--chatglm2-6b/snapshots/b1502f4f75c71499a3d566b14463edd62620ce9f"
+    "~/.cache/huggingface/hub/models--THUDM--chatglm2-6b/snapshots/7fabe56db91e085c9c027f56f1c654d137bdba40"
 ).expanduser()
 
 
@@ -277,7 +290,8 @@ def make_data_glm_model():
     ).expanduser()
 
     sys.path.append(str(CHATGLM_MODEL_PATH))
-    from modeling_chatglm import ChatGLMModel
+    with relative_to_absolute_import(CHATGLM_MODEL_PATH / "modeling_chatglm.py"):
+        from modeling_chatglm import ChatGLMModel
     from transformers import AutoConfig
 
     config = AutoConfig.from_pretrained(CHATGLM_MODEL_PATH, trust_remote_code=True)
@@ -366,9 +380,45 @@ def make_data_glm_model():
         y3.data.numpy().tofile(f)
 
 
+def _forward_steps(model, seq_len, **kwargs):
+    # self attention
+    x1 = torch.arange(seq_len, dtype=torch.int64)[None, :]
+    position_ids = torch.arange(seq_len, dtype=torch.int64)[None, :]
+    attn_mask = torch.ones(1, seq_len, dtype=torch.int64)
+    with torch.no_grad():
+        out = model(x1, position_ids=position_ids, attention_mask=attn_mask, use_cache=True, **kwargs)
+        y1 = out.last_hidden_state
+        kv_cache = out.past_key_values
+
+    # cross attention
+    x2 = torch.tensor([[seq_len]], dtype=torch.int64)
+    position_ids = torch.tensor([[seq_len]], dtype=torch.int64)
+    attn_mask = torch.ones(1, seq_len + 1, dtype=torch.int64)
+    with torch.no_grad():
+        out = model(
+            x2, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True, **kwargs
+        )
+        y2 = out.last_hidden_state
+        kv_cache = out.past_key_values
+
+    # cross attention
+    x3 = torch.tensor([[seq_len + 1]], dtype=torch.int64)
+    position_ids = torch.tensor([[seq_len + 1]], dtype=torch.int64)
+    attn_mask = torch.ones(1, seq_len + 2, dtype=torch.int64)
+    with torch.no_grad():
+        out = model(
+            x3, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True, **kwargs
+        )
+        y3 = out.last_hidden_state
+        kv_cache = out.past_key_values
+
+    return x1, y1, x2, y2, x3, y3
+
+
 def make_data_glm2_model():
     sys.path.append(str(CHATGLM2_MODEL_PATH))
-    from modeling_chatglm import ChatGLMModel
+    with relative_to_absolute_import(CHATGLM2_MODEL_PATH / "modeling_chatglm.py"):
+        from modeling_chatglm import ChatGLMModel
     from transformers import AutoConfig
 
     config = AutoConfig.from_pretrained(CHATGLM2_MODEL_PATH, trust_remote_code=True)
@@ -385,34 +435,7 @@ def make_data_glm2_model():
     for param in m.parameters():
         param.data.uniform_(-0.5, 0.5)
 
-    seq_len = 3
-
-    # self attention
-    x1 = torch.arange(seq_len, dtype=torch.int64)[None, :]
-    position_ids = torch.arange(seq_len, dtype=torch.int64)[None, :]
-    attn_mask = torch.ones(1, seq_len, dtype=torch.int64)
-    with torch.no_grad():
-        out = m(x1, position_ids=position_ids, attention_mask=attn_mask, use_cache=True)
-        y1 = out.last_hidden_state
-        kv_cache = out.past_key_values
-
-    # cross attention
-    x2 = torch.tensor([[seq_len]], dtype=torch.int64)
-    position_ids = torch.tensor([[seq_len]], dtype=torch.int64)
-    attn_mask = torch.ones(1, seq_len + 1, dtype=torch.int64)
-    with torch.no_grad():
-        out = m(x2, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True)
-        y2 = out.last_hidden_state
-        kv_cache = out.past_key_values
-
-    # cross attention
-    x3 = torch.tensor([[seq_len + 1]], dtype=torch.int64)
-    position_ids = torch.tensor([[seq_len + 1]], dtype=torch.int64)
-    attn_mask = torch.ones(1, seq_len + 2, dtype=torch.int64)
-    with torch.no_grad():
-        out = m(x3, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True)
-        y3 = out.last_hidden_state
-        kv_cache = out.past_key_values
+    x1, y1, x2, y2, x3, y3 = _forward_steps(m, seq_len=3)
 
     print(m)
 
@@ -437,46 +460,13 @@ def make_data_glm2_model():
 
 
 def make_data_glm3_model():
-    def _forward_steps(model, seq_len):
-        # self attention
-        x1 = torch.arange(seq_len, dtype=torch.int64)[None, :]
-        position_ids = torch.arange(seq_len, dtype=torch.int64)[None, :]
-        attn_mask = torch.ones(1, seq_len, dtype=torch.int64)
-        with torch.no_grad():
-            out = model(x1, position_ids=position_ids, attention_mask=attn_mask, use_cache=True)
-            y1 = out.last_hidden_state
-            kv_cache = out.past_key_values
-
-        # cross attention
-        x2 = torch.tensor([[seq_len]], dtype=torch.int64)
-        position_ids = torch.tensor([[seq_len]], dtype=torch.int64)
-        attn_mask = torch.ones(1, seq_len + 1, dtype=torch.int64)
-        with torch.no_grad():
-            out = model(
-                x2, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True
-            )
-            y2 = out.last_hidden_state
-            kv_cache = out.past_key_values
-
-        # cross attention
-        x3 = torch.tensor([[seq_len + 1]], dtype=torch.int64)
-        position_ids = torch.tensor([[seq_len + 1]], dtype=torch.int64)
-        attn_mask = torch.ones(1, seq_len + 2, dtype=torch.int64)
-        with torch.no_grad():
-            out = model(
-                x3, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True
-            )
-            y3 = out.last_hidden_state
-            kv_cache = out.past_key_values
-
-        return x1, y1, x2, y2, x3, y3
-
     CHATGLM3_MODEL_PATH = Path(
-        "~/.cache/huggingface/hub/models--THUDM--chatglm3-6b/snapshots/a5ba5501eb873d40d48bd0983bd2a8dd006bb838"
+        "~/.cache/huggingface/hub/models--THUDM--chatglm3-6b/snapshots/6f3b58ec10f088978ae174398f9d20b6dfc71552"
     ).expanduser()
 
     sys.path.append(str(CHATGLM3_MODEL_PATH))
-    from modeling_chatglm import ChatGLMModel
+    with relative_to_absolute_import(CHATGLM3_MODEL_PATH / "modeling_chatglm.py"):
+        from modeling_chatglm import ChatGLMModel
     from transformers import AutoConfig
 
     config = AutoConfig.from_pretrained(CHATGLM3_MODEL_PATH, trust_remote_code=True)
@@ -552,46 +542,13 @@ def make_data_glm3_model():
 
 
 def make_data_glm4_model():
-    def _forward_steps(model, seq_len):
-        # self attention
-        x1 = torch.arange(seq_len, dtype=torch.int64)[None, :]
-        position_ids = torch.arange(seq_len, dtype=torch.int64)[None, :]
-        attn_mask = torch.ones(1, seq_len, dtype=torch.int64)
-        with torch.no_grad():
-            out = model(x1, position_ids=position_ids, attention_mask=attn_mask, use_cache=True)
-            y1 = out.last_hidden_state
-            kv_cache = out.past_key_values
-
-        # cross attention
-        x2 = torch.tensor([[seq_len]], dtype=torch.int64)
-        position_ids = torch.tensor([[seq_len]], dtype=torch.int64)
-        attn_mask = torch.ones(1, seq_len + 1, dtype=torch.int64)
-        with torch.no_grad():
-            out = model(
-                x2, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True
-            )
-            y2 = out.last_hidden_state
-            kv_cache = out.past_key_values
-
-        # cross attention
-        x3 = torch.tensor([[seq_len + 1]], dtype=torch.int64)
-        position_ids = torch.tensor([[seq_len + 1]], dtype=torch.int64)
-        attn_mask = torch.ones(1, seq_len + 2, dtype=torch.int64)
-        with torch.no_grad():
-            out = model(
-                x3, position_ids=position_ids, attention_mask=attn_mask, past_key_values=kv_cache, use_cache=True
-            )
-            y3 = out.last_hidden_state
-            kv_cache = out.past_key_values
-
-        return x1, y1, x2, y2, x3, y3
-
     CHATGLM4_MODEL_PATH = Path(
-        "~/.cache/huggingface/hub/models--THUDM--glm-4-9b-chat/snapshots/6f060dcb542d48b6bc743628634924b271545428"
+        "~/.cache/huggingface/hub/models--THUDM--glm-4-9b-chat/snapshots/04419001bc63e05e70991ade6da1f91c4aeec278"
     ).expanduser()
 
     sys.path.append(str(CHATGLM4_MODEL_PATH))
-    from modeling_chatglm import ChatGLMModel
+    with relative_to_absolute_import(CHATGLM4_MODEL_PATH / "modeling_chatglm.py"):
+        from modeling_chatglm import ChatGLMModel
     from transformers import AutoConfig
 
     config = AutoConfig.from_pretrained(CHATGLM4_MODEL_PATH, trust_remote_code=True)
@@ -633,59 +590,124 @@ def make_data_glm4_model():
         y3.numpy().tofile(f)
 
 
-def make_glm4_pipeline_data():
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+def make_data_glm4v_model():
+    CHATGLM4V_MODEL_PATH = Path(
+        "~/.cache/huggingface/hub/models--THUDM--glm-4v-9b/snapshots/6c2e4732db8443f64a48d5af04b74425a7d169c4"
+    ).expanduser()
 
-    tokenizer = AutoTokenizer.from_pretrained("THUDM/glm-4-9b-chat", trust_remote_code=True)
+    sys.path.append(str(CHATGLM4V_MODEL_PATH))
+    with relative_to_absolute_import(CHATGLM4V_MODEL_PATH / "modeling_chatglm.py"):
+        from modeling_chatglm import ChatGLMModel
+    from transformers import AutoConfig
 
-    # tiktoken
-    chktxt = "\n \n\n \n\n\n \t \t\t \t\n  \n   \n    \n     \n🚀 (normal) 😶\u200d🌫️ (multiple emojis concatenated) ✅ 🦙🦙 3 33 333 3333 33333 333333 3333333 33333333 3.3 3..3 3...3 កាន់តែពិសេសអាច😁 ?我想在apple工作1314151天～ ------======= нещо на Български ''''''```````\"\"\"\"......!!!!!!?????? I've been 'told he's there, 'RE you sure? 'M not sure I'll make it, 'D you like some tea? We'Ve a'lL"
-    print("tiktoken:", tokenizer.tokenizer.encode(chktxt, disallowed_special=()))
-
-    # tokenizer
-    inputs = tokenizer("你好")
-    print(f"encode: {inputs=}")
-
-    conversation = [{"role": "user", "content": "你好"}]
-    inputs = tokenizer.apply_chat_template(
-        conversation,
-        add_generation_prompt=True,
-        tokenize=True,
-        return_tensors="pt",
-        return_dict=True,
+    config = AutoConfig.from_pretrained(CHATGLM4V_MODEL_PATH, trust_remote_code=True)
+    config.hidden_size = 32
+    config.num_attention_heads = 8
+    config.num_layers = 1
+    config.padded_vocab_size = 8
+    config.multi_query_group_num = 2
+    config.ffn_hidden_size = 48
+    config.kv_channels = config.hidden_size // config.num_attention_heads
+    config.torch_dtype = torch.float32
+    config.vision_config.update(
+        num_hidden_layers=1,
+        hidden_size=32,
+        patch_size=7,
+        num_heads=2,
+        intermediate_size=56,
+        num_positions=17,
+        image_size=28,
     )
-    print(f"apply_chat_template: {conversation=} {inputs=}")
 
-    # round 1
-    inputs = inputs.to("cuda")
-    model = AutoModelForCausalLM.from_pretrained(
-        "THUDM/glm-4-9b-chat",
-        torch_dtype=torch.bfloat16,
-        low_cpu_mem_usage=True,
-        trust_remote_code=True,
-        device_map="auto",
-    ).eval()
+    m = ChatGLMModel(config).float().eval()
+    for param in m.parameters():
+        param.data.uniform_(-0.5, 0.5)
 
-    outputs = model.generate(**inputs, do_sample=False)
-    outputs = outputs[:, inputs["input_ids"].shape[1] :]
-    response = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
-    print(f"generate: {response=}")
+    print(m)
 
-    conversation += [{"role": "assistant", "content": response}, {"role": "user", "content": "晚上睡不着应该怎么办"}]
-    inputs = tokenizer.apply_chat_template(
-        conversation,
-        add_generation_prompt=True,
-        tokenize=True,
-        return_tensors="pt",
-        return_dict=True,
-    )
-    print(f"apply_chat_template: {conversation=} {inputs=}")
+    x1, y1, x2, y2, x3, y3 = _forward_steps(m, seq_len=3)
 
-    # round 2
-    outputs = model.generate(**inputs, do_sample=False)
-    outputs = outputs[:, inputs["input_ids"].shape[1] :]
-    response = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
-    print(f"generate: {response=}")
+    # text
+    with open(HERE / "data/glm4v_model_text.data", "wb") as f:
+        tensors = [
+            # text model
+            m.embedding.word_embeddings.weight,
+            m.encoder.layers[0].input_layernorm.weight,
+            m.encoder.layers[0].self_attention.query_key_value.weight,
+            m.encoder.layers[0].self_attention.query_key_value.bias,
+            m.encoder.layers[0].self_attention.dense.weight,
+            m.encoder.layers[0].post_attention_layernorm.weight,
+            m.encoder.layers[0].mlp.dense_h_to_4h.weight,
+            m.encoder.layers[0].mlp.dense_4h_to_h.weight,
+            m.encoder.final_layernorm.weight,
+            # inputs & outputs
+            x1.int(),
+            y1,
+            x2.int(),
+            y2,
+            x3.int(),
+            y3,
+        ]
+        for tensor in tensors:
+            tensor.data.numpy().tofile(f)
+
+    m.config.boi_token_id = 2
+    m.config.eoi_token_id = 4
+
+    images = torch.randn(1, 3, config.vision_config["image_size"], config.vision_config["image_size"])
+    x1, y1, x2, y2, x3, y3 = _forward_steps(m, seq_len=6, images=images)
+
+    # vision & text
+    with open(HERE / "data/glm4v_model.data", "wb") as f:
+        tensors = [
+            # vision model
+            m.vision.patch_embedding.cls_embedding.half(),
+            m.vision.patch_embedding.proj.weight.half(),
+            m.vision.patch_embedding.proj.bias,
+            m.vision.patch_embedding.position_embedding.weight,
+            m.vision.transformer.layers[0].input_layernorm.weight,
+            m.vision.transformer.layers[0].input_layernorm.bias,
+            m.vision.transformer.layers[0].attention.query_key_value.weight,
+            m.vision.transformer.layers[0].attention.query_key_value.bias,
+            m.vision.transformer.layers[0].attention.dense.weight,
+            m.vision.transformer.layers[0].attention.dense.bias,
+            m.vision.transformer.layers[0].mlp.fc1.weight,
+            m.vision.transformer.layers[0].mlp.fc1.bias,
+            m.vision.transformer.layers[0].mlp.fc2.weight,
+            m.vision.transformer.layers[0].mlp.fc2.bias,
+            m.vision.transformer.layers[0].post_attention_layernorm.weight,
+            m.vision.transformer.layers[0].post_attention_layernorm.bias,
+            m.vision.conv.weight.half(),
+            m.vision.conv.bias,
+            m.vision.linear_proj.linear_proj.weight,
+            m.vision.linear_proj.norm1.weight,
+            m.vision.linear_proj.norm1.bias,
+            m.vision.linear_proj.gate_proj.weight,
+            m.vision.linear_proj.dense_h_to_4h.weight,
+            m.vision.linear_proj.dense_4h_to_h.weight,
+            m.vision.boi.half(),
+            m.vision.eoi.half(),
+            # text model
+            m.embedding.word_embeddings.weight,
+            m.encoder.layers[0].input_layernorm.weight,
+            m.encoder.layers[0].self_attention.query_key_value.weight,
+            m.encoder.layers[0].self_attention.query_key_value.bias,
+            m.encoder.layers[0].self_attention.dense.weight,
+            m.encoder.layers[0].post_attention_layernorm.weight,
+            m.encoder.layers[0].mlp.dense_h_to_4h.weight,
+            m.encoder.layers[0].mlp.dense_4h_to_h.weight,
+            m.encoder.final_layernorm.weight,
+            # inputs & outputs
+            images,
+            x1.int(),
+            y1,
+            x2.int(),
+            y2,
+            x3.int(),
+            y3,
+        ]
+        for tensor in tensors:
+            tensor.data.numpy().tofile(f)
 
 
 def make_glm4_pipeline_data():
@@ -753,10 +775,26 @@ if __name__ == '__main__':
     print(f"apply_chat_template: {conversation=} {inputs=}")
 
     # round 2
+    inputs = inputs.to("cuda")
     outputs = model.generate(**inputs, do_sample=False)
     outputs = outputs[:, inputs["input_ids"].shape[1] :]
     response = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
     print(f"generate: {response=}")
+
+    # with image
+    from PIL import Image
+
+    tokenizer = AutoTokenizer.from_pretrained("THUDM/glm-4v-9b", trust_remote_code=True)
+    image = Image.open(HERE / "../examples/03-Confusing-Pictures.jpg")
+    conversation = [{"role": "user", "content": "描述这张图片", "image": image}]
+    inputs = tokenizer.apply_chat_template(
+        conversation,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_tensors="pt",
+        return_dict=True,
+    )
+    print(f"apply_chat_template: {conversation=} {inputs=}")
 
 
 def main():
@@ -769,7 +807,8 @@ def main():
     # make_data_glm2_model()
     # make_data_glm3_model()
     # make_data_glm4_model()
-    make_glm4_pipeline_data()
+    make_data_glm4v_model()
+    # make_glm4_pipeline_data()
 
 
 if __name__ == "__main__":

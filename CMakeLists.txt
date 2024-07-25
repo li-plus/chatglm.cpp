@@ -58,6 +58,8 @@ add_subdirectory(third_party/abseil-cpp)
 
 add_subdirectory(third_party/re2)
 
+include_directories(third_party/stb)
+
 if (GGML_METAL)
     add_compile_definitions(GGML_USE_METAL)
     configure_file(third_party/ggml/src/ggml-metal.metal ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/ggml-metal.metal COPYONLY)
@@ -135,7 +137,7 @@ add_custom_target(check-all
     COMMAND cmake --build build -j
     COMMAND ./build/bin/chatglm_test
     COMMAND python3 setup.py develop
-    COMMAND python3 -m pytest tests/test_chatglm_cpp.py
+    COMMAND python3 -m pytest --forked tests/test_chatglm_cpp.py
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
 )
 

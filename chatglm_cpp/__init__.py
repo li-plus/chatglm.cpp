@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
 
 import chatglm_cpp._C as _C
-from chatglm_cpp._C import ChatMessage
+from chatglm_cpp._C import ChatMessage, Image
 
 __version__ = "0.4.1"
 
@@ -72,9 +72,16 @@ class Pipeline(_C.Pipeline):
             temperature=temperature,
             repetition_penalty=repetition_penalty,
         )
+
+        image = None
+        for msg in messages:
+            if msg.image is not None:
+                image = msg.image
+                break
+
         if stream:
-            return self._stream_chat(input_ids=input_ids, gen_config=gen_config)
-        return self._sync_chat(input_ids=input_ids, gen_config=gen_config)
+            return self._stream_chat(input_ids=input_ids, image=image, gen_config=gen_config)
+        return self._sync_chat(input_ids=input_ids, image=image, gen_config=gen_config)
 
     def generate(
         self,
@@ -105,26 +112,30 @@ class Pipeline(_C.Pipeline):
             return self._stream_generate(input_ids=input_ids, gen_config=gen_config)
         return self._sync_generate(input_ids=input_ids, gen_config=gen_config)
 
-    def _stream_generate_ids(self, input_ids: List[int], gen_config: _C.GenerationConfig) -> Iterator[int]:
+    def _stream_generate_ids(
+        self, input_ids: List[int], image: Optional[Image], gen_config: _C.GenerationConfig
+    ) -> Iterator[int]:
         input_ids = input_ids.copy()
         n_past = 0
         n_ctx = len(input_ids)
         max_new_tokens = gen_config.max_new_tokens if gen_config.max_new_tokens > 0 else gen_config.max_length
 
         while len(input_ids) < min(gen_config.max_length, n_ctx + max_new_tokens):
-            next_token_id = self.model.generate_next_token(input_ids, gen_config, n_past, n_ctx)
+            next_token_id = self.model.generate_next_token(input_ids, image, gen_config, n_past, n_ctx)
             yield next_token_id
-            n_past = len(input_ids)
+            n_past = self.model.count_tokens(input_ids, image)
             input_ids.append(next_token_id)
 
             if next_token_id in [self.model.config.eos_token_id, *self.model.config.extra_eos_token_ids]:
                 break
 
-    def _stream_chat(self, input_ids: List[int], gen_config: _C.GenerationConfig) -> Iterator[DeltaMessage]:
+    def _stream_chat(
+        self, input_ids: List[int], image: Optional[Image], gen_config: _C.GenerationConfig
+    ) -> Iterator[DeltaMessage]:
         token_cache = []
         print_len = 0
         print_token_len = 0
-        for next_token_id in self._stream_generate_ids(input_ids=input_ids, gen_config=gen_config):
+        for next_token_id in self._stream_generate_ids(input_ids=input_ids, image=image, gen_config=gen_config):
             token_cache.append(next_token_id)
 
             try:
@@ -157,15 +168,17 @@ class Pipeline(_C.Pipeline):
         for msg in self._stream_chat(input_ids=input_ids, gen_config=gen_config):
             yield msg.content
 
-    def _sync_generate_ids(self, input_ids: List[int], gen_config: _C.GenerationConfig) -> List[int]:
-        return list(self._stream_generate_ids(input_ids=input_ids, gen_config=gen_config))
+    def _sync_generate_ids(
+        self, input_ids: List[int], image: Optional[Image], gen_config: _C.GenerationConfig
+    ) -> List[int]:
+        return list(self._stream_generate_ids(input_ids=input_ids, image=image, gen_config=gen_config))
 
-    def _sync_generate(self, input_ids: List[int], gen_config: _C.GenerationConfig) -> str:
-        output_ids = self._sync_generate_ids(input_ids=input_ids, gen_config=gen_config)
+    def _sync_generate(self, input_ids: List[int], image: Optional[Image], gen_config: _C.GenerationConfig) -> str:
+        output_ids = self._sync_generate_ids(input_ids=input_ids, image=image, gen_config=gen_config)
         return self.tokenizer.decode(output_ids)
 
-    def _sync_chat(self, input_ids: List[int], gen_config: _C.GenerationConfig) -> ChatMessage:
-        output_ids = self._sync_generate_ids(input_ids=input_ids, gen_config=gen_config)
+    def _sync_chat(self, input_ids: List[int], image: Optional[Image], gen_config: _C.GenerationConfig) -> ChatMessage:
+        output_ids = self._sync_generate_ids(input_ids=input_ids, image=image, gen_config=gen_config)
         return self.tokenizer.decode_message(output_ids)
 
     def merge_streaming_messages(self, chunks: List[DeltaMessage]) -> ChatMessage:

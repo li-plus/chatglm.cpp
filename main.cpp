@@ -27,6 +27,7 @@ struct Args {
     bool sync = false;
     std::string prompt = "你好";
     std::string system = "";
+    std::string image_path = "";
     int max_length = 2048;
     int max_new_tokens = -1;
     int max_context_length = 512;
@@ -50,6 +51,7 @@ options:
   --pp, --prompt_path   path to the plain text file that stores the prompt
   -s, --system SYSTEM   system message to set the behavior of the assistant
   --sp, --system_path   path to the plain text file that stores the system message
+  --image               path to the input image for visual language models
   -i, --interactive     run in interactive mode
   -l, --max_length N    max total length including prompt and output (default: 2048)
   --max_new_tokens N    max number of tokens to generate, ignoring the number of prompt tokens
@@ -94,6 +96,8 @@ static Args parse_args(const std::vector<std::string> &argv) {
             args.system = argv.at(++i);
         } else if (arg == "--sp" || arg == "--system_path") {
             args.system = read_text(argv.at(++i));
+        } else if (arg == "--image") {
+            args.image_path = argv.at(++i);
         } else if (arg == "-i" || arg == "--interactive") {
             args.interactive = true;
         } else if (arg == "-l" || arg == "--max_length") {
@@ -219,6 +223,16 @@ static void chat(Args &args) {
         args.interactive = false;
     }
 
+    if (!args.image_path.empty() && pipeline.model->config.model_type != chatglm::ModelType::CHATGLM4V) {
+        std::cerr << "image is specified for model without visual ability, falling back to language mode\n";
+        args.image_path.clear();
+    }
+
+    std::optional<chatglm::Image> image;
+    if (!args.image_path.empty()) {
+        image = chatglm::Image::open(args.image_path);
+    }
+
     std::vector<chatglm::ChatMessage> system_messages;
     if (!args.system.empty()) {
         system_messages.emplace_back(chatglm::ChatMessage::ROLE_SYSTEM, args.system);
@@ -242,7 +256,8 @@ static void chat(Args &args) {
             std::cout << std::setw(model_name.size()) << std::left << "System"
                       << " > " << args.system << std::endl;
         }
-        while (1) {
+        auto prompt_image = image;
+        while (true) {
             std::string role;
             if (!messages.empty() && !messages.back().tool_calls.empty()) {
                 const auto &tool_call = messages.back().tool_calls.front();
@@ -273,9 +288,11 @@ static void chat(Args &args) {
             }
             if (prompt == "clear") {
                 messages = system_messages;
+                prompt_image = image;
                 continue;
             }
-            messages.emplace_back(std::move(role), std::move(prompt));
+            messages.emplace_back(std::move(role), std::move(prompt), std::move(prompt_image));
+            prompt_image.reset();
             std::cout << model_name << " > ";
             chatglm::ChatMessage output = pipeline.chat(messages, gen_config, streamer.get());
             if (args.sync) {
@@ -291,7 +308,7 @@ static void chat(Args &args) {
     } else {
         if (args.mode == INFERENCE_MODE_CHAT) {
             std::vector<chatglm::ChatMessage> messages = system_messages;
-            messages.emplace_back(chatglm::ChatMessage::ROLE_USER, args.prompt);
+            messages.emplace_back(chatglm::ChatMessage::ROLE_USER, args.prompt, std::move(image));
             chatglm::ChatMessage output = pipeline.chat(messages, gen_config, streamer.get());
             if (args.sync) {
                 print_message(output);

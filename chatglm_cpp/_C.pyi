@@ -3,9 +3,12 @@ ChatGLM.cpp python binding
 """
 from __future__ import annotations
 import typing
-__all__ = ['BaseModelForCausalLM', 'BaseTokenizer', 'ChatGLM2ForCausalLM', 'ChatGLM2Tokenizer', 'ChatGLM3Tokenizer', 'ChatGLM4Tokenizer', 'ChatGLMForCausalLM', 'ChatGLMTokenizer', 'ChatMessage', 'CodeMessage', 'FunctionMessage', 'GenerationConfig', 'ModelConfig', 'ModelType', 'Pipeline', 'ToolCallMessage']
+import typing_extensions
+__all__ = ['BaseModelForCausalLM', 'BaseTokenizer', 'ChatGLM2ForCausalLM', 'ChatGLM2Tokenizer', 'ChatGLM3Tokenizer', 'ChatGLM4Tokenizer', 'ChatGLMForCausalLM', 'ChatGLMTokenizer', 'ChatMessage', 'CodeMessage', 'FunctionMessage', 'GenerationConfig', 'Image', 'ModelConfig', 'ModelType', 'Pipeline', 'ToolCallMessage', 'VisionModelConfig']
 class BaseModelForCausalLM:
-    def generate_next_token(self, input_ids: list[int], gen_config: GenerationConfig, n_past: int, n_ctx: int) -> int:
+    def count_tokens(self, input_ids: list[int], image: Image | None) -> int:
+        ...
+    def generate_next_token(self, input_ids: list[int], image: Image | None, gen_config: GenerationConfig, n_past: int, n_ctx: int) -> int:
         ...
     @property
     def config(self) -> ModelConfig:
@@ -37,9 +40,10 @@ class ChatMessage:
     ROLE_SYSTEM: typing.ClassVar[str] = 'system'
     ROLE_USER: typing.ClassVar[str] = 'user'
     content: str
+    image: Image | None
     role: str
     tool_calls: list[ToolCallMessage]
-    def __init__(self, role: str, content: str, tool_calls: list[ToolCallMessage] = []) -> None:
+    def __init__(self, role: str, content: str, image: Image | None = None, tool_calls: list[ToolCallMessage] = []) -> None:
         ...
     def __repr__(self) -> str:
         ...
@@ -68,6 +72,25 @@ class GenerationConfig:
     top_k: int
     top_p: float
     def __init__(self, max_length: int = 2048, max_new_tokens: int = -1, max_context_length: int = 512, do_sample: bool = True, top_k: int = 0, top_p: float = 0.7, temperature: float = 0.95, repetition_penalty: float = 1.0) -> None:
+        ...
+class Image:
+    def __init__(self, arg0: typing_extensions.Buffer) -> None:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def channels(self) -> int:
+        ...
+    @property
+    def height(self) -> int:
+        ...
+    @property
+    def pixels(self) -> list[int]:
+        ...
+    @property
+    def width(self) -> int:
         ...
 class ModelConfig:
     @property
@@ -111,6 +134,9 @@ class ModelConfig:
         ...
     @property
     def sep_token_id(self) -> int:
+        ...
+    @property
+    def vision(self) -> VisionModelConfig:
         ...
     @property
     def vocab_size(self) -> int:
@@ -174,4 +200,35 @@ class ToolCallMessage:
     def __repr__(self) -> str:
         ...
     def __str__(self) -> str:
+        ...
+class VisionModelConfig:
+    @property
+    def hidden_size(self) -> int:
+        ...
+    @property
+    def image_size(self) -> int:
+        ...
+    @property
+    def in_channels(self) -> int:
+        ...
+    @property
+    def intermediate_size(self) -> int:
+        ...
+    @property
+    def norm_eps(self) -> float:
+        ...
+    @property
+    def num_attention_heads(self) -> int:
+        ...
+    @property
+    def num_hidden_layers(self) -> int:
+        ...
+    @property
+    def num_positions(self) -> int:
+        ...
+    @property
+    def patch_size(self) -> int:
+        ...
+    @property
+    def scaling_factor(self) -> float:
         ...

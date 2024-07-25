@@ -113,7 +113,7 @@ static void perplexity(Args &args) {
         size_t target_len = std::min(end - prev_end, size_t(args.max_length - 1));
         std::vector<int> input_ids(corpus_ids.begin() + begin, corpus_ids.begin() + end);
 
-        ggml_tensor *lm_logits = pipeline.model->forward_graph_compute(input_ids, 0, 0, false);
+        ggml_tensor *lm_logits = pipeline.model->forward_graph_compute(input_ids, std::nullopt, 0, 0, false);
 
         const auto clk_fwd = std::chrono::system_clock::now();
 

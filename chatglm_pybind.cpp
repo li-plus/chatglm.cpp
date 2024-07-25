@@ -30,14 +30,19 @@ class PyBaseModelForCausalLM : public BaseModelForCausalLM {
         PYBIND11_OVERLOAD_PURE(void, PyBaseModelForCausalLM, load_state_dict, sd);
     }
 
-    ggml_tensor *forward(ModelContext *ctx, ggml_tensor *input_ids, int n_past, int n_ctx,
-                         bool is_decoding) const override {
-        PYBIND11_OVERLOAD_PURE(ggml_tensor *, PyBaseModelForCausalLM, forward, ctx, input_ids, n_past, n_ctx,
-                               is_decoding)
+    ggml_tensor *forward(ModelContext *mctx, ggml_tensor *input_ids, ggml_tensor *images,
+                         const std::vector<int> &input_ids_vec, int n_past, bool is_decoding) const override {
+        PYBIND11_OVERLOAD_PURE(ggml_tensor *, PyBaseModelForCausalLM, forward, mctx, input_ids, images, input_ids_vec,
+                               n_past, is_decoding);
     }
 
-    void set_graph_inputs(int qlen, int n_past, int n_ctx) const override {
-        PYBIND11_OVERLOAD_PURE(void, PyBaseModelForCausalLM, set_graph_inputs, qlen, n_past, n_ctx);
+    void set_graph_inputs(const std::vector<int> &input_ids, const std::optional<Image> &image, int n_past,
+                          int n_ctx) const override {
+        PYBIND11_OVERLOAD_PURE(void, PyBaseModelForCausalLM, set_graph_inputs, input_ids, image, n_past, n_ctx);
+    }
+
+    int count_tokens(const std::vector<int> &input_ids, const std::optional<Image> &image) const override {
+        PYBIND11_OVERLOAD_PURE(int, PyBaseModelForCausalLM, count_tokens, input_ids, image);
     }
 };
 
@@ -57,6 +62,20 @@ PYBIND11_MODULE(_C, m) {
         .value("CHATGLM3", ModelType::CHATGLM3)
         .value("CHATGLM4", ModelType::CHATGLM4);
 
+    py::class_<VisionModelConfig>(m, "VisionModelConfig")
+        // .def_readonly("dtype", &VisionModelConfig::dtype)
+        // .def_readonly("hidden_act", &VisionModelConfig::hidden_act)
+        .def_readonly("hidden_size", &VisionModelConfig::hidden_size)
+        .def_readonly("image_size", &VisionModelConfig::image_size)
+        .def_readonly("in_channels", &VisionModelConfig::in_channels)
+        .def_readonly("intermediate_size", &VisionModelConfig::intermediate_size)
+        .def_readonly("norm_eps", &VisionModelConfig::norm_eps)
+        .def_readonly("num_attention_heads", &VisionModelConfig::num_attention_heads)
+        .def_readonly("num_hidden_layers", &VisionModelConfig::num_hidden_layers)
+        .def_readonly("num_positions", &VisionModelConfig::num_positions)
+        .def_readonly("patch_size", &VisionModelConfig::patch_size)
+        .def_readonly("scaling_factor", &VisionModelConfig::scaling_factor);
+
     py::class_<ModelConfig>(m, "ModelConfig")
         .def_readonly("model_type", &ModelConfig::model_type)
         // .def_readonly("dtype", &ModelConfig::dtype)
@@ -73,6 +92,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readonly("pad_token_id", &ModelConfig::pad_token_id)
         .def_readonly("sep_token_id", &ModelConfig::sep_token_id)
         .def_readonly("extra_eos_token_ids", &ModelConfig::extra_eos_token_ids)
+        .def_readonly("vision", &ModelConfig::vision)
         .def_property_readonly("model_type_name", &ModelConfig::model_type_name);
 
     py::class_<GenerationConfig>(m, "GenerationConfig")
@@ -106,9 +126,37 @@ PYBIND11_MODULE(_C, m) {
         .def_readwrite("function", &ToolCallMessage::function)
         .def_readwrite("code", &ToolCallMessage::code);
 
+    py::class_<Image>(m, "Image", py::buffer_protocol())
+        .def(py::init([](py::buffer b) {
+            py::buffer_info info = b.request();
+
+            CHATGLM_CHECK(info.format == py::format_descriptor<uint8_t>::format())
+                << "Incompatible format: expect a byte array!";
+            CHATGLM_CHECK(info.ndim == 3 && info.shape[2] == 3) << "Only support RGB image for now";
+
+            for (int i = 1; i < info.ndim; i++) {
+                CHATGLM_CHECK(info.strides[i] * info.shape[i] == info.strides[i - 1])
+                    << "Only support contiguous array";
+            }
+
+            return Image(info.shape[1], info.shape[0], info.shape[2], (uint8_t *)info.ptr);
+        }))
+        .def_buffer([](Image &self) {
+            return py::buffer_info(
+                self.pixels.data(), sizeof(uint8_t), py::format_descriptor<uint8_t>::format(), 3,
+                {self.height, self.width, self.channels},
+                {self.width * self.channels * sizeof(uint8_t), self.channels * sizeof(uint8_t), sizeof(uint8_t)});
+        })
+        .def("__repr__", &to_string<Image>)
+        .def("__str__", &to_string<Image>)
+        .def_readonly("width", &Image::width)
+        .def_readonly("height", &Image::height)
+        .def_readonly("channels", &Image::channels)
+        .def_readonly("pixels", &Image::pixels);
+
     py::class_<ChatMessage>(m, "ChatMessage")
-        .def(py::init<std::string, std::string, std::vector<ToolCallMessage>>(), "role"_a, "content"_a,
-             "tool_calls"_a = std::vector<ToolCallMessage>{})
+        .def(py::init<std::string, std::string, std::optional<Image>, std::vector<ToolCallMessage>>(), "role"_a,
+             "content"_a, "image"_a = std::nullopt, "tool_calls"_a = std::vector<ToolCallMessage>{})
         .def("__repr__", &to_string<ChatMessage>)
         .def("__str__", &to_string<ChatMessage>)
         .def_readonly_static("ROLE_SYSTEM", &ChatMessage::ROLE_SYSTEM)
@@ -117,6 +165,7 @@ PYBIND11_MODULE(_C, m) {
         .def_readonly_static("ROLE_OBSERVATION", &ChatMessage::ROLE_OBSERVATION)
         .def_readwrite("role", &ChatMessage::role)
         .def_readwrite("content", &ChatMessage::content)
+        .def_readwrite("image", &ChatMessage::image)
         .def_readwrite("tool_calls", &ChatMessage::tool_calls);
 
     py::class_<BaseTokenizer, PyBaseTokenizer>(m, "BaseTokenizer")
@@ -126,8 +175,9 @@ PYBIND11_MODULE(_C, m) {
         .def("decode_message", &BaseTokenizer::decode_message, "ids"_a);
 
     py::class_<BaseModelForCausalLM, PyBaseModelForCausalLM>(m, "BaseModelForCausalLM")
-        .def("generate_next_token", &BaseModelForCausalLM::generate_next_token, "input_ids"_a, "gen_config"_a,
-             "n_past"_a, "n_ctx"_a)
+        .def("generate_next_token", &BaseModelForCausalLM::generate_next_token, "input_ids"_a, "image"_a,
+             "gen_config"_a, "n_past"_a, "n_ctx"_a)
+        .def("count_tokens", &BaseModelForCausalLM::count_tokens, "input_ids"_a, "image"_a)
         .def_readonly("config", &BaseModelForCausalLM::config);
 
     // ===== ChatGLM =====

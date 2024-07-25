@@ -8,7 +8,7 @@ import struct
 import sys
 from enum import Enum
 from pathlib import Path
-from typing import BinaryIO, Optional
+from typing import BinaryIO, NamedTuple, Optional
 
 import torch
 import torch.nn.functional as F
@@ -49,6 +49,12 @@ class ModelType(Enum):
     CHATGLM2 = 2
     CHATGLM3 = 3
     CHATGLM4 = 4
+    CHATGLM4V = 1004
+
+
+class WeightMeta(NamedTuple):
+    name: str
+    dtype: ModelType
 
 
 def quantize_q8_0(tensor: torch.Tensor) -> torch.Tensor:
@@ -162,51 +168,36 @@ def dump_tensor(f, name: str, tensor: torch.Tensor, ggml_type: GGMLType):
     tensor.numpy().tofile(f)
 
 
-def dump_state_dict(f, weight_names, state_dict, quantization_bit, ggml_type):
+def dump_state_dict(f, weight_meta, state_dict, quantization_bit):
     tensor_info = []
-    for name in tqdm(weight_names, desc="Processing model states"):
-        tensor = state_dict[name]
-        if name == "past_key_values":
-            tensor_ggml_type = GGMLType.F16
-        elif tensor.ndim == 2:
-            # 2d weight: should quantize it if needed
+    for meta in tqdm(weight_meta, desc="Processing model states"):
+        tensor = state_dict[meta.name]
+        if tensor.ndim == 2 and tensor.dtype == torch.int8:
+            # de-quantize gemm weight back to float32
+            assert quantization_bit in [4, 8]
+            scale = state_dict[f"{meta.name}_scale"].float()  # channel-wise scale
 
-            # step 1: de-quantize it back to float32
-            if tensor.dtype == torch.int8:
-                assert quantization_bit in [4, 8]
-                scale = state_dict[f"{name}_scale"].float()  # channel-wise scale
+            if quantization_bit == 4:
+                # convert int4 weight to int8
+                low_bits = ((tensor << 4) & 0xF0) >> 4
+                high_bits = (tensor & 0xF0) >> 4
+                tensor = torch.stack((high_bits, low_bits), dim=-1).view(tensor.shape[0], -1)
+            tensor = tensor * scale[:, None]
 
-                if quantization_bit == 4:
-                    # convert int4 weight to int8
-                    low_bits = ((tensor << 4) & 0xF0) >> 4
-                    high_bits = (tensor & 0xF0) >> 4
-                    tensor = torch.stack((high_bits, low_bits), dim=-1).view(tensor.shape[0], -1)
-                tensor = tensor * scale[:, None]
-            else:
-                tensor = tensor.float()
-
-            # step 2: quantize it into ggml format
-            tensor_ggml_type = ggml_type
-        else:
-            # 1d weight: convert it to float32
-            assert tensor.ndim == 1
-            tensor = tensor.float()
-            tensor_ggml_type = GGMLType.F32
-
-        dump_tensor(f, name, tensor, tensor_ggml_type)
-        tensor_info.append((name, tuple(tensor.shape), tensor_ggml_type.name))
+        dump_tensor(f, meta.name, tensor, meta.dtype)
+        tensor_info.append((meta.name, tuple(tensor.shape), meta.dtype.name))
 
     print(tabulate(tensor_info, headers=["name", "shape", "dtype"], tablefmt="psql"))
 
 
 class BaseConverter:
     @classmethod
-    def convert(cls, f, model, tokenizer, ggml_type):
+    def convert(cls, f, model, tokenizer, ggml_type, vision_type=None):
         f.write(b"ggml")  # magic
         f.write(struct.pack("i", cls.MODEL_TYPE.value))  # model type
-        cls.dump_config(f, model.config, ggml_type)
+        cls.dump_config(f, model.config, ggml_type, vision_type)
         cls.dump_tokenizer(f, tokenizer)
-        cls.dump_model(f, model, ggml_type)
+        cls.dump_model(f, model, ggml_type, vision_type)
 
 
 def get_prefix_cache(prefix_encoder, pre_seq_len, num_layers, num_key_value_heads, head_size):
@@ -226,7 +217,7 @@ class ChatGLMConverter(BaseConverter):
     MODEL_TYPE = ModelType.CHATGLM
 
     @staticmethod
-    def dump_config(f, config, ggml_type):
+    def dump_config(f, config, ggml_type, vision_type):
         assert config.position_encoding_2d, "unimplemented: position_encoding_2d should be True"
         assert (
             config.inner_hidden_size == 4 * config.hidden_size
@@ -257,39 +248,39 @@ class ChatGLMConverter(BaseConverter):
         f.write(serialized_model_proto)
 
     @staticmethod
-    def dump_model(f, model, ggml_type):
+    def dump_model(f, model, ggml_type, vision_type):
         assert torch.allclose(
             model.state_dict()["transformer.word_embeddings.weight"], model.state_dict()["lm_head.weight"]
         ), "unimplemented: lm_head weight must be tied to input embedding"
 
-        weight_names = ["transformer.word_embeddings.weight"]
+        weight_meta = [WeightMeta("transformer.word_embeddings.weight", ggml_type)]
         for i in range(model.config.num_layers):
-            weight_names += [
-                f"transformer.layers.{i}.input_layernorm.weight",
-                f"transformer.layers.{i}.input_layernorm.bias",
-                f"transformer.layers.{i}.attention.query_key_value.weight",
-                f"transformer.layers.{i}.attention.query_key_value.bias",
-                f"transformer.layers.{i}.attention.dense.weight",
-                f"transformer.layers.{i}.attention.dense.bias",
-                f"transformer.layers.{i}.post_attention_layernorm.weight",
-                f"transformer.layers.{i}.post_attention_layernorm.bias",
-                f"transformer.layers.{i}.mlp.dense_h_to_4h.weight",
-                f"transformer.layers.{i}.mlp.dense_h_to_4h.bias",
-                f"transformer.layers.{i}.mlp.dense_4h_to_h.weight",
-                f"transformer.layers.{i}.mlp.dense_4h_to_h.bias",
+            weight_meta += [
+                WeightMeta(f"transformer.layers.{i}.input_layernorm.weight", GGMLType.F32),
+                WeightMeta(f"transformer.layers.{i}.input_layernorm.bias", GGMLType.F32),
+                WeightMeta(f"transformer.layers.{i}.attention.query_key_value.weight", ggml_type),
+                WeightMeta(f"transformer.layers.{i}.attention.query_key_value.bias", GGMLType.F32),
+                WeightMeta(f"transformer.layers.{i}.attention.dense.weight", ggml_type),
+                WeightMeta(f"transformer.layers.{i}.attention.dense.bias", GGMLType.F32),
+                WeightMeta(f"transformer.layers.{i}.post_attention_layernorm.weight", GGMLType.F32),
+                WeightMeta(f"transformer.layers.{i}.post_attention_layernorm.bias", GGMLType.F32),
+                WeightMeta(f"transformer.layers.{i}.mlp.dense_h_to_4h.weight", ggml_type),
+                WeightMeta(f"transformer.layers.{i}.mlp.dense_h_to_4h.bias", GGMLType.F32),
+                WeightMeta(f"transformer.layers.{i}.mlp.dense_4h_to_h.weight", ggml_type),
+                WeightMeta(f"transformer.layers.{i}.mlp.dense_4h_to_h.bias", GGMLType.F32),
             ]
-        weight_names += [
-            "transformer.final_layernorm.weight",
-            "transformer.final_layernorm.bias",
+        weight_meta += [
+            WeightMeta("transformer.final_layernorm.weight", GGMLType.F32),
+            WeightMeta("transformer.final_layernorm.bias", GGMLType.F32),
         ]
-        dump_state_dict(f, weight_names, model.state_dict(), model.config.quantization_bit, ggml_type)
+        dump_state_dict(f, weight_meta, model.state_dict(), model.config.quantization_bit)
 
 
 class ChatGLM2Converter(BaseConverter):
     MODEL_TYPE = ModelType.CHATGLM2
 
     @classmethod
-    def dump_config(cls, f, config, ggml_type):
+    def dump_config(cls, f, config, ggml_type, vision_type):
         assert config.add_bias_linear is False, "unimplemented: add_bias_linear must be false"
         assert config.add_qkv_bias is True, "unimplemented: add_qkv_bias must be true"
         assert (
@@ -329,12 +320,12 @@ class ChatGLM2Converter(BaseConverter):
         f.write(serialized_model_proto)
 
     @staticmethod
-    def dump_model(f, model, ggml_type):
+    def dump_model(f, model, ggml_type, vision_type):
         config = model.config
 
         state_dict = model.state_dict()
 
-        weight_names = []
+        weight_meta = []
         if getattr(config, "pre_seq_len", None) is not None and config.pre_seq_len > 0:
             past_key_values = get_prefix_cache(
                 model.transformer.prefix_encoder,
@@ -344,29 +335,28 @@ class ChatGLM2Converter(BaseConverter):
                 config.kv_channels,
             )
             state_dict["past_key_values"] = past_key_values
-            weight_names.append("past_key_values")
+            weight_meta.append(WeightMeta("past_key_values", GGMLType.F16))
 
-        weight_names.append("transformer.embedding.word_embeddings.weight")
+        weight_meta.append(WeightMeta("transformer.embedding.word_embeddings.weight", ggml_type))
         for i in range(config.num_layers):
-            weight_names += [
-                f"transformer.encoder.layers.{i}.input_layernorm.weight",
-                f"transformer.encoder.layers.{i}.self_attention.query_key_value.weight",
-                f"transformer.encoder.layers.{i}.self_attention.query_key_value.bias",
-                f"transformer.encoder.layers.{i}.self_attention.dense.weight",
-                f"transformer.encoder.layers.{i}.post_attention_layernorm.weight",
-                f"transformer.encoder.layers.{i}.mlp.dense_h_to_4h.weight",
-                f"transformer.encoder.layers.{i}.mlp.dense_4h_to_h.weight",
+            weight_meta += [
+                WeightMeta(f"transformer.encoder.layers.{i}.input_layernorm.weight", GGMLType.F32),
+                WeightMeta(f"transformer.encoder.layers.{i}.self_attention.query_key_value.weight", ggml_type),
+                WeightMeta(f"transformer.encoder.layers.{i}.self_attention.query_key_value.bias", GGMLType.F32),
+                WeightMeta(f"transformer.encoder.layers.{i}.self_attention.dense.weight", ggml_type),
+                WeightMeta(f"transformer.encoder.layers.{i}.post_attention_layernorm.weight", GGMLType.F32),
+                WeightMeta(f"transformer.encoder.layers.{i}.mlp.dense_h_to_4h.weight", ggml_type),
+                WeightMeta(f"transformer.encoder.layers.{i}.mlp.dense_4h_to_h.weight", ggml_type),
             ]
-        weight_names += [
-            "transformer.encoder.final_layernorm.weight",
-            "transformer.output_layer.weight",
+        weight_meta += [
+            WeightMeta("transformer.encoder.final_layernorm.weight", GGMLType.F32),
+            WeightMeta("transformer.output_layer.weight", ggml_type),
         ]
         dump_state_dict(
             f,
-            weight_names=weight_names,
+            weight_meta=weight_meta,
             state_dict=state_dict,
             quantization_bit=getattr(config, "quantization_bit", None),
-            ggml_type=ggml_type,
         )
 
 
@@ -384,8 +374,103 @@ class ChatGLM4Converter(ChatGLM2Converter):
         f.write(vocab_text)
 
 
-def convert(f: BinaryIO, model_name_or_path: str, lora_model_name_or_path: Optional[str] = None, dtype: str = "q4_0"):
+class ChatGLM4VConverter(ChatGLM4Converter):
+    MODEL_TYPE = ModelType.CHATGLM4V
+
+    @classmethod
+    def dump_config(cls, f, config, ggml_type, vision_type):
+        ChatGLM4Converter.dump_config(f, config, ggml_type, vision_type)
+
+        config_values = [
+            vision_type.value,
+            config.vision_config["hidden_size"],
+            config.vision_config["image_size"],
+            config.vision_config["in_channels"],
+            config.vision_config["intermediate_size"],
+            config.vision_config["layer_norm_eps"],
+            config.vision_config["num_heads"],
+            config.vision_config["num_hidden_layers"],
+            config.vision_config["num_positions"],
+            config.vision_config["patch_size"],
+            config.vision_config["scaling_factor"],
+        ]
+
+        f.write(struct.pack("iiiiifiiiif", *config_values))
+
+    @staticmethod
+    def dump_model(f, model, ggml_type, vision_type):
+        config = model.config
+
+        state_dict = model.state_dict()
+
+        # vision
+        weight_meta = [
+            WeightMeta("transformer.vision.patch_embedding.cls_embedding", GGMLType.F16),
+            WeightMeta("transformer.vision.patch_embedding.proj.weight", GGMLType.F16),
+            WeightMeta("transformer.vision.patch_embedding.proj.bias", GGMLType.F32),
+            WeightMeta("transformer.vision.patch_embedding.position_embedding.weight", GGMLType.F32),
+        ]
+        for i in range(config.vision_config["num_hidden_layers"]):
+            weight_meta += [
+                WeightMeta(f"transformer.vision.transformer.layers.{i}.input_layernorm.weight", GGMLType.F32),
+                WeightMeta(f"transformer.vision.transformer.layers.{i}.input_layernorm.bias", GGMLType.F32),
+                WeightMeta(f"transformer.vision.transformer.layers.{i}.attention.query_key_value.weight", vision_type),
+                WeightMeta(f"transformer.vision.transformer.layers.{i}.attention.query_key_value.bias", GGMLType.F32),
+                WeightMeta(f"transformer.vision.transformer.layers.{i}.attention.dense.weight", vision_type),
+                WeightMeta(f"transformer.vision.transformer.layers.{i}.attention.dense.bias", GGMLType.F32),
+                WeightMeta(f"transformer.vision.transformer.layers.{i}.mlp.fc1.weight", vision_type),
+                WeightMeta(f"transformer.vision.transformer.layers.{i}.mlp.fc1.bias", GGMLType.F32),
+                WeightMeta(f"transformer.vision.transformer.layers.{i}.mlp.fc2.weight", vision_type),
+                WeightMeta(f"transformer.vision.transformer.layers.{i}.mlp.fc2.bias", GGMLType.F32),
+                WeightMeta(f"transformer.vision.transformer.layers.{i}.post_attention_layernorm.weight", GGMLType.F32),
+                WeightMeta(f"transformer.vision.transformer.layers.{i}.post_attention_layernorm.bias", GGMLType.F32),
+            ]
+        weight_meta += [
+            WeightMeta("transformer.vision.conv.weight", GGMLType.F16),
+            WeightMeta("transformer.vision.conv.bias", GGMLType.F32),
+            WeightMeta("transformer.vision.linear_proj.linear_proj.weight", vision_type),
+            WeightMeta("transformer.vision.linear_proj.norm1.weight", GGMLType.F32),
+            WeightMeta("transformer.vision.linear_proj.norm1.bias", GGMLType.F32),
+            WeightMeta("transformer.vision.linear_proj.gate_proj.weight", vision_type),
+            WeightMeta("transformer.vision.linear_proj.dense_h_to_4h.weight", vision_type),
+            WeightMeta("transformer.vision.linear_proj.dense_4h_to_h.weight", vision_type),
+            WeightMeta("transformer.vision.boi", GGMLType.F16),
+            WeightMeta("transformer.vision.eoi", GGMLType.F16),
+        ]
+
+        # text
+        weight_meta.append(WeightMeta("transformer.embedding.word_embeddings.weight", ggml_type))
+        for i in range(config.num_layers):
+            weight_meta += [
+                WeightMeta(f"transformer.encoder.layers.{i}.input_layernorm.weight", GGMLType.F32),
+                WeightMeta(f"transformer.encoder.layers.{i}.self_attention.query_key_value.weight", ggml_type),
+                WeightMeta(f"transformer.encoder.layers.{i}.self_attention.query_key_value.bias", GGMLType.F32),
+                WeightMeta(f"transformer.encoder.layers.{i}.self_attention.dense.weight", ggml_type),
+                WeightMeta(f"transformer.encoder.layers.{i}.post_attention_layernorm.weight", GGMLType.F32),
+                WeightMeta(f"transformer.encoder.layers.{i}.mlp.dense_h_to_4h.weight", ggml_type),
+                WeightMeta(f"transformer.encoder.layers.{i}.mlp.dense_4h_to_h.weight", ggml_type),
+            ]
+        weight_meta += [
+            WeightMeta("transformer.encoder.final_layernorm.weight", GGMLType.F32),
+            WeightMeta("transformer.output_layer.weight", ggml_type),
+        ]
+        dump_state_dict(
+            f,
+            weight_meta=weight_meta,
+            state_dict=state_dict,
+            quantization_bit=getattr(config, "quantization_bit", None),
+        )
+
+
+def convert(
+    f: BinaryIO,
+    model_name_or_path: str,
+    lora_model_name_or_path: Optional[str] = None,
+    dtype: str = "q4_0",
+    vision_dtype: str = "f16",
+):
     ggml_type = GGMLType[dtype.upper()]
+    vision_type = GGMLType[vision_dtype.upper()]
 
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
 
@@ -415,7 +500,10 @@ def convert(f: BinaryIO, model_name_or_path: str, lora_model_name_or_path: Optio
             if tiktoken is not None and isinstance(tokenizer.tokenizer, tiktoken.Encoding):
                 # TODO: store all eos token ids
                 model.config.eos_token_id = tokenizer.eos_token_id
-                ChatGLM4Converter.convert(f, model, tokenizer, ggml_type)
+                if getattr(model.config, "vision_config", None) is not None:
+                    ChatGLM4VConverter.convert(f, model, tokenizer, ggml_type, vision_type)
+                else:
+                    ChatGLM4Converter.convert(f, model, tokenizer, ggml_type)
             elif "<|system|>" in tokenizer.tokenizer.special_tokens:
                 ChatGLM3Converter.convert(f, model, tokenizer, ggml_type)
             else:
@@ -453,10 +541,20 @@ def main():
         choices=["f32", "f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1"],
         help="GGML model quantization type",
     )
+    parser.add_argument(
+        "-vt",
+        "--vision_type",
+        default="f16",
+        type=str,
+        choices=["f32", "f16", "q8_0", "q4_0", "q4_1", "q5_0", "q5_1"],
+        help="Vision model quantization type",
+    )
     args = parser.parse_args()
 
     with open(args.save_path, "wb") as f:
-        convert(f, args.model_name_or_path, args.lora_model_name_or_path, dtype=args.type)
+        convert(
+            f, args.model_name_or_path, args.lora_model_name_or_path, dtype=args.type, vision_dtype=args.vision_type
+        )
 
     print(f"GGML model saved to {args.save_path}")
 
