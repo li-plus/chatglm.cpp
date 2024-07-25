@@ -2,9 +2,7 @@ import base64
 from pathlib import Path
 
 import chatglm_cpp
-import numpy as np
 import pytest
-from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -86,6 +84,9 @@ def test_chatglm4_pipeline():
 
 @pytest.mark.skipif(not CHATGLM4V_MODEL_PATH.exists(), reason="model file not found")
 def test_chatglm4v_pipeline():
+    import numpy as np
+    from PIL import Image
+
     check_pipeline(
         model_path=CHATGLM4V_MODEL_PATH,
         prompt="你好",
