@@ -48,6 +48,10 @@
 #include <ggml-cuda.h>
 #endif
 
+#ifdef GGML_USE_METAL
+#include <ggml-metal.h>
+#endif
+
 namespace chatglm {
 
 static std::string shape_to_string(ggml_tensor *tensor) {
@@ -1114,8 +1118,27 @@ ggml_tensor *GLMBlock::forward(ModelContext *mctx, ggml_tensor *hidden_states, g
     return output;
 }
 
+static void alloc_weight_context(ModelContext *mctx, const ggml_backend_buffer_t sd_buf) {
+    void *sd_buf_base = ggml_backend_buffer_get_base(sd_buf);
+    const size_t sd_buf_size = ggml_backend_buffer_get_size(sd_buf);
+    if (ggml_backend_is_cpu(mctx->backend.get())) {
+        mctx->buf_w = unique_ggml_backend_buffer_t(ggml_backend_cpu_buffer_from_ptr(sd_buf_base, sd_buf_size));
+    }
+#ifdef GGML_USE_METAL
+    else if (ggml_backend_is_metal(mctx->backend.get())) {
+        const size_t max_size = ggml_get_max_tensor_size(mctx->ctx_w.get());
+        mctx->buf_w =
+            unique_ggml_backend_buffer_t(ggml_backend_metal_buffer_from_ptr(sd_buf_base, sd_buf_size, max_size));
+    }
+#endif
+    else {
+        mctx->buf_w =
+            unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx->ctx_w.get(), mctx->backend.get()));
+    }
+}
+
 void ChatGLMForCausalLM::load_state_dict(const StateDict &sd) {
-    alloc_weight_context(sd.buf.get());
+    alloc_weight_context(mctx_.get(), sd.buf.get());
 
     StateDict self_sd = state_dict();
     for (auto &item : self_sd.kv) {
@@ -1255,7 +1278,7 @@ bool ChatGLM2Tokenizer::is_special_id(int id) const {
 }
 
 void ChatGLM2ForCausalLM::load_state_dict(const StateDict &sd) {
-    alloc_weight_context(sd.buf.get());
+    alloc_weight_context(mctx_.get(), sd.buf.get());
 
     if (config.num_virtual_tokens > 0) {
         ggml_tensor *past_key_values = sd.kv.at("past_key_values");
@@ -1955,7 +1978,7 @@ int ChatGLM4VForCausalLM::count_tokens(const std::vector<int> &input_ids, const 
 }
 
 void ChatGLM4VForCausalLM::load_state_dict(const StateDict &sd) {
-    alloc_weight_context(sd.buf.get());
+    alloc_weight_context(mctx_.get(), sd.buf.get());
 
     auto self_sd = state_dict();
     ChatGLM2ForCausalLM::load_state_dict(mctx_.get(), self_sd, sd);
