@@ -195,7 +195,6 @@ class ModelConfig {
             interleaved_qkv = true;
             tie_word_embeddings = true;
             rope_type = RopeType::CHATGLM;
-            attn_mask_type = AttentionMaskType::CHATGLM;
         } else {
             hidden_act = ActivationType::SILU;
             use_qkv_bias = true;
@@ -203,7 +202,6 @@ class ModelConfig {
             interleaved_qkv = false;
             tie_word_embeddings = false;
             rope_type = RopeType::CHATGLM2;
-            attn_mask_type = AttentionMaskType::CAUSAL;
         }
     }
 
@@ -238,11 +236,10 @@ class ModelConfig {
            << ", hidden_act=" << (int)self.hidden_act << ", use_qkv_bias=" << self.use_qkv_bias
            << ", use_dense_bias=" << self.use_dense_bias << ", interleaved_qkv=" << self.interleaved_qkv
            << ", tie_word_embeddings=" << self.tie_word_embeddings << ", rope_type=" << (int)self.rope_type
-           << ", rope_theta=" << self.rope_theta << ", attn_mask_type=" << (int)self.attn_mask_type
-           << ", num_virtual_tokens=" << self.num_virtual_tokens << ", max_length=" << self.max_length
-           << ", bos_token_id=" << self.bos_token_id << ", eos_token_id=" << self.eos_token_id
-           << ", pad_token_id=" << self.pad_token_id << ", sep_token_id=" << self.sep_token_id
-           << ", extra_eos_token_ids={";
+           << ", rope_theta=" << self.rope_theta << ", num_virtual_tokens=" << self.num_virtual_tokens
+           << ", max_length=" << self.max_length << ", bos_token_id=" << self.bos_token_id
+           << ", eos_token_id=" << self.eos_token_id << ", pad_token_id=" << self.pad_token_id
+           << ", sep_token_id=" << self.sep_token_id << ", extra_eos_token_ids={";
         for (size_t i = 0; i < self.extra_eos_token_ids.size(); i++) {
             os << (i > 0 ? ", " : "") << self.extra_eos_token_ids[i];
         }
@@ -266,7 +263,6 @@ class ModelConfig {
     bool tie_word_embeddings;
     RopeType rope_type;
     float rope_theta;
-    AttentionMaskType attn_mask_type;
     int num_virtual_tokens;
     int max_length;
     int bos_token_id;
@@ -573,18 +569,17 @@ class BasicAttention {
 
     BasicAttention(ModelContext *mctx, ggml_type dtype, int hidden_size, int num_attention_heads,
                    int num_key_value_heads, int max_length, bool use_qkv_bias, bool use_dense_bias,
-                   bool interleaved_qkv, RopeType rope_type, float rope_theta, AttentionMaskType attn_mask_type,
-                   int num_virtual_tokens, bool use_cache)
+                   bool interleaved_qkv, RopeType rope_type, float rope_theta, int num_virtual_tokens, bool use_cache)
         : num_attention_heads(num_attention_heads), num_key_value_heads(num_key_value_heads),
           interleaved_qkv(interleaved_qkv), rope_type(rope_type), rope_theta(rope_theta),
-          attn_mask_type(attn_mask_type), num_virtual_tokens(num_virtual_tokens),
+          num_virtual_tokens(num_virtual_tokens),
           query_key_value(mctx, dtype, hidden_size,
                           hidden_size + 2 * (hidden_size / num_attention_heads) * num_key_value_heads, use_qkv_bias),
           dense(mctx, dtype, hidden_size, hidden_size, use_dense_bias),
-          k_cache(use_cache ? ggml_new_tensor_3d(mctx->ctx_kv.get(), GGML_TYPE_F32, hidden_size / num_attention_heads,
+          k_cache(use_cache ? ggml_new_tensor_3d(mctx->ctx_kv.get(), GGML_TYPE_F16, hidden_size / num_attention_heads,
                                                  max_length + num_virtual_tokens, num_key_value_heads)
                             : nullptr),
-          v_cache(use_cache ? ggml_new_tensor_3d(mctx->ctx_kv.get(), GGML_TYPE_F32, max_length + num_virtual_tokens,
+          v_cache(use_cache ? ggml_new_tensor_3d(mctx->ctx_kv.get(), GGML_TYPE_F16, max_length + num_virtual_tokens,
                                                  hidden_size / num_attention_heads, num_key_value_heads)
                             : nullptr) {}
 
@@ -597,7 +592,6 @@ class BasicAttention {
     bool interleaved_qkv;
     RopeType rope_type;
     float rope_theta;
-    AttentionMaskType attn_mask_type;
     int num_virtual_tokens;
     Linear query_key_value;
     Linear dense;
@@ -611,12 +605,11 @@ class BasicBlock {
     BasicBlock() = default;
     BasicBlock(ModelContext *mctx, ggml_type dtype, int hidden_size, int num_attention_heads, int num_key_value_heads,
                int intermediate_size, int max_length, float norm_eps, ActivationType hidden_act, bool use_qkv_bias,
-               bool use_dense_bias, bool interleaved_qkv, RopeType rope_type, float rope_theta,
-               AttentionMaskType attn_mask_type, int num_virtual_tokens, bool use_cache)
+               bool use_dense_bias, bool interleaved_qkv, RopeType rope_type, float rope_theta, int num_virtual_tokens,
+               bool use_cache)
         : input_layernorm(mctx, hidden_size, norm_eps),
           attention(mctx, dtype, hidden_size, num_attention_heads, num_key_value_heads, max_length, use_qkv_bias,
-                    use_dense_bias, interleaved_qkv, rope_type, rope_theta, attn_mask_type, num_virtual_tokens,
-                    use_cache),
+                    use_dense_bias, interleaved_qkv, rope_type, rope_theta, num_virtual_tokens, use_cache),
           post_attention_layernorm(mctx, hidden_size, norm_eps),
           mlp(mctx, dtype, hidden_size, intermediate_size, hidden_act) {}
 
@@ -663,17 +656,7 @@ struct GLMPositionIdsAllocator {
     }
 };
 
-struct NoopAttentionMaskAllocator {
-    ggml_tensor *operator()(ggml_context *ctx, int qlen, int kvlen) const { return nullptr; }
-};
-
-struct BasicAttentionMaskAllocator {
-    ggml_tensor *operator()(ggml_context *ctx, int qlen, int kvlen) const {
-        return ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kvlen, qlen);
-    }
-};
-
-template <typename Block, typename Norm, typename AttentionMaskAllocator, typename PositionIdsAllocator>
+template <typename Block, typename Norm, typename PositionIdsAllocator>
 class BasicModel {
   public:
     BasicModel() = default;
@@ -700,8 +683,9 @@ class BasicModel {
             ggml_set_input(position_ids);
         }
 
-        ggml_tensor *attention_mask = attn_mask_alloc_(ctx, qlen, kvlen);
-        if (attention_mask) {
+        ggml_tensor *attention_mask = nullptr;
+        if (n_past == 0) {
+            attention_mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kvlen, qlen);
             ggml_set_name(attention_mask, "attention_mask");
             ggml_set_input(attention_mask);
         }
@@ -765,8 +749,8 @@ class BasicModel {
             layers.emplace_back(mctx, config.dtype, config.hidden_size, config.num_attention_heads,
                                 config.num_key_value_heads, config.intermediate_size, config.max_length,
                                 config.norm_eps, config.hidden_act, config.use_qkv_bias, config.use_dense_bias,
-                                config.interleaved_qkv, config.rope_type, config.rope_theta, config.attn_mask_type,
-                                config.num_virtual_tokens, true);
+                                config.interleaved_qkv, config.rope_type, config.rope_theta, config.num_virtual_tokens,
+                                true);
         }
         mctx->buf_kv =
             unique_ggml_backend_buffer_t(ggml_backend_alloc_ctx_tensors(mctx->ctx_kv.get(), mctx->backend.get()));
@@ -779,7 +763,6 @@ class BasicModel {
     Norm final_layernorm;
 
   private:
-    AttentionMaskAllocator attn_mask_alloc_;
     PositionIdsAllocator pos_ids_alloc_;
 };
 
@@ -1039,12 +1022,12 @@ class GLMBlock : public BasicBlock<LayerNorm, BasicMLP> {
 
     GLMBlock(ModelContext *mctx, ggml_type dtype, int hidden_size, int num_attention_heads, int num_key_value_heads,
              int intermediate_size, int max_length, float norm_eps, ActivationType hidden_act, bool use_qkv_bias,
-             bool use_dense_bias, bool interleaved_qkv, RopeType rope_type, float rope_theta,
-             AttentionMaskType attn_mask_type, int num_virtual_tokens, bool use_cache)
+             bool use_dense_bias, bool interleaved_qkv, RopeType rope_type, float rope_theta, int num_virtual_tokens,
+             bool use_cache)
         : BasicBlock(LayerNorm(mctx, hidden_size, norm_eps),
                      BasicAttention(mctx, dtype, hidden_size, num_attention_heads, num_attention_heads, max_length,
                                     use_qkv_bias, use_dense_bias, interleaved_qkv, rope_type, rope_theta,
-                                    attn_mask_type, num_virtual_tokens, use_cache),
+                                    num_virtual_tokens, use_cache),
                      LayerNorm(mctx, hidden_size, norm_eps),
                      BasicMLP(mctx, dtype, hidden_size, intermediate_size, hidden_act)),
           alpha(std::sqrt(2.f * 28)) {}
@@ -1056,7 +1039,7 @@ class GLMBlock : public BasicBlock<LayerNorm, BasicMLP> {
     float alpha;
 };
 
-class ChatGLMModel : public BasicModel<GLMBlock, LayerNorm, BasicAttentionMaskAllocator, GLMPositionIdsAllocator> {
+class ChatGLMModel : public BasicModel<GLMBlock, LayerNorm, GLMPositionIdsAllocator> {
   public:
     ChatGLMModel() = default;
 
@@ -1104,7 +1087,7 @@ class ChatGLM2Tokenizer : public BaseTokenizer {
 
 using GLM2Block = BasicBlock<RMSNorm, BasicGLU>;
 
-class ChatGLM2Model : public BasicModel<GLM2Block, RMSNorm, NoopAttentionMaskAllocator, BasicPositionIdsAllocator> {
+class ChatGLM2Model : public BasicModel<GLM2Block, RMSNorm, BasicPositionIdsAllocator> {
   public:
     ChatGLM2Model() = default;
 
@@ -1289,11 +1272,10 @@ class EVA2CLIPBlock : public BasicBlock<LayerNorm, BasicMLP> {
     EVA2CLIPBlock(ModelContext *mctx, ggml_type dtype, int hidden_size, int num_attention_heads,
                   int num_key_value_heads, int intermediate_size, int max_length, float norm_eps,
                   ActivationType hidden_act, bool use_qkv_bias, bool use_dense_bias, bool interleaved_qkv,
-                  RopeType rope_type, float rope_theta, AttentionMaskType attn_mask_type, int num_virtual_tokens,
-                  bool use_cache)
+                  RopeType rope_type, float rope_theta, int num_virtual_tokens, bool use_cache)
         : BasicBlock(mctx, dtype, hidden_size, num_attention_heads, num_key_value_heads, intermediate_size, max_length,
                      norm_eps, hidden_act, use_qkv_bias, use_dense_bias, interleaved_qkv, rope_type, rope_theta,
-                     attn_mask_type, num_virtual_tokens, use_cache) {}
+                     num_virtual_tokens, use_cache) {}
 
     ggml_tensor *forward(ModelContext *mctx, ggml_tensor *hidden_states, ggml_tensor *attention_mask,
                          ggml_tensor *position_ids, int n_past) const;
@@ -1305,7 +1287,7 @@ class EVA2CLIPTransformer {
 
     EVA2CLIPTransformer(ModelContext *mctx, const VisionModelConfig &config);
 
-    ggml_tensor *forward(ModelContext *mctx, ggml_tensor *hidden_states) const;
+    ggml_tensor *forward(ModelContext *mctx, ggml_tensor *hidden_states, ggml_tensor *attention_mask) const;
 
   public:
     std::vector<EVA2CLIPBlock> layers;

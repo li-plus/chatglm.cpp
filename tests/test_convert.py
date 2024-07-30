@@ -611,7 +611,7 @@ def make_data_glm4v_model():
     config.torch_dtype = torch.float32
     config.vision_config.update(
         num_hidden_layers=1,
-        hidden_size=32,
+        hidden_size=128,
         patch_size=7,
         num_heads=2,
         intermediate_size=56,

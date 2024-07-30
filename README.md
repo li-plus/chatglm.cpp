@@ -196,10 +196,8 @@ python3 chatglm_cpp/convert.py -i THUDM/glm-4-9b-chat -t q4_0 -o models/chatglm4
 You may use `-vt <vision_type>` to set quantization type for the vision encoder. It is recommended to run GLM4V on GPU since vision encoding runs too slow on CPU even with 4-bit quantization.
 ```sh
 python3 chatglm_cpp/convert.py -i THUDM/glm-4v-9b -t q4_0 -vt q4_0 -o models/chatglm4v-ggml.bin
-./build/bin/main -m models/chatglm4v-ggml.bin --image examples/03-Confusing-Pictures.jpg -p "这张图片有什么不寻常之处" --temp 0
-# 这张图片中不寻常的是，一个男人站在一辆黄色SUV的后备箱上，正在使用一个铁板熨烫衣物。
-# 通常情况下，熨衣是在室内进行的，使用的是家用电熨斗，而不是在户外使用汽车后备箱作为工作台。
-# 此外，他似乎是在一个繁忙的城市街道上，周围有行驶的车辆和建筑物，这增加了场景的荒谬性。
+./build/bin/main -m models/chatglm4v-ggml.bin --image examples/03-Confusing-Pictures.jpg -p "这张图片有什么不寻常的地方" --temp 0
+# 这张图片中不寻常的地方在于，男子正在一辆黄色出租车后面熨衣服。通常情况下，熨衣是在家中或洗衣店进行的，而不是在车辆上。此外，出租车在行驶中，男子却能够稳定地熨衣，这增加了场景的荒诞感。
 ```
 
 </details>

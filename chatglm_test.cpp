@@ -773,7 +773,7 @@ TEST_F(ChatGLMTest, GLM4Model) {
 TEST_F(ChatGLMTest, GLM4VModelText) {
     fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/glm4v_model_text.data";
 
-    VisionModelConfig vision(GGML_TYPE_F32, ActivationType::GELU, 32, 28, 3, 56, 1e-6, 2, 1, 17, 7, 8);
+    VisionModelConfig vision(GGML_TYPE_F32, ActivationType::GELU, 128, 28, 3, 56, 1e-6, 2, 1, 17, 7, 8);
 
     ModelConfig config(ModelType::CHATGLM4V, GGML_TYPE_F32, /*vocab_size=*/8, /*hidden_size=*/32,
                        /*num_attention_heads=*/8, /*num_key_value_heads=*/2, /*num_hidden_layers=*/1,
@@ -804,7 +804,7 @@ TEST_F(ChatGLMTest, GLM4VModelText) {
 TEST_F(ChatGLMTest, GLM4VModel) {
     fs::path data_path = fs::path(__FILE__).parent_path() / "tests/data/glm4v_model.data";
 
-    VisionModelConfig vision(GGML_TYPE_F32, ActivationType::GELU, 32, 28, 3, 56, 1e-6, 2, 1, 17, 7, 8);
+    VisionModelConfig vision(GGML_TYPE_F32, ActivationType::GELU, 128, 28, 3, 56, 1e-6, 2, 1, 17, 7, 8);
 
     ModelConfig config(ModelType::CHATGLM4V, GGML_TYPE_F32, /*vocab_size=*/8, /*hidden_size=*/32,
                        /*num_attention_heads=*/8, /*num_key_value_heads=*/2, /*num_hidden_layers=*/1,
@@ -1337,41 +1337,32 @@ TEST(Pipeline, ChatGLM3) {
         gen_config.do_sample = false;
         std::vector<ChatMessage> messages{
             {ChatMessage::ROLE_SYSTEM, system_ci},
-            {ChatMessage::ROLE_USER, "找出100以内的所有质数"},
+            {ChatMessage::ROLE_USER, "求出100以内的所有质数"},
         };
         {
             ChatMessage output = pipeline.chat(messages, gen_config);
             EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
             EXPECT_EQ(output.content,
-                      R"(质数是只能被1和它本身整除的正整数。我们可以通过简单的算法来找出100以内的所有质数。
+                      R"(质数是只能被1和自身整除的正整数。我们可以通过遍历1到100的所有数字来找出100以内的所有质数。
 
-这里我们将使用一个简单的线性筛法来找出100以内的所有质数。
-
-线性筛法的基本思想是：
-1. 创建一个列表，其中包含1到n的所有整数。
-2. 从列表中删除所有可以被2整除的数。
-3. 然后从剩余的数中删除所有可以被3整除的数。
-4. 重复上述步骤，直到列表中的数少于100为止。
-
-让我们开始计算。)");
+下面是找出100以内的所有质数的Python代码：)");
             EXPECT_EQ(output.tool_calls.at(0).code.input, R"(```python
-def sieve_of_eratosthenes(n):
-    # Create a boolean array "prime[0..n]" and initialize all entries as true.
-    # A value in prime[i] will finally be false if i is Not a prime, else true bool val.
-    prime = [True for _ in range(n+1)]
-    p = 2
-    while p**2 <= n:
-        # If prime[p] is not changed, then it is a prime
-        if prime[p]:
-            # Update all multiples of p
-            for i in range(p**2, n+1, p):
-                prime[i] = False
-        p += 1
+def is_prime(n):
+    """Check if a number is prime."""
+    if n <= 1:
+        return False
+    if n <= 3:
+        return True
+    if n % 2 == 0 or n % 3 == 0:
+        return False
+    i = 5
+    while i * i <= n:
+        if n % i == 0 or n % (i + 2) == 0:
+            return False
+        i += 6
+    return True
 
-    # Return the list of prime numbers
-    return [p for p in range(2, n+1) if prime[p]]
-
-primes_upto_100 = sieve_of_eratosthenes(100)
+primes_upto_100 = [i for i in range(2, 101) if is_prime(i)]
 primes_upto_100
 ```)");
             messages.emplace_back(std::move(output));
@@ -1382,9 +1373,12 @@ primes_upto_100
         {
             ChatMessage output = pipeline.chat(messages, gen_config);
             EXPECT_EQ(output.role, ChatMessage::ROLE_ASSISTANT);
-            EXPECT_EQ(
-                output.content,
-                R"(100以内的所有质数是：2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97。)");
+            EXPECT_EQ(output.content,
+                      R"(100以内的所有质数为：
+
+$$
+2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97 
+$$)");
         }
     }
 }
@@ -1593,12 +1587,11 @@ TEST(Pipeline, ChatGLM4V) {
         gen_config.do_sample = false;
         fs::path image_path = fs::path(__FILE__).parent_path() / "examples/03-Confusing-Pictures.jpg";
         Image image = Image::open(image_path.string());
-        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "描述这张图片", std::move(image)}};
+        std::vector<ChatMessage> messages{{ChatMessage::ROLE_USER, "这张图片有什么不寻常的地方", std::move(image)}};
         ChatMessage output = pipeline.chat(messages, gen_config);
         EXPECT_EQ(output.content,
-                  "这张图片的幽默之处在于场景的荒谬性。看到一个人在出租车后面熨衣服是非常不寻常的，因为这不是出租车通常"
-                  "被用来做的事情。熨衣板和衣服悬挂在车尾，男子站在上面，似乎在专心熨烫衣物。出租车在行驶中，而男子却稳"
-                  "稳地站在上面熨衣服，这样的场景给人一种不稳定的感觉，增加了喜剧效果。");
+                  "这张图片中不寻常的地方在于，男子正在一辆黄色出租车后面熨衣服。通常情况下，熨衣是在家中或洗衣店进行的"
+                  "，而不是在车辆上。此外，出租车在行驶中，男子却能够稳定地熨衣，这增加了场景的荒诞感。");
     }
 }
 
