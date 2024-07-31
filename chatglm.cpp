@@ -1860,14 +1860,8 @@ ggml_tensor *EVA2CLIPModel::forward(ModelContext *mctx, ggml_tensor *input) cons
     ggml_tensor *hidden_states = patch_embedding.forward(mctx, input);
 
     // padding for flash attn
-    int pad_size = 0;
-    if (ggml_backend_is_cpu(mctx->backend.get())) {
-        pad_size = GGML_PAD(hidden_states->ne[1], GGML_KQ_MASK_PAD) - hidden_states->ne[1];
-    } else if (ggml_cpu_has_cuda()) {
-        pad_size = GGML_PAD(hidden_states->ne[1], 256) - hidden_states->ne[1];
-    } else if (ggml_cpu_has_metal()) {
-        CHATGLM_THROW << "TODO";
-    }
+    const int pad_to_multiple_of = ggml_cpu_has_cuda() ? 256 : GGML_KQ_MASK_PAD;
+    const int pad_size = GGML_PAD(hidden_states->ne[1], pad_to_multiple_of) - hidden_states->ne[1];
     if (pad_size) {
         hidden_states = ggml_pad(ctx, hidden_states, 0, pad_size, 0, 0);
     }
