@@ -299,6 +299,15 @@ std::string PerfStreamer::to_string() const {
     return oss.str();
 }
 
+#ifdef _WIN32
+static std::wstring convert_to_wstring(const std::string &str) {
+    int count = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
+    std::wstring wstr(count, 0);
+    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &wstr[0], count);
+    return wstr;
+}
+#endif
+
 #ifdef _POSIX_MAPPED_FILES
 MappedFile::MappedFile(const std::string &path) {
     int fd = open(path.c_str(), O_RDONLY);
@@ -318,7 +327,8 @@ MappedFile::~MappedFile() { CHATGLM_CHECK(munmap(data, size) == 0) << strerror(e
 #elif defined(_WIN32)
 MappedFile::MappedFile(const std::string &path) {
 
-    int fd = open(path.c_str(), O_RDONLY);
+    const std::wstring wpath = convert_to_wstring(path);
+    int fd = _wopen(wpath.c_str(), O_RDONLY);
     CHATGLM_CHECK(fd > 0) << "cannot open file " << path << ": " << strerror(errno);
 
     struct _stat64 sb;
